@@ -1,0 +1,6 @@
+aiogram==3.4.1
+aiosqlite==0.20.0
+openai==1.40.0
+pydantic==2.5.3
+python-dotenv==1.0.1
+aiofiles==23.2.1
