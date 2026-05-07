@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Dict, Any, Optional, List
 import aiosqlite
-from aiogram.types import Message, InputFile, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup
 from aiogram import Bot
 
 from texts import (
@@ -41,24 +41,25 @@ def clamp_str(s: str, n: int = 1400) -> str:
 
 async def send_trainer_photo_if_any(chat_id: int, trainer_key: str, bot_token: str):
     """Send trainer photo if a matching file exists in ./images."""
-    import os
-    import logging
-    from aiogram import Bot
-    from aiogram.types import InputFile
     base = os.path.join(os.path.dirname(__file__), "images", trainer_key)
+    if not os.path.isdir(base):
+        logging.warning(f"[PHOTO] Directory not found for trainer {trainer_key}: {base}")
+        return
+
     for ext in ("jpg", "jpeg", "png", "webp"):  # ищем любой формат
         for fname in os.listdir(base):
             if fname.lower().endswith(ext):
                 path = os.path.join(base, fname)
+                b = Bot(token=bot_token)
                 try:
-                    b = Bot(token=bot_token)
-                    await b.send_photo(chat_id, InputFile(path))
-                    await b.session.close()
+                    await b.send_photo(chat_id, FSInputFile(path))
                     logging.info(f"[PHOTO] Sent trainer photo: {path} to chat {chat_id}")
                     return
                 except Exception as e:
                     logging.error(f"[PHOTO] Failed to send {path} to chat {chat_id}: {e}")
                     continue
+                finally:
+                    await b.session.close()
     logging.warning(f"[PHOTO] No photo found for trainer {trainer_key} in {base}")
     return
 
@@ -396,26 +397,32 @@ def _extract_json(text: str) -> Optional[dict]:
 
 async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") -> dict:
     """Быстрый AI анализ"""
+    fallback = {
+        "bucket": "mixed",
+        "summary": "Похоже на смешанный профиль: немного тревоги + избегание + низкий ресурс.",
+        "confidence": 0.55,
+        "top_signals": ["избегание", "тревога", "низкая энергия"],
+        "first_action": "Сделай один микро-старт ≤ 2 минут."
+    }
     if not (client and model):
-        return {
-            "bucket": "mixed",
-            "summary": "Похоже на смешанный профиль: немного тревоги + избегание + низкий ресурс.",
-            "confidence": 0.55,
-            "top_signals": ["избегание", "тревога", "низкая энергия"],
-            "first_action": "Сделай один микро-старт ≤ 2 минут."
-        }
+        log.warning("[AI] Quick analysis fallback: OpenAI client or model is not configured")
+        return fallback
 
     from texts import build_ai_system_prompt
     system = build_ai_system_prompt()
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": clamp_str(user_text, 1500)},
-        ],
-        temperature=0.3,
-    )
-    data = _extract_json(resp.choices[0].message.content or "")
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": clamp_str(user_text, 1500)},
+            ],
+            temperature=0.3,
+        )
+        data = _extract_json(resp.choices[0].message.content or "")
+    except Exception as e:
+        log.exception("[AI] Quick analysis failed, using fallback: %s", e)
+        return fallback
     if not data:
         return {
             "bucket": "mixed",
@@ -473,29 +480,30 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
     """Подробный AI анализ"""
     from texts import AI_ANALYSIS_SYSTEM_PROMPT
     
+    fallback = {
+        "bucket": "mixed",
+        "short_summary": "Похоже, ты сталкиваешься с несколькими вызовами сразу: тревога мешает начать, внимание сложно удержать.",
+        "what_is_happening": "Тебе сложно начать важное дело и удержать на нём внимание. Сначала переживаешь или откладываешь, потом отвлекаешься.",
+        "why_it_happens": "Мозг ищет более лёгкую стимуляцию и избегает дискомфорта начала. Это не лень — это автоматический защитный паттерн.",
+        "not_your_fault_or_control_zone": "Это не твоя вина и не слабость. Это навык, который пока не натренирован. Ты можешь это изменить.",
+        "why_change_is_possible": "Навыки саморегуляции, начала и удержания внимания поддаются тренировке. В течение 4–8 недель увидишь реальные сдвиги.",
+        "training_path": "Мы будем двигаться маленькими шагами, без перегруза. Сначала натренируем одно, потом подключим другое.",
+        "skills_focus": ["начало без давления", "удержание внимания", "возврат без самокритики"],
+        "timeline": "Первые сдвиги - 2–3 недели. Устойчивость - 4–8 недель.",
+        "support_guarantee": "Если метод не подойдёт - мы его заменим. Ты не один(а).",
+        "closing_reassurance": "Это работает. И ты справишься."
+    }
     if not (client and model):
-        # fallback comprehensive response
-        return {
-            "bucket": "mixed",
-            "short_summary": "Похоже, ты сталкиваешься с несколькими вызовами сразу: тревога мешает начать, внимание сложно удержать.",
-            "what_is_happening": "Тебе сложно начать важное дело и удержать на нём внимание. Сначала переживаешь или откладываешь, потом отвлекаешься.",
-            "why_it_happens": "Мозг ищет более лёгкую стимуляцию и избегает дискомфорта начала. Это не лень — это автоматический защитный паттерн.",
-            "not_your_fault_or_control_zone": "Это не твоя вина и не слабость. Это навык, который пока не натренирован. Ты можешь это изменить.",
-            "why_change_is_possible": "Навыки саморегуляции, начала и удержания внимания поддаются тренировке. В течение 4–8 недель увидишь реальные сдвиги.",
-            "training_path": "Мы будем двигаться маленькими шагами, без перегруза. Сначала натренируем одно, потом подключим другое.",
-            "skills_focus": ["начало без давления", "удержание внимания", "возврат без самокритики"],
-            "timeline": "Первые сдвиги - 2–3 недели. Устойчивость - 4–8 недель.",
-            "support_guarantee": "Если метод не подойдёт - мы его заменим. Ты не один(а).",
-            "closing_reassurance": "Это работает. И ты справишься."
-        }
+        log.warning("[AI] Comprehensive analysis fallback: OpenAI client or model is not configured")
+        return fallback
 
     system = AI_ANALYSIS_SYSTEM_PROMPT
-    
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"""Проанализируй следующее описание и верни JSON с этой структурой:
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"""Проанализируй следующее описание и верни JSON с этой структурой:
 {{
   "bucket": "anxiety|low_energy|distractibility|mixed",
   "short_summary": "краткое резюме",
@@ -512,10 +520,13 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
 
 Описание человека:
 {clamp_str(user_text, 1500)}"""},
-        ],
-        temperature=0.3,
-    )
-    data = _extract_json(resp.choices[0].message.content or "")
+            ],
+            temperature=0.3,
+        )
+        data = _extract_json(resp.choices[0].message.content or "")
+    except Exception as e:
+        log.exception("[AI] Comprehensive analysis failed, using fallback: %s", e)
+        return fallback
     if not data:
         return {
             "bucket": "mixed",

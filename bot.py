@@ -100,6 +100,11 @@ if AI_ANALYSIS_ENABLED:
     if openai is None:
         print("⚠️  OpenAI import unavailable, continuing without AI features")
 
+if AI_ANALYSIS_ENABLED and client:
+    log.info("[AI] OpenAI enabled with chat model %s and whisper model %s", OPENAI_CHAT_MODEL, OPENAI_WHISPER_MODEL)
+else:
+    log.warning("[AI] OpenAI disabled: OPENAI_API_KEY is missing or client initialization failed")
+
 
 async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model: str = "gpt-4o-mini") -> str:
     """Короткий отклик на опыт выполнения (1–2 предложения)."""
@@ -166,7 +171,7 @@ async def cmd_start(m: Message):
 
     # 2. Вопрос имени
     await m.answer(
-        "Привет! Я тренер навыков саморегуляции. Как тебя зовут? (1 слово)",
+        "Как к тебе обращаться? (1 слово)",
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
     )
 
