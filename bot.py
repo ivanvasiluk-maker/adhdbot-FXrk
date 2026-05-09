@@ -81,29 +81,48 @@ AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
-print(f"BOT_TOKEN: {repr(BOT_TOKEN)}")
-print(f"DB_PATH: {DB_PATH}")
+log.info("BOT_TOKEN configured: %s", bool(BOT_TOKEN))
+log.info("DB_PATH: %s", DB_PATH)
 
 # OpenAI client
 openai = None
 client = None
 if AI_ANALYSIS_ENABLED:
-    try:
-        import openai as oa
-        openai = oa
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    except Exception as e:
-        print(f"⚠️  OpenAI import failed: {e}")
-        client = None
+    import importlib.util
+
+    if importlib.util.find_spec("openai") is None:
+        log.warning("[AI] OpenAI package is not installed, continuing without AI features")
         AI_ANALYSIS_ENABLED = False
-        openai = None
-    if openai is None:
-        print("⚠️  OpenAI import unavailable, continuing without AI features")
+    else:
+        import openai as oa
+
+        openai = oa
+        try:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        except TypeError as e:
+            if "proxies" not in str(e) or importlib.util.find_spec("httpx") is None:
+                log.warning("[AI] OpenAI client initialization failed: %s", e)
+                AI_ANALYSIS_ENABLED = False
+            else:
+                import httpx
+
+                log.warning("[AI] OpenAI default HTTP client is incompatible with installed httpx; retrying with explicit httpx.Client")
+                try:
+                    client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client())
+                except Exception as retry_error:
+                    log.warning("[AI] OpenAI client initialization retry failed: %s", retry_error)
+                    client = None
+                    AI_ANALYSIS_ENABLED = False
+        except Exception as e:
+            log.warning("[AI] OpenAI client initialization failed: %s", e)
+            AI_ANALYSIS_ENABLED = False
 
 if AI_ANALYSIS_ENABLED and client:
     log.info("[AI] OpenAI enabled with chat model %s and whisper model %s", OPENAI_CHAT_MODEL, OPENAI_WHISPER_MODEL)
+elif not OPENAI_API_KEY:
+    log.warning("[AI] OpenAI disabled: OPENAI_API_KEY is missing")
 else:
-    log.warning("[AI] OpenAI disabled: OPENAI_API_KEY is missing or client initialization failed")
+    log.warning("[AI] OpenAI disabled: client initialization failed")
 
 
 async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model: str = "gpt-4o-mini") -> str:
