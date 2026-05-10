@@ -10,6 +10,7 @@
 # ============================================================
 
 import os
+import io
 import re
 import json
 import time
@@ -354,48 +355,22 @@ async def main_flow(m: Message):
 
     # await_problem_text
     if u["stage"] == "await_problem_text":
-        if not text or text.lower() == "пропустить":
-            user_text = "Прокрастинация/избегание,хочу начать, но откладываю."
+        if m.voice:
+            await m.answer("Слушаю голосовое и перевожу в текст…")
+            user_text = await whisper_transcribe(m)
+            if not user_text:
+                await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
+                return
+            await m.answer(f"Распознал: {clamp_str(user_text, 700)}")
+        elif not text or text.lower() == "пропустить":
+            user_text = "Прокрастинация/избегание, хочу начать, но откладываю."
         else:
             user_text = text
         u["analysis_json"] = json.dumps({"user_text": clamp_str(user_text, 1000)}, ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
-        await m.answer("Ок. Быстрый разбор…")
+        await m.answer("Ок. Делаю подробный разбор…")
         await run_analysis(m, u, user_text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
-        # После анализа — явно завершаем стадию
-        u["stage"] = "diagnosis_done"
-        await save_user(u, DB_PATH)
-        # Подробный разбор после кейса
-        patterns = [
-            {
-                "name": "Прокрастинация",
-                "desc": "Откладывание важных задач",
-                "manifest": "Задачи не стартуют вовремя, появляется чувство вины"
-            },
-            {
-                "name": "Тревожный цикл",
-                "desc": "Избегание из-за страха ошибки",
-                "manifest": "Есть ощущение, что не получится, поэтому не начинаешь"
-            },
-            {
-                "name": "Отвлечения",
-                "desc": "Частые переключения внимания",
-                "manifest": "Внимание уходит на телефон, соцсети, мелкие дела"
-            }
-        ]
-        missing_skills = [
-            "Навык запуска (старт задачи)",
-            "Навык удержания внимания",
-            "Навык управления тревогой"
-        ]
-        detailed_text = "🔎 Подробный разбор:\n\n"
-        detailed_text += "Паттерны поведения и их проявления:\n"
-        for p in patterns:
-            detailed_text += f"• {p['name']} — {p['desc']}\n  Как проявляется: {p['manifest']}\n"
-        detailed_text += "\nКаких навыков не хватает:\n"
-        detailed_text += "\n".join([f"• {s}" for s in missing_skills])
-        await m.answer(detailed_text)
         return
 
     # await_problem_voice
@@ -408,16 +383,18 @@ async def main_flow(m: Message):
         if not m.voice:
             await m.answer("Пришли голосовое 🎙")
             return
+        await m.answer("Слушаю голосовое и перевожу в текст…")
         t = await whisper_transcribe(m)
         if not t:
             u["stage"] = "await_problem_text"
             await save_user(u, DB_PATH)
-            await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения.")
+            await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
             return
+        await m.answer(f"Распознал: {clamp_str(t, 700)}")
         u["analysis_json"] = json.dumps({"user_text": clamp_str(t, 1000)}, ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
-        await m.answer("Ок. Быстрый разбор…")
+        await m.answer("Ок. Делаю подробный разбор…")
         await run_analysis(m, u, t, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         return
 
@@ -958,24 +935,37 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
 
 async def whisper_transcribe(m: Message) -> Optional[str]:
     if not (AI_ANALYSIS_ENABLED and client):
+        log.warning("[AI] Whisper disabled: OpenAI client or API key is not configured")
         return None
     if not m.voice:
         return None
     try:
         file = await m.bot.get_file(m.voice.file_id)
         fp = await m.bot.download_file(file.file_path)
+        if hasattr(fp, "seek"):
+            fp.seek(0)
         data = fp.read()
-        import io
+        if not data:
+            log.warning("[AI] Whisper got empty Telegram voice payload")
+            return None
         bio = io.BytesIO(data)
-        bio.name = "voice.ogg"
-        tr = client.audio.transcriptions.create(model=OPENAI_WHISPER_MODEL, file=bio)
+        bio.name = f"voice_{m.voice.file_unique_id}.ogg"
+        tr = await asyncio.to_thread(
+            client.audio.transcriptions.create,
+            model=OPENAI_WHISPER_MODEL,
+            file=bio,
+            language="ru",
+        )
         text = getattr(tr, "text", None)
         if not text:
             try:
                 text = tr["text"]
             except Exception:
                 text = None
-        return (text or "").strip() or None
+        text = (text or "").strip()
+        if not text:
+            log.warning("[AI] Whisper returned empty transcription")
+        return text or None
     except Exception as e:
         log.exception("whisper error: %s", e)
         return None

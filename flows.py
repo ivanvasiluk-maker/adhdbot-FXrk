@@ -563,6 +563,34 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
 
     return result
 
+
+def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str, Any]] = None) -> str:
+    """Собрать подробный, пользовательский разбор из результата AI."""
+    quick = quick or {}
+    summary = comp.get("short_summary") or quick.get("summary") or "Похоже, тут есть повторяющийся паттерн саморегуляции."
+    what = comp.get("what_is_happening") or "Важная задача запускается тяжело, а напряжение усиливает откладывание."
+    why = comp.get("why_it_happens") or "Мозг пытается снизить дискомфорт прямо сейчас, поэтому выбирает избегание или переключение."
+    control = comp.get("not_your_fault_or_control_zone") or "Это не лень и не слабость. Это навык, который можно тренировать маленькими шагами."
+    possible = comp.get("why_change_is_possible") or "Запуск, удержание внимания и возврат к задаче тренируются через короткие повторения."
+    path = comp.get("training_path") or "Начнём с микро-старта, затем добавим удержание внимания и мягкий возврат без самокритики."
+    skills = comp.get("skills_focus") or quick.get("top_signals") or []
+    if not isinstance(skills, list):
+        skills = []
+    skills_text = "\n".join(f"• {clamp_str(str(skill), 80)}" for skill in skills[:4])
+    if not skills_text:
+        skills_text = "• запуск задачи\n• удержание внимания\n• возврат без самокритики"
+
+    return (
+        f"🔎 Подробный разбор:\n\n"
+        f"Коротко: {clamp_str(summary, 260)}\n\n"
+        f"Что происходит:\n{clamp_str(what, 500)}\n\n"
+        f"Почему так:\n{clamp_str(why, 500)}\n\n"
+        f"Важно:\n{clamp_str(control, 500)}\n\n"
+        f"Почему это можно изменить:\n{clamp_str(possible, 500)}\n\n"
+        f"На чём будем тренироваться:\n{skills_text}\n\n"
+        f"Путь тренировки:\n{clamp_str(path, 500)}"
+    )
+
 async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
     """Запустить анализ"""
     from texts import kb_analysis_confirm
@@ -594,9 +622,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     # Log that analysis was shown
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
-    # Short selling text + buttons (matches comprehensive flow)
-    short_text = comp.get("short_summary") or r.get("summary") or "Похоже на тебя?"
-    msg = f"{short_text}\n\nЭто похоже на тебя?"
+    # Show the actual AI-powered detailed analysis before asking for confirmation.
+    msg = f"{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
 
     await m.answer(msg, reply_markup=kb_analysis_confirm)
 
