@@ -10,6 +10,7 @@
 # ============================================================
 
 import os
+import io
 import re
 import json
 import time
@@ -81,29 +82,48 @@ AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
-print(f"BOT_TOKEN: {repr(BOT_TOKEN)}")
-print(f"DB_PATH: {DB_PATH}")
+log.info("BOT_TOKEN configured: %s", bool(BOT_TOKEN))
+log.info("DB_PATH: %s", DB_PATH)
 
 # OpenAI client
 openai = None
 client = None
 if AI_ANALYSIS_ENABLED:
-    try:
-        import openai as oa
-        openai = oa
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-    except Exception as e:
-        print(f"⚠️  OpenAI import failed: {e}")
-        client = None
+    import importlib.util
+
+    if importlib.util.find_spec("openai") is None:
+        log.warning("[AI] OpenAI package is not installed, continuing without AI features")
         AI_ANALYSIS_ENABLED = False
-        openai = None
-    if openai is None:
-        print("⚠️  OpenAI import unavailable, continuing without AI features")
+    else:
+        import openai as oa
+
+        openai = oa
+        try:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+        except TypeError as e:
+            if "proxies" not in str(e) or importlib.util.find_spec("httpx") is None:
+                log.warning("[AI] OpenAI client initialization failed: %s", e)
+                AI_ANALYSIS_ENABLED = False
+            else:
+                import httpx
+
+                log.warning("[AI] OpenAI default HTTP client is incompatible with installed httpx; retrying with explicit httpx.Client")
+                try:
+                    client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client())
+                except Exception as retry_error:
+                    log.warning("[AI] OpenAI client initialization retry failed: %s", retry_error)
+                    client = None
+                    AI_ANALYSIS_ENABLED = False
+        except Exception as e:
+            log.warning("[AI] OpenAI client initialization failed: %s", e)
+            AI_ANALYSIS_ENABLED = False
 
 if AI_ANALYSIS_ENABLED and client:
     log.info("[AI] OpenAI enabled with chat model %s and whisper model %s", OPENAI_CHAT_MODEL, OPENAI_WHISPER_MODEL)
+elif not OPENAI_API_KEY:
+    log.warning("[AI] OpenAI disabled: OPENAI_API_KEY is missing")
 else:
-    log.warning("[AI] OpenAI disabled: OPENAI_API_KEY is missing or client initialization failed")
+    log.warning("[AI] OpenAI disabled: client initialization failed")
 
 
 async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model: str = "gpt-4o-mini") -> str:
@@ -335,48 +355,22 @@ async def main_flow(m: Message):
 
     # await_problem_text
     if u["stage"] == "await_problem_text":
-        if not text or text.lower() == "пропустить":
-            user_text = "Прокрастинация/избегание,хочу начать, но откладываю."
+        if m.voice:
+            await m.answer("Слушаю голосовое и перевожу в текст…")
+            user_text = await whisper_transcribe(m)
+            if not user_text:
+                await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
+                return
+            await m.answer(f"Распознал: {clamp_str(user_text, 700)}")
+        elif not text or text.lower() == "пропустить":
+            user_text = "Прокрастинация/избегание, хочу начать, но откладываю."
         else:
             user_text = text
         u["analysis_json"] = json.dumps({"user_text": clamp_str(user_text, 1000)}, ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
-        await m.answer("Ок. Быстрый разбор…")
+        await m.answer("Ок. Делаю подробный разбор…")
         await run_analysis(m, u, user_text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
-        # После анализа — явно завершаем стадию
-        u["stage"] = "diagnosis_done"
-        await save_user(u, DB_PATH)
-        # Подробный разбор после кейса
-        patterns = [
-            {
-                "name": "Прокрастинация",
-                "desc": "Откладывание важных задач",
-                "manifest": "Задачи не стартуют вовремя, появляется чувство вины"
-            },
-            {
-                "name": "Тревожный цикл",
-                "desc": "Избегание из-за страха ошибки",
-                "manifest": "Есть ощущение, что не получится, поэтому не начинаешь"
-            },
-            {
-                "name": "Отвлечения",
-                "desc": "Частые переключения внимания",
-                "manifest": "Внимание уходит на телефон, соцсети, мелкие дела"
-            }
-        ]
-        missing_skills = [
-            "Навык запуска (старт задачи)",
-            "Навык удержания внимания",
-            "Навык управления тревогой"
-        ]
-        detailed_text = "🔎 Подробный разбор:\n\n"
-        detailed_text += "Паттерны поведения и их проявления:\n"
-        for p in patterns:
-            detailed_text += f"• {p['name']} — {p['desc']}\n  Как проявляется: {p['manifest']}\n"
-        detailed_text += "\nКаких навыков не хватает:\n"
-        detailed_text += "\n".join([f"• {s}" for s in missing_skills])
-        await m.answer(detailed_text)
         return
 
     # await_problem_voice
@@ -389,16 +383,18 @@ async def main_flow(m: Message):
         if not m.voice:
             await m.answer("Пришли голосовое 🎙")
             return
+        await m.answer("Слушаю голосовое и перевожу в текст…")
         t = await whisper_transcribe(m)
         if not t:
             u["stage"] = "await_problem_text"
             await save_user(u, DB_PATH)
-            await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения.")
+            await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
             return
+        await m.answer(f"Распознал: {clamp_str(t, 700)}")
         u["analysis_json"] = json.dumps({"user_text": clamp_str(t, 1000)}, ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
-        await m.answer("Ок. Быстрый разбор…")
+        await m.answer("Ок. Делаю подробный разбор…")
         await run_analysis(m, u, t, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         return
 
@@ -939,24 +935,37 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
 
 async def whisper_transcribe(m: Message) -> Optional[str]:
     if not (AI_ANALYSIS_ENABLED and client):
+        log.warning("[AI] Whisper disabled: OpenAI client or API key is not configured")
         return None
     if not m.voice:
         return None
     try:
         file = await m.bot.get_file(m.voice.file_id)
         fp = await m.bot.download_file(file.file_path)
+        if hasattr(fp, "seek"):
+            fp.seek(0)
         data = fp.read()
-        import io
+        if not data:
+            log.warning("[AI] Whisper got empty Telegram voice payload")
+            return None
         bio = io.BytesIO(data)
-        bio.name = "voice.ogg"
-        tr = client.audio.transcriptions.create(model=OPENAI_WHISPER_MODEL, file=bio)
+        bio.name = f"voice_{m.voice.file_unique_id}.ogg"
+        tr = await asyncio.to_thread(
+            client.audio.transcriptions.create,
+            model=OPENAI_WHISPER_MODEL,
+            file=bio,
+            language="ru",
+        )
         text = getattr(tr, "text", None)
         if not text:
             try:
                 text = tr["text"]
             except Exception:
                 text = None
-        return (text or "").strip() or None
+        text = (text or "").strip()
+        if not text:
+            log.warning("[AI] Whisper returned empty transcription")
+        return text or None
     except Exception as e:
         log.exception("whisper error: %s", e)
         return None
