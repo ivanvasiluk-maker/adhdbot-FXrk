@@ -36,15 +36,12 @@ from texts import (
     kb_training_main, kb_more_actions, kb_crisis_mode, kb_analysis_confirm, kb_pay_choice,
     kb_skill_card, kb_done, kb_failed, kb_action_clarify, kb_downscale,
     kb_downscale_name_task, kb_microstep, kb_skeptic, kb_doubt_response,
-    kb_more_clarify, kb_morning_checkin, kb_evening_checkin, kb_notifications_consent,
-    payment_inline_discount, payment_inline_full, payment_inline_20, payment_inline_40,
+    kb_more_clarify, payment_inline_discount, payment_inline_full,
     CRISIS_LIMIT, resolve_bucket_from_test, create_test_question_keyboard,
     analysis_contract_short, month_map_text, guarantee_block, offer_day_3_text,
-    gamify_status_line, trainer_done_response,
+    gamify_status_line, format_skill_card, trainer_done_response,
     trainer_failed_response, skill_detail_text, simple_explain_text, skeptic_text,
-    day3_offer_text, payment_20_stub_text, payment_40_stub_text,
-    payment_declined_soft_text, payment_includes_text, morning_checkin_text,
-    evening_checkin_text, reactivation_text, keyboard_button_count, notifications_consent_text, user_help_text, settings_text, start_over_confirm_text
+    inactivity_ping, keyboard_button_count
 )
 from skills import (
     SKILLS_DB,
@@ -66,16 +63,6 @@ from flows import (
     _extract_json, clamp_str
 )
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
-from core.engine import (
-    get_next_screen as engine_get_next_screen,
-    handle_action_result as engine_handle_action_result,
-    handle_downscale as engine_handle_downscale,
-    should_show_offer as engine_should_show_offer,
-)
-from sheets_sync import (
-    SHEETS_SYNC_ENABLED, SHEETS_SYNC_INTERVAL_SECONDS, SHEETS_SYNC_BATCH_SIZE,
-    sheets_sync_loop, sync_unsynced_events,
-)
 
 load_dotenv(override=True)
 
@@ -251,45 +238,11 @@ async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_m
         DB_PATH,
         SHEETS_WEBHOOK_URL,
     )
-    try:
-        if button_count > 5:
-            log.warning("Keyboard %s has %s buttons; sending text without markup", keyboard_name, button_count)
-            await m.answer(text)
-            return
-        await m.answer(text, reply_markup=reply_markup)
-    except Exception as e:
-        log.exception("telegram_send_error: %s", e)
-        await log_event(
-            u.get("user_id"),
-            u.get("stage", ""),
-            "telegram_send_error",
-            {"source": "answer_with_keyboard", "keyboard": keyboard_name},
-            DB_PATH,
-            SHEETS_WEBHOOK_URL,
-        )
-
-
-async def log_engine_events(u: Dict[str, Any], screen: Dict[str, Any]):
-    """Persist events emitted by the UI-independent behavior engine."""
-    for event in screen.get("events") or []:
-        await log_event(
-            u.get("user_id"),
-            event.get("stage") or u.get("stage", ""),
-            event.get("name", "engine_event"),
-            event.get("meta") or {},
-            DB_PATH,
-            SHEETS_WEBHOOK_URL,
-        )
-
-
-def apply_engine_updates(u: Dict[str, Any], screen: Dict[str, Any]):
-    """Apply non-side-effect state updates returned by the behavior engine."""
-    for key, value in (screen.get("updates") or {}).items():
-        if key.endswith("_delta") or key in {"gamify_reason", "points_delta", "plan_override_day", "selected_skill", "pattern"}:
-            continue
-        u[key] = value
-    if screen.get("next_state"):
-        u["stage"] = screen["next_state"]
+    if button_count > 5:
+        log.warning("Keyboard %s has %s buttons; sending text without markup", keyboard_name, button_count)
+        await m.answer(text)
+        return
+    await m.answer(text, reply_markup=reply_markup)
 
 
 async def show_route(m: Message, u: Dict[str, Any], source: str):
@@ -305,443 +258,35 @@ async def show_route(m: Message, u: Dict[str, Any], source: str):
     await m.answer(month_map_text(u.get("bucket")))
 
 
-async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
-    """Show paid offer after day 3 completion/summary."""
-    u["stage"] = "offer"
+async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
+    """Показать уменьшенный action-step внутри текущего тренировочного loop."""
+    skill_id = _select_downscale_skill(u)
+    u["stage"] = "downscale_action"
     await save_user(u, DB_PATH)
     await log_event(
         u["user_id"],
-        "offer",
-        "offer_shown",
-        {"source": source, "day": int(u.get("day") or 0)},
+        "training",
+        "downscale_triggered",
+        {"reason": reason, "pattern": DOWNSCALE_PATTERN, "skill": skill_id, "day": int(u.get("day") or 1)},
         DB_PATH,
         SHEETS_WEBHOOK_URL,
     )
-    await answer_with_keyboard(m, u, day3_offer_text(), kb_pay_choice, "pay_choice")
-
-
-def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
-    """Day 3 offer is shown only for unpaid users outside free mode."""
-    state = dict(u)
-    state["day"] = day
-    return engine_should_show_offer(state)
-
-
-def is_admin(uid: int) -> bool:
-    """Admin commands are available only for user IDs listed in ADMIN_IDS."""
-    return uid in ADMIN_IDS
-
-
-def current_skill_id(u: Dict[str, Any]) -> str:
-    plan = get_current_plan(u)
-    if not plan:
-        return ""
-    day = int(u.get("day") or 1)
-    idx = max(0, min(len(plan) - 1, day - 1))
-    return plan[idx]
-
-
-async def db_health_ok() -> bool:
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("SELECT 1")
-        return True
-    except Exception:
-        return False
-
-
-
-
-def _parse_event_data(raw: Any) -> Dict[str, Any]:
-    if not raw:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _event_row_name(row: Dict[str, Any]) -> str:
-    return row.get("event_name") or row.get("event") or ""
-
-
-def _stats_trainer_key(event_data: Dict[str, Any], user: Dict[str, Any] | None = None) -> str:
-    key = event_data.get("trainer_key") or event_data.get("trainer") or (user or {}).get("trainer_key") or "unknown"
-    return key if key in {"beck", "skinny", "marsha"} else "unknown"
-
-
-def _stats_skill_id(event_data: Dict[str, Any], user: Dict[str, Any] | None = None) -> str:
-    return event_data.get("skill_id") or event_data.get("sid") or event_data.get("skill") or (user or {}).get("pending_skill_id") or ""
-
-
-async def build_admin_stats_text(db_path: str) -> str:
-    today = dt.datetime.now(dt.timezone.utc).date()
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        users_rows = [dict(row) for row in await (await db.execute("SELECT * FROM users")).fetchall()]
-        event_rows = [dict(row) for row in await (await db.execute("SELECT * FROM events")).fetchall()]
-
-    users_by_id = {int(u["user_id"]): u for u in users_rows if u.get("user_id") is not None}
-
-    def user_created_today(u: Dict[str, Any]) -> bool:
-        try:
-            created = dt.datetime.fromtimestamp(float(u.get("created_at") or 0), tz=dt.timezone.utc).date()
-            return created == today
-        except Exception:
-            return False
-
-    event_counts = {
-        "trainer_selected": 0,
-        "diagnosis_completed": 0,
-        "analysis_shown": 0,
-        "skill_card_shown": 0,
-        "action_done": 0,
-        "action_failed": 0,
-        "action_downscaled": 0,
-        "offer_shown": 0,
-        "payment_click_20": 0,
-        "payment_click_40": 0,
-        "payment_declined_soft": 0,
-        "crisis_clicked": 0,
-    }
-    trainer_stats = {
-        key: {"users": 0, "action_done": 0, "offer_click": 0}
-        for key in ("beck", "skinny", "marsha")
-    }
-    skill_stats: Dict[str, Dict[str, int]] = {}
-
-    for user in users_rows:
-        trainer = user.get("trainer_key") or "marsha"
-        if trainer in trainer_stats:
-            trainer_stats[trainer]["users"] += 1
-
-    for row in event_rows:
-        name = _event_row_name(row)
-        data = _parse_event_data(row.get("event_data") or row.get("meta"))
-        user = users_by_id.get(int(row.get("user_id") or 0), {})
-        if name in event_counts:
-            event_counts[name] += 1
-
-        trainer = _stats_trainer_key(data, user)
-        if trainer in trainer_stats:
-            if name == "action_done":
-                trainer_stats[trainer]["action_done"] += 1
-            elif name in {"payment_click_20", "payment_click_40"}:
-                trainer_stats[trainer]["offer_click"] += 1
-
-        skill_id = _stats_skill_id(data, user)
-        if skill_id:
-            stats = skill_stats.setdefault(skill_id, {"shown": 0, "done": 0, "failed": 0, "downscaled": 0})
-            if name == "skill_card_shown":
-                stats["shown"] += 1
-            elif name == "action_done":
-                stats["done"] += 1
-            elif name == "action_failed":
-                stats["failed"] += 1
-            elif name == "action_downscaled":
-                stats["downscaled"] += 1
-
-    top_skills = sorted(
-        skill_stats.items(),
-        key=lambda item: (item[1]["shown"] + item[1]["done"] + item[1]["failed"] + item[1]["downscaled"], item[0]),
-        reverse=True,
-    )[:10]
-
-    lines = [
-        f"Пользователей всего: {len(users_rows)}",
-        f"Новых сегодня: {sum(1 for u in users_rows if user_created_today(u))}",
-        f"Выбрали тренера: {event_counts['trainer_selected']}",
-        f"Диагностика завершена: {event_counts['diagnosis_completed']}",
-        f"Анализ показан: {event_counts['analysis_shown']}",
-        f"Навык показан: {event_counts['skill_card_shown']}",
-        f"Сделали действие: {event_counts['action_done']}",
-        f"Не сделали: {event_counts['action_failed']}",
-        f"Downscale: {event_counts['action_downscaled']}",
-        f"Дошли до day3: {sum(1 for u in users_rows if int(u.get('day') or 0) >= 3)}",
-        f"Offer shown: {event_counts['offer_shown']}",
-        f"€20 clicks: {event_counts['payment_click_20']}",
-        f"€40 clicks: {event_counts['payment_click_40']}",
-        f"Подумаю: {event_counts['payment_declined_soft']}",
-        f"Crisis clicked: {event_counts['crisis_clicked']}",
-        "",
-        "Топ тренеров:",
-    ]
-    for trainer in ("beck", "skinny", "marsha"):
-        stats = trainer_stats[trainer]
-        lines.append(f"- {trainer}: {stats['users']} / {stats['action_done']} / {stats['offer_click']}")
-
-    lines.extend(["", "Топ навыков:"])
-    if top_skills:
-        for skill_id, stats in top_skills:
-            lines.append(
-                f"- {skill_id} / {stats['shown']} / {stats['done']} / {stats['failed']} / {stats['downscaled']}"
-            )
-    else:
-        lines.append("- нет данных")
-    return "\n".join(lines)
-
-async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
-    fresh = default_user(uid)
-    fresh["chat_id"] = chat_id
-    fresh["stage"] = "ask_name"
-    await save_user(fresh, DB_PATH)
-    return fresh
-
-
-async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
-    """Handle simple user commands; does not require admin access."""
-    if not text or not text.startswith("/"):
-        return False
-    uid = m.from_user.id
-    command = text.split(maxsplit=1)[0].lower()
-
-    if command == "/help":
-        await log_event(uid, u.get("stage", ""), "help_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(user_help_text())
-        return True
-
-    if command == "/progress":
-        await log_event(uid, u.get("stage", ""), "progress_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await send_progress_report(m, u, DB_PATH)
-        return True
-
-    if command == "/settings":
-        await log_event(uid, u.get("stage", ""), "settings_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(settings_text(int(u.get("notifications_enabled") if u.get("notifications_enabled") is not None else 1), u.get("timezone") or "Europe/Vilnius"))
-        return True
-
-    if command == "/stop":
-        u["notifications_enabled"] = 0
-        await save_user(u, DB_PATH)
-        await log_event(uid, u.get("stage", ""), "notifications_disabled", {"source": "stop_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer("Напоминания отключены. Профиль не удалён. Вернуться можно через /settings или /start_over.")
-        return True
-
-    if command == "/start_over":
-        fresh = await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "onboarding", "start_over", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(
-            start_over_confirm_text(),
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
-        )
-        return True
-
-    if command == "/crisis":
-        u["stage"] = "crisis_choose_mode"
-        await save_user(u, DB_PATH)
-        await log_event(uid, u.get("stage", ""), "crisis_clicked", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, "🆘 Ок. Как удобнее?", kb_crisis_mode, "crisis_mode")
-        return True
-
-    return False
-
-
-async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool:
-    """Handle admin-only test commands. Returns True when command was consumed."""
-    uid = m.from_user.id
-    command = (text.split(maxsplit=1)[0] if text else "").lower()
-    admin_commands = {
-        "/testmode_on", "/testmode_off", "/set_day", "/show_offer",
-        "/reset_me", "/debug_user", "/health", "/mark_paid", "/mark_free", "/sync_sheets", "/stats",
-    }
-    if command not in admin_commands:
-        return False
-    if not is_admin(uid):
-        await m.answer("Нет доступа.")
-        return True
-
-    if command == "/testmode_on":
-        u["is_test_user"] = 1
-        u["fast_forward_enabled"] = 1
-        await save_user(u, DB_PATH)
-        await log_event(uid, u.get("stage", ""), "testmode_on", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer("Тестовый режим включён. Можно проходить дни без ожидания.")
-        return True
-
-    if command == "/testmode_off":
-        u["is_test_user"] = 0
-        u["fast_forward_enabled"] = 0
-        await save_user(u, DB_PATH)
-        await log_event(uid, u.get("stage", ""), "testmode_off", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer("Тестовый режим выключен.")
-        return True
-
-    if command == "/set_day":
-        parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) not in {1, 2, 3}:
-            await m.answer("Формат: /set_day 1|2|3")
-            return True
-        day = int(parts[1])
-        u["day"] = day
-        u["pending_skill_day"] = None
-        u["stage"] = "training"
-        await save_user(u, DB_PATH)
-        await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(f"День установлен: {day}.")
-        return True
-
-    if command == "/show_offer":
-        await log_event(uid, u.get("stage", ""), "admin_show_offer", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await show_day3_offer(m, u, "manual_test")
-        return True
-
-    if command == "/reset_me":
-        fresh = await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "admin", "admin_reset_user", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(
-            "Сбросил твой профиль до свежего онбординга.\n\n"
-            "Как к тебе обращаться? (1 слово)",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
-        )
-        return True
-
-    if command == "/debug_user":
-        sid = current_skill_id(u)
-        username = getattr(m.from_user, "username", None) or ""
-        await m.answer(
-            "DEBUG USER\n"
-            f"user_id: {uid}\n"
-            f"username: @{username if username else '-'}\n"
-            f"stage: {u.get('stage')}\n"
-            f"day: {u.get('day')}\n"
-            f"trainer_key: {u.get('trainer_key')}\n"
-            f"bucket: {u.get('bucket')}\n"
-            f"current_skill: {sid}\n"
-            f"payment_status: {u.get('payment_status')}\n"
-            f"paid_until: {u.get('paid_until')}\n"
-            f"trial_phase: {u.get('trial_phase')}\n"
-            f"last_payment_click: {u.get('last_payment_click')}\n"
-            f"free_mode: {u.get('free_mode')}\n"
-            f"last_active: {u.get('last_active')}\n"
-            f"test_mode: {bool(TEST_MODE or int(u.get('is_test_user') or 0))}"
-        )
-        return True
-
-    if command == "/health":
-        ok = await db_health_ok()
-        await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(
-            "OK\n"
-            f"DB ok {str(ok).lower()}\n"
-            f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
-            f"Sheets configured {str(bool(SHEETS_WEBHOOK_URL)).lower()}\n"
-            f"Sheets sync enabled {str(bool(SHEETS_SYNC_ENABLED)).lower()}\n"
-            f"Sheets interval {SHEETS_SYNC_INTERVAL_SECONDS}s batch {SHEETS_SYNC_BATCH_SIZE}\n"
-            f"Payments configured {str(bool(PAYMENT_URL_DISCOUNT and PAYMENT_URL_FULL)).lower()}\n"
-            f"Testmode {str(bool(TEST_MODE or int(u.get('is_test_user') or 0))).lower()}"
-        )
-        return True
-
-    if command == "/sync_sheets":
-        result = await sync_unsynced_events(DB_PATH, SHEETS_SYNC_BATCH_SIZE)
-        await log_event(uid, u.get("stage", ""), "admin_sync_sheets", result, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(
-            "Sheets sync\n"
-            f"synced: {result.get('synced', 0)}\n"
-            f"failed: {result.get('failed', 0)}\n"
-            f"error: {result.get('error') or '-'}"
-        )
-        return True
-
-    if command == "/stats":
-        await m.answer(await build_admin_stats_text(DB_PATH))
-        return True
-
-    if command == "/mark_paid":
-        parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit():
-            await m.answer("Формат: /mark_paid <user_id>")
-            return True
-        target_id = int(parts[1])
-        target = await get_user(target_id, DB_PATH)
-        target["payment_status"] = "paid"
-        target["trial_phase"] = "paid"
-        target["free_mode"] = 0
-        target["last_payment_click"] = target.get("last_payment_click") or "admin_mark_paid"
-        await save_user(target, DB_PATH)
-        await log_event(target_id, target.get("stage", ""), "payment_completed", {"source": "admin_mark_paid", "admin_id": uid}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(target_id, target.get("stage", ""), "paid_mode_started", {"source": "admin_mark_paid"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(f"✅ user_id {target_id} помечен как paid.")
-        return True
-
-    if command == "/mark_free":
-        parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit():
-            await m.answer("Формат: /mark_free <user_id>")
-            return True
-        target_id = int(parts[1])
-        target = await get_user(target_id, DB_PATH)
-        target["payment_status"] = "free_mode"
-        target["trial_phase"] = "trial3"
-        target["free_mode"] = 1
-        target["paid_until"] = None
-        await save_user(target, DB_PATH)
-        await log_event(target_id, target.get("stage", ""), "free_mode_started", {"source": "admin_mark_free", "admin_id": uid}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(f"✅ user_id {target_id} переведён в free mode.")
-        return True
-
-    return False
-
-
-def user_timezone(u: Dict[str, Any]):
-    try:
-        return ZoneInfo(u.get("timezone") or "Europe/Vilnius")
-    except Exception:
-        return ZoneInfo("Europe/Vilnius")
-
-
-def local_now_for_user(u: Dict[str, Any]) -> dt.datetime:
-    return dt.datetime.now(user_timezone(u))
-
-
-def in_time_window(now: dt.datetime, start_hour: int, start_minute: int, end_hour: int, end_minute: int) -> bool:
-    current = now.time()
-    return dt.time(start_hour, start_minute) <= current <= dt.time(end_hour, end_minute)
-
-
-def user_inactive_over_24h(u: Dict[str, Any], now_ts: float) -> bool:
-    try:
-        last = float(u.get("last_active") or 0)
-    except (TypeError, ValueError):
-        last = 0
-    return bool(last and now_ts - last > 24 * 3600)
-
-
-def remember_checkin_state(u: Dict[str, Any], key: str, value: str):
-    data: Dict[str, Any] = {}
-    try:
-        if u.get("analysis_json"):
-            data = json.loads(u.get("analysis_json") or "{}")
-            if not isinstance(data, dict):
-                data = {}
-    except Exception:
-        data = {}
-    data[key] = value
-    u["analysis_json"] = json.dumps(data, ensure_ascii=False)
-
-
-async def ask_today_action(m: Message, u: Dict[str, Any]):
-    u["stage"] = "training"
-    await save_user(u, DB_PATH)
-    await start_day(m, u, int(u.get("day") or 1), DB_PATH, SHEETS_WEBHOOK_URL)
-
-
-async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
-    """Показать уменьшенный action-step внутри текущего тренировочного loop."""
-    screen = engine_handle_downscale(u, reason)
-    skill_id = screen.get("skill_id") or DOWNSCALE_PRIMARY_SKILL
-    day = int(u.get("day") or 1)
-    propose_plan_override(u, day, skill_id)
-    u["pending_skill_id"] = None
-    u["pending_skill_day"] = None
-    _remember_downscale_pattern(u, skill_id)
-    u["stage"] = screen.get("next_state") or "downscale_action"
-    await save_user(u, DB_PATH)
-    await log_engine_events(u, screen)
-    await answer_with_keyboard(m, u, screen["text"], kb_downscale, "downscale")
+    await answer_with_keyboard(
+        m,
+        u,
+        "Понял.\n\n"
+        "Тогда таймер — уже слишком большой шаг.\n\n"
+        "Не ставим таймер.\n\n"
+        "Сделай только это:\n"
+        "1. Открой место, где лежит задача.\n"
+        "2. Не работай.\n"
+        "3. Назови следующий физический шаг.\n\n"
+        "Минимум:\n"
+        "одно слово.\n\n"
+        "Это и есть тренировка входа.",
+        kb_downscale,
+        "downscale",
+    )
 
 @router.message(CommandStart())
 async def cmd_start(m: Message):
@@ -830,11 +375,10 @@ async def main_flow(m: Message):
     # Action-loop clarification/downscale: не запускаем повторную диагностику после старта тренировки
     if user_is_in_action_loop(u):
         if text == "❌ Не сделал" or "не сделал" in low:
-            screen = engine_handle_action_result(u, "failed")
-            apply_engine_updates(u, screen)
+            await log_event(u["user_id"], "training", "not_done", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["stage"] = "failed_options"
             await save_user(u, DB_PATH)
-            await log_engine_events(u, screen)
-            await answer_with_keyboard(m, u, screen["text"], kb_failed, "failed")
+            await answer_with_keyboard(m, u, trainer_failed_response(u.get("trainer_key") or "marsha"), kb_failed, "failed")
             return
 
         if u.get("stage") == "failed_options":
@@ -939,10 +483,6 @@ async def main_flow(m: Message):
                 await m.answer(trainer_done_response(u.get("trainer_key") or "marsha"))
                 if previous_done == 0:
                     await show_route(m, u, "first_done")
-                if should_show_day3_offer(u, int(u.get("day") or 1)):
-                    await show_route(m, u, "day3_summary")
-                    await show_day3_offer(m, u, "day3_downscale_done")
-                    return
                 await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
                 return
 
@@ -957,10 +497,6 @@ async def main_flow(m: Message):
                 await m.answer(trainer_done_response(u.get("trainer_key") or "marsha"))
                 if previous_done == 0:
                     await show_route(m, u, "first_done")
-                if should_show_day3_offer(u, int(u.get("day") or 1)):
-                    await show_route(m, u, "day3_summary")
-                    await show_day3_offer(m, u, "day3_downscale_name_done")
-                    return
                 await answer_with_keyboard(m, u, "Одно слово — это уже контакт с задачей. Что дальше?", kb_done, "done")
                 return
         if text in {"💪 Давай действие", "💪 Сделать микрошаг"}:
@@ -997,11 +533,15 @@ async def main_flow(m: Message):
     if u.get("stage") == "waiting_next_day":
         trainer_key = u.get("trainer_key") or "marsha"
         if text == "🔁 Ещё круг" or "еще круг" in low or "ещё круг" in low:
-            screen = engine_get_next_screen(u, {"type": "repeat_skill_card"})
-            apply_engine_updates(u, screen)
+            u["stage"] = "training"
             await save_user(u, DB_PATH)
-            await log_engine_events(u, screen)
-            await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+            await log_event(u["user_id"], "training", "done_more_round", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            plan = get_current_plan(u)
+            day = int(u.get("day") or 1)
+            sid = plan[max(0, min(len(plan) - 1, day - 1))] if plan else next(iter(SKILLS_DB.keys()))
+            skill = SKILLS_DB.get(sid) or list(SKILLS_DB.values())[0]
+            target = u.get("today_target") or "Прокрастинация в целом"
+            await answer_with_keyboard(m, u, format_skill_card(u, skill, target), kb_skill_card, "skill_card")
             return
         if text == "🌙 На сегодня хватит" or "хватит" in low:
             u["stage"] = "training"
@@ -1339,11 +879,41 @@ async def main_flow(m: Message):
 
     # Вопрос перед выдачей навыка
     if u.get("stage") == "await_training_target":
-        screen = engine_get_next_screen(u, {"type": "target_submitted", "text": text})
-        apply_engine_updates(u, screen)
+        target = clamp_str(text or "", 200)
+        if not target or target.lower() == "пропустить":
+            target = "Прокрастинация в целом"
+
+        day = int(u.get("pending_skill_day") or u.get("day") or 1)
+        plan = get_current_plan(u)
+        sid = u.get("pending_skill_id")
+        if not sid or sid not in SKILLS_DB:
+            if plan:
+                idx = max(0, min(len(plan) - 1, day - 1))
+                sid = plan[idx]
+            else:
+                sid = next(iter(SKILLS_DB.keys()))
+
+        trainer_key = u.get("trainer_key") or "marsha"
+        skill = SKILLS_DB.get(sid) or list(SKILLS_DB.values())[0]
+        msg = format_skill_card(u, skill, target)
+
+        u["today_target"] = target
+        u["pending_skill_id"] = None
+        u["pending_skill_day"] = None
+        u["stage"] = "training"
         await save_user(u, DB_PATH)
-        await log_engine_events(u, screen)
-        await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+        await log_event(u["user_id"], "training", "target_set", {"day": day, "text": target}, DB_PATH, SHEETS_WEBHOOK_URL)
+        button_count = sum(len(row) for row in kb_skill_card.keyboard)
+        await log_event(
+            u["user_id"],
+            "training",
+            "skill_card_shown",
+            {"skill_id": sid, "trainer_key": trainer_key, "button_count": button_count},
+            DB_PATH,
+            SHEETS_WEBHOOK_URL,
+        )
+
+        await answer_with_keyboard(m, u, msg, kb_skill_card, "skill_card")
         await m.answer(gamify_status_line(u))
         return
 
@@ -1426,20 +996,23 @@ async def main_flow(m: Message):
             return
 
         if text == "✅ Сделал(а)" or ("сделал" in low and "не сделал" not in low):
-            screen = engine_handle_action_result(u, "done")
+            await log_event(u["user_id"], "training_done", "done", {"day": day})
             previous_done = int(u.get("done_count") or 0)
             u["done_count"] = previous_done + 1
             gamify_apply(u, 2, "done")
-            apply_engine_updates(u, screen)
+            trainer = u.get("trainer_key") or "marsha"
+            await m.answer(trainer_done_response(trainer))
+            if trainer == "skinny":
+                await m.answer("Что почувствовал во время выполнения?")
+            elif trainer == "beck":
+                await m.answer("Что заметил во время выполнения?")
+            else:
+                await m.answer("Как тебе было это делать?")
+            # post_done_reflection этап убран, сразу переходим к следующему этапу
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
-            await log_engine_events(u, screen)
-            await m.answer(screen["text"])
             if previous_done == 0:
                 await show_route(m, u, "first_done")
-            if should_show_day3_offer(u, day):
-                await show_route(m, u, "day3_summary")
-                await show_day3_offer(m, u, "day3_done")
-                return
             await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
             return
 
@@ -1457,9 +1030,11 @@ async def main_flow(m: Message):
                 pass
             if day == 7:
                 await send_weekly_summary(m, u, DB_PATH)
-            if should_show_day3_offer(u, day):
+            if not TEST_MODE and day == 3 and u.get("trial_phase") == "trial3":
                 await show_route(m, u, "day3_summary")
-                await show_day3_offer(m, u, "day3_return")
+                await answer_with_keyboard(m, u, "Ты уже видел(а):\nэто не мотивация.\nЭто тренировка.\n\n💳 Сейчас — цена со скидкой.", kb_pay_choice, "pay_choice")
+                u["stage"] = "offer"
+                await save_user(u, DB_PATH)
                 return
             if not TEST_MODE and day >= 7 and u.get("trial_phase") in ("trial3", "trial7", None):
                 await answer_with_keyboard(m, u, "Выбирай вариант оплаты:", kb_pay_choice, "pay_choice")
@@ -1600,18 +1175,19 @@ async def main_flow(m: Message):
 
     # OFFER stage
     if u.get("stage") == "offer":
+        if TEST_MODE:
+            u["stage"] = "training"
+            u["trial_phase"] = "paid"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Тестовый режим: продолжаем без оплаты.", kb_training_main, "training_main")
+            return
         low = text.lower().strip()
         if text == "7 дней — €20" or "7 дней" in low or "€20" in low or "20" == low:
             await log_event(u["user_id"], "offer", "payment_click_20", {"payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["payment_status"] = "pending_20"
             u["last_payment_click"] = "20"
             await save_user(u, DB_PATH)
-            if PAYMENT_URL_DISCOUNT:
-                await m.answer("Ок. 7 дней сопровождения по ссылке 👇")
-                await m.answer(" ", reply_markup=payment_inline_20(PAYMENT_URL_DISCOUNT))
-            else:
-                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await m.answer(payment_20_stub_text())
+            await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
             return
         if text == "Месяц — €40" or "месяц" in low or "€40" in low or "40" == low:
             await log_event(u["user_id"], "offer", "payment_click_40", {"payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1625,11 +1201,11 @@ async def main_flow(m: Message):
                 await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await m.answer(payment_40_stub_text())
             return
-        if text == "Подумаю" or "подумаю" in low:
-            await log_event(u["user_id"], "offer", "payment_declined_soft", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await log_event(u["user_id"], "offer", "free_mode_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["free_mode"] = 1
-            u["payment_status"] = "free_mode"
+        if "ещ" in low:
+            u["trial_days"] = 7
+            u["trial_phase"] = "trial7"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок. Ещё 4 дня в пробе. Продолжаем.", kb_training_main, "training_main")
             u["stage"] = "training"
             await save_user(u, DB_PATH)
             await m.answer(payment_declined_soft_text())
@@ -1730,10 +1306,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
-    fallback_notice = ""
-    if comp.get("analysis_fallback"):
-        fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
-    msg = f"{fallback_notice}{comp.get('short_summary', 'Похоже на тебя?')}\n\nЭто похоже на тебя?"
+    msg = f"{comp.get('short_summary', 'Похоже на тебя?')}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 
 # ============================================================

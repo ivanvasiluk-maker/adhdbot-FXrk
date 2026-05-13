@@ -376,30 +376,25 @@ def _skill_steps(skill: dict) -> List[str]:
 
 
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
-    """Clean skill card with trainer-specific wording over live skill fields."""
+    """Clean skill card with trainer-specific wording over the same skill data."""
     trainer_key = (user or {}).get("trainer_key") or "marsha"
     trainer = TRAINERS.get(trainer_key, TRAINERS["marsha"])
     steps = _skill_steps(skill)
     steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
     minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
-    why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
+    why_short = skill.get("why_short") or "Сейчас тренируем вход, а не результат."
     skill_name = skill.get("name", "Микро-шаг")
-    trainer_variants = skill.get("trainer_variants") or {}
-    trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha")
-    if not trainer_line:
-        trainer_line = {
-            "beck": "Логика такая: уменьшаем вход, чтобы мозгу было легче начать.",
-            "skinny": "Без переговоров. Делаешь только маленький шаг.",
-            "marsha": "Давай бережно: только маленький вход, без давления на результат.",
-        }.get(trainer_key, "Давай бережно: только маленький вход, без давления на результат.")
 
     if trainer_key == "beck":
+        why_short = skill.get("why_short") or (
+            "Сейчас мы тренируем не результат, а вход в задачу.\n"
+            "Если вход слишком большой, мозг блокирует действие."
+        )
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"📌 Дело: {today_target}\n\n"
             f"🧩 Навык: {skill_name}\n\n"
-            f"{trainer_line}\n\n"
-            "Почему это работает:\n"
+            "Логика такая:\n"
             f"{why_short}\n\n"
             "Сделай:\n"
             f"{steps_text}\n\n"
@@ -412,7 +407,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"📌 Дело: {today_target}\n\n"
             f"🧩 {skill_name}\n\n"
-            f"{trainer_line}\n\n"
+            "Без переговоров.\n"
             "Делаешь только это:\n\n"
             f"{steps_text}\n\n"
             "Минимум:\n"
@@ -424,7 +419,9 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         f"{trainer['emoji']} {trainer['name']}\n\n"
         f"📌 Дело: {today_target}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
-        f"{trainer_line}\n\n"
+        "Давай очень бережно.\n"
+        "Тебе не нужно делать всё.\n"
+        "Нужно только мягко войти в задачу.\n\n"
         "Попробуй:\n"
         f"{steps_text}\n\n"
         "Минимум:\n"
@@ -471,28 +468,25 @@ def _steps_from_skill(skill: dict) -> List[str]:
 
 
 def skill_detail_text(skill: dict) -> str:
-    """ℹ️ Details branch: render live skill fields for launch-week skills."""
+    """ℹ️ Details branch: what skill is, when to use it, example, minimum."""
     name = skill.get("name", "Навык")
     goal = skill.get("goal", "Помочь войти в действие без перегруза.")
-    when_to_use = skill.get("when_to_use") or "когда трудно начать, тянет отложить или непонятно, с какого шага войти."
     steps = _steps_from_skill(skill)
-    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
     minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
-    example = skill.get("real_life_example") or skill.get("example") or skill.get("how_more")
+    example = skill.get("example") or skill.get("how_more")
     if not example and steps:
         example = " → ".join(steps[:3])
     if not example:
         example = "Открой файл, не работай, назови следующий физический шаг."
-    why_long = skill.get("why_long") or skill.get("why_short") or skill.get("explain") or "Маленький шаг снижает сопротивление и помогает войти в действие."
 
     return (
         f"ℹ️ Подробнее о навыке: {name}\n\n"
         f"Что это:\n{goal}\n\n"
-        f"Когда использовать:\n{when_to_use}\n\n"
+        "Когда использовать:\n"
+        "когда трудно начать, тянет отложить или непонятно, с какого шага войти.\n\n"
         f"Пример:\n{example}\n\n"
-        f"Шаги:\n{steps_text}\n\n"
-        f"Минимум:\n{minimum}\n\n"
-        f"Почему работает:\n{why_long}"
+        "Минимум:\n"
+        f"{minimum}"
     )
 
 
@@ -516,85 +510,6 @@ def skeptic_text() -> str:
         "3. смог ли вернуться\n\n"
         "Если не работает — уменьшаем шаг или меняем навык."
     )
-
-
-def day3_offer_text() -> str:
-    """Offer shown after day 3 completion/summary."""
-    return (
-        "За 3 дня уже видно:\n\n"
-        "— где ты застреваешь\n"
-        "— что помогает начать\n"
-        "— где ты сливаешься\n"
-        "— какой шаг нужно уменьшать\n\n"
-        "Обычно люди после первого улучшения снова исчезают.\n\n"
-        "Чтобы этого не было, нужна система:\n"
-        "7 дней сопровождения\n"
-        "или месяц тренировки."
-    )
-
-
-def payment_20_stub_text() -> str:
-    return (
-        "Оплата почти готова.\n"
-        "Пока тестируем MVP: напиши «хочу 7 дней», и я включу доступ вручную."
-    )
-
-
-def payment_40_stub_text() -> str:
-    return (
-        "Месячный режим включает:\n"
-        "— ежедневное сопровождение\n"
-        "— память паттернов\n"
-        "— адаптацию навыков\n"
-        "— вечерние итоги\n\n"
-        "Пока оплата подключается.\n"
-        "Я записал твой выбор."
-    )
-
-
-def payment_declined_soft_text() -> str:
-    return (
-        "Ок.\n"
-        "Продолжим в коротком режиме.\n"
-        "Один навык в день.\n"
-        "Если захочешь полное сопровождение — вернёшься."
-    )
-
-
-def payment_includes_text() -> str:
-    return (
-        "Что входит:\n"
-        "— ежедневное сопровождение\n"
-        "— память паттернов\n"
-        "— адаптацию навыков\n"
-        "— вечерние итоги\n"
-        "— уменьшение шага, если действие ломается"
-    )
-
-
-
-def morning_checkin_text(name: str) -> str:
-    return (
-        f"Доброе утро, {name}.\n\n"
-        "Коротко отметь состояние — и я подберу шаг на сегодня."
-    )
-
-
-def evening_checkin_text() -> str:
-    return (
-        "Как прошёл день?\n\n"
-        "Важно не идеально.\n"
-        "Важно: был ли хоть один возврат к действию."
-    )
-
-
-def reactivation_text(count: int) -> str:
-    lines = {
-        1: "Ты не провалился. Просто выпал из цикла. Вернёмся с 30 секунд?",
-        2: "Не надо догонять. Не надо начинать заново. Один маленький шаг — и ты снова внутри.",
-        3: "Я больше не буду дёргать. Маршрут сохранён. Вернёшься — продолжим с маленького шага.",
-    }
-    return lines.get(max(1, min(int(count or 1), 3)), lines[3])
 
 # ============================================================
 # 3) KEYBOARDS
