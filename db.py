@@ -7,7 +7,10 @@ import time
 import logging
 import os
 from typing import Dict, Any, Optional, List
+from datetime import datetime, timezone
 import aiosqlite
+
+from sheets_sync import sanitize_event_data
 
 # Logging
 log = logging.getLogger("bot")
@@ -41,6 +44,17 @@ USER_FIELDS = [
     "plan_overrides_json",
     "trial_days",
     "trial_phase",
+    "payment_status",
+    "free_mode",
+    "paid_until",
+    "last_payment_click",
+    "is_test_user",
+    "fast_forward_enabled",
+    "last_morning_checkin_date",
+    "last_evening_checkin_date",
+    "notifications_enabled",
+    "timezone",
+    "reactivation_count",
     "pending_plan_change",
     "crisis_count",
     "test_answers",
@@ -49,6 +63,70 @@ USER_FIELDS = [
     "analysis_retry_count",
     "has_started_training",
 ]
+
+EVENT_NAME_ALIASES = {
+    "crisis_open": "crisis_clicked",
+    "crisis_message": "crisis_clicked",
+    "done": "action_done",
+    "return": "action_done",
+    "not_done": "action_failed",
+    "downscale_done": "action_done",
+    "downscale_triggered": "action_downscaled",
+    "day1_started": "diagnosis_started",
+    "analysis_action_started": "diagnosis_started",
+    "trainer_chosen": "trainer_selected",
+}
+
+
+EVENT_EXTRA_COLS = {
+    "event_name": "TEXT",
+    "event_data": "TEXT",
+    "created_at": "TEXT",
+    "synced": "INTEGER DEFAULT 0",
+    "sync_attempts": "INTEGER DEFAULT 0",
+    "last_sync_error": "TEXT",
+    # Legacy columns kept for compatibility with existing analytics code.
+    "ts": "REAL",
+    "event": "TEXT",
+    "meta": "TEXT",
+    "stage": "TEXT",
+}
+
+
+async def ensure_events_schema(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            event_name TEXT,
+            event_data TEXT,
+            stage TEXT,
+            created_at TEXT,
+            synced INTEGER DEFAULT 0,
+            sync_attempts INTEGER DEFAULT 0,
+            last_sync_error TEXT,
+            ts REAL,
+            event TEXT,
+            meta TEXT
+        )
+        """
+    )
+    cur = await db.execute("PRAGMA table_info(events)")
+    cols = [r[1] for r in await cur.fetchall()]
+    for col, ctype in EVENT_EXTRA_COLS.items():
+        if col not in cols:
+            await db.execute(f"ALTER TABLE events ADD COLUMN {col} {ctype}")
+
+    await db.execute("UPDATE events SET event_name = event WHERE event_name IS NULL AND event IS NOT NULL")
+    await db.execute("UPDATE events SET event_data = meta WHERE event_data IS NULL AND meta IS NOT NULL")
+    await db.execute("UPDATE events SET created_at = datetime(ts, 'unixepoch') WHERE created_at IS NULL AND ts IS NOT NULL")
+    await db.execute("UPDATE events SET synced = 0 WHERE synced IS NULL")
+    await db.execute("UPDATE events SET sync_attempts = 0 WHERE sync_attempts IS NULL")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_events_synced ON events(synced, id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_events_name ON events(event_name)")
+
 
 def default_user(uid: int) -> Dict[str, Any]:
     """Создать нового пользователя с дефолтными значениями"""
@@ -73,6 +151,17 @@ def default_user(uid: int) -> Dict[str, Any]:
         "plan_overrides_json": None,
         "trial_days": 3,
         "trial_phase": "paid" if TEST_MODE else "trial3",
+        "payment_status": "paid" if TEST_MODE else "trial",
+        "free_mode": 0,
+        "paid_until": None,
+        "last_payment_click": None,
+        "is_test_user": 0,
+        "fast_forward_enabled": 0,
+        "last_morning_checkin_date": None,
+        "last_evening_checkin_date": None,
+        "notifications_enabled": 1,
+        "timezone": "Europe/Vilnius",
+        "reactivation_count": 0,
         "pending_plan_change": None,
         "crisis_count": 0,
         "created_at": time.time(),
@@ -110,15 +199,28 @@ async def init_db(db_path: str):
                 plan_overrides_json TEXT,
                 trial_days INTEGER,
                 trial_phase TEXT,
+                payment_status TEXT,
+                free_mode INTEGER,
+                paid_until TEXT,
+                last_payment_click TEXT,
+                is_test_user INTEGER DEFAULT 0,
+                fast_forward_enabled INTEGER DEFAULT 0,
+                last_morning_checkin_date TEXT,
+                last_evening_checkin_date TEXT,
+                notifications_enabled INTEGER DEFAULT 1,
+                timezone TEXT DEFAULT 'Europe/Vilnius',
+                reactivation_count INTEGER DEFAULT 0,
                 pending_plan_change TEXT,
                 crisis_count INTEGER,
                 test_answers TEXT,
                 done_count INTEGER,
                 return_count INTEGER,
+                analysis_retry_count INTEGER,
                 has_started_training INTEGER
             )
             """
         )
+        await ensure_events_schema(db)
         await db.commit()
 
 async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
@@ -183,6 +285,17 @@ EXTRA_USER_COLS = {
     "plan_overrides_json": "TEXT",   # правки плана после кризиса
     "trial_days": "INTEGER",         # 3 или 7
     "trial_phase": "TEXT",           # "trial3" / "trial7" / "paid" / ...
+    "payment_status": "TEXT",        # "trial" / "paid" / "manual_pending" / ...
+    "free_mode": "INTEGER",          # 1 если пользователь мягко отказался от оплаты
+    "paid_until": "TEXT",
+    "last_payment_click": "TEXT",
+    "is_test_user": "INTEGER DEFAULT 0",
+    "fast_forward_enabled": "INTEGER DEFAULT 0",
+    "last_morning_checkin_date": "TEXT",
+    "last_evening_checkin_date": "TEXT",
+    "notifications_enabled": "INTEGER DEFAULT 1",
+    "timezone": "TEXT DEFAULT 'Europe/Vilnius'",
+    "reactivation_count": "INTEGER DEFAULT 0",
     "pending_plan_change": "TEXT",   # отложенная правка плана после кризиса
     "crisis_count": "INTEGER",       # лимит в trial
     "test_answers": "TEXT",
@@ -205,49 +318,70 @@ async def migrate_db(db_path: str):
             if col not in cols:
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
 
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts REAL,
-            user_id INTEGER,
-            stage TEXT,
-            event TEXT,
-            meta TEXT
-        )
-        """)
+        await ensure_events_schema(db)
+
         await db.commit()
 
-async def log_event(user_id: int, stage: str, event: str, meta: dict = None, db_path: str = "bot.db", sheets_webhook_url: str = ""):
-    """Залогировать событие в БД и опционально в GSheets"""
-    meta_s = json.dumps(meta or {}, ensure_ascii=False)
-    ts = time.time()
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute(
-            "INSERT INTO events(ts,user_id,stage,event,meta) VALUES(?,?,?,?,?)",
-            (ts, user_id, stage, event, meta_s)
-        )
-        await db.commit()
+async def log_event(
+    user_id: int,
+    event_name: str,
+    event_data: dict = None,
+    stage: str = None,
+    db_path: str = "bot.db",
+    sheets_webhook_url: str = "",
+):
+    """Log event to SQLite only; Sheets sync happens asynchronously in the background.
 
-    if sheets_webhook_url:
-        try:
-            import urllib.request
-            payload = json.dumps({
-                "ts": ts,
-                "user_id": user_id,
-                "stage": stage,
-                "event": event,
-                "meta": meta or {}
-            }, ensure_ascii=False).encode("utf-8")
+    Supports the legacy call shape log_event(user_id, stage, event, meta, db_path, webhook)
+    while accepting the new shape log_event(user_id, event_name, event_data=None, stage=None).
+    Never raises into user-facing bot flows.
+    """
+    try:
+        # Backward compatibility for existing calls: (user_id, stage, event, meta, db_path, webhook).
+        if isinstance(event_data, str) and (stage is None or isinstance(stage, dict)):
+            legacy_stage = event_name
+            legacy_event = event_data
+            legacy_meta = stage if isinstance(stage, dict) else {}
+            stage = legacy_stage
+            event_name = legacy_event
+            event_data = legacy_meta
 
-            req = urllib.request.Request(
-                sheets_webhook_url,
-                data=payload,
-                headers={"Content-Type":"application/json"},
-                method="POST"
+        clean_data = sanitize_event_data(event_data or {})
+        event_name = EVENT_NAME_ALIASES.get(event_name, event_name)
+        if stage and "stage" not in clean_data:
+            clean_data["stage"] = stage
+
+        event_data_s = json.dumps(clean_data, ensure_ascii=False)
+        ts = time.time()
+        created_at = datetime.now(timezone.utc).isoformat()
+
+        async with aiosqlite.connect(db_path) as db:
+            await ensure_events_schema(db)
+            await db.execute(
+                """
+                INSERT INTO events(
+                    user_id, event_name, event_data, stage, created_at,
+                    synced, sync_attempts, last_sync_error, ts, event, meta
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    user_id,
+                    event_name,
+                    event_data_s,
+                    stage,
+                    created_at,
+                    0,
+                    0,
+                    None,
+                    ts,
+                    event_name,
+                    event_data_s,
+                ),
             )
-            urllib.request.urlopen(req, timeout=3).read()
-        except Exception:
-            pass
+            await db.commit()
+    except Exception as e:
+        log.warning("log_event failed: %s", e)
+
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
     """Применить геймификацию"""
@@ -266,7 +400,7 @@ def is_paid(u: dict) -> bool:
     """Проверить, платит ли пользователь"""
     if TEST_MODE:
         return True
-    return u.get("trial_phase") == "paid"
+    return u.get("payment_status") == "paid" or u.get("trial_phase") == "paid"
 
 def should_ping(u: dict, hours: int) -> bool:
     """Проверить, нужно ли пинговать пользователя"""

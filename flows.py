@@ -16,7 +16,7 @@ from aiogram import Bot
 from texts import (
     trainer_say, skill_explain, PRAISE, DAILY_LIVE_LINES,
     day_task_text, midday_ping, TRAINER_INTRO_TEXT,
-    kb_yes_no, kb_training_main, kb_crisis_mode,
+    kb_yes_no, kb_training_main, kb_crisis_mode, keyboard_button_count,
     CRISIS_LIMIT,
 )
 from skills import SKILLS_DB, get_current_plan, build_28_day_plan, build_plan
@@ -177,7 +177,9 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         f"✅ Как: {skill_explain(trainer_key, skill)}\n\n"
         "Вечером спросим: сделал(а)? вернулся(лась)?"
     )
-    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main)
+    button_count = keyboard_button_count(kb_training_main)
+    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
+    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= 5 else None)
 
 async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str):
     """Универсальный скрипт для любого дня"""
@@ -201,7 +203,9 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
         f"✅ Как: {skill_explain(trainer_key, skill)}\n\n"
         "Считается попытка 60–120 сек."
     )
-    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main)
+    button_count = keyboard_button_count(kb_training_main)
+    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
+    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= 5 else None)
 
     u["day"] = day
     u["stage"] = "await_training_target"
@@ -300,7 +304,10 @@ async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheet
 
     u["stage"] = "training"
     await save_user(u, db_path)
-    await m.answer("Возвращаемся в тренировку 👇", reply_markup=kb_training_main)
+    button_count = keyboard_button_count(kb_training_main)
+    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
+    await log_event(u["user_id"], "training", "crisis_completed", {"skill_id": sid}, db_path, sheets_webhook)
+    await m.answer("Возвращаемся в тренировку 👇", reply_markup=kb_training_main if button_count <= 5 else None)
 
 # ============================================================
 # AI CRISIS HELP
@@ -402,7 +409,8 @@ async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") ->
         "summary": "Похоже на смешанный профиль: немного тревоги + избегание + низкий ресурс.",
         "confidence": 0.55,
         "top_signals": ["избегание", "тревога", "низкая энергия"],
-        "first_action": "Сделай один микро-старт ≤ 2 минут."
+        "first_action": "Сделай один микро-старт ≤ 2 минут.",
+        "analysis_fallback": True,
     }
     if not (client and model):
         log.warning("[AI] Quick analysis fallback: OpenAI client or model is not configured")
@@ -491,7 +499,9 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
         "skills_focus": ["начало без давления", "удержание внимания", "возврат без самокритики"],
         "timeline": "Первые сдвиги - 2–3 недели. Устойчивость - 4–8 недель.",
         "support_guarantee": "Если метод не подойдёт - мы его заменим. Ты не один(а).",
-        "closing_reassurance": "Это работает. И ты справишься."
+        "closing_reassurance": "Ок, начнём с базового паттерна: сложно войти в задачу. Дадим самый маленький шаг.",
+        "analysis_fallback": True,
+        "selected_skill": "open_only",
     }
     if not (client and model):
         log.warning("[AI] Comprehensive analysis fallback: OpenAI client or model is not configured")
@@ -539,7 +549,9 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
             "skills_focus": ["начало", "удержание", "возврат"],
             "timeline": "Первые сдвиги - 2–3 недели.",
             "support_guarantee": "Мы найдём подходящий метод для тебя.",
-            "closing_reassurance": "Ты справишься."
+            "closing_reassurance": "Ок, начнём с базового паттерна: сложно войти в задачу. Дадим самый маленький шаг.",
+            "analysis_fallback": True,
+            "selected_skill": "open_only",
         }
 
     # Ensure all required fields exist
@@ -604,6 +616,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     # Prefer comprehensive bucket if present
     bucket = comp.get("bucket") or r.get("bucket") or "mixed"
     u["bucket"] = bucket
+    if comp.get("analysis_fallback") or r.get("analysis_fallback"):
+        await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "run_analysis"}, db_path, sheets_webhook)
 
     # Save full analysis (include user_text for reference)
     comp_to_store = dict(comp)
@@ -612,6 +626,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 
     # build plan (28 days)
     plan_ids = build_28_day_plan(bucket)
+    if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB:
+        plan_ids[0] = "open_only"
     u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
     u["day"] = 1
 
@@ -620,12 +636,25 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await save_user(u, db_path)
 
     # Log that analysis was shown
+    await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual AI-powered detailed analysis before asking for confirmation.
-    msg = f"{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
+    fallback_notice = ""
+    if comp.get("analysis_fallback") or r.get("analysis_fallback"):
+        fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
+    msg = f"{fallback_notice}{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
 
-    await m.answer(msg, reply_markup=kb_analysis_confirm)
+    button_count = keyboard_button_count(kb_analysis_confirm)
+    await log_event(
+        u["user_id"],
+        "analysis",
+        "keyboard_shown" if button_count <= 5 else "keyboard_warning",
+        {"keyboard": "analysis", "button_count": button_count},
+        db_path,
+        sheets_webhook,
+    )
+    await m.answer(msg, reply_markup=kb_analysis_confirm if button_count <= 5 else None)
 
 # ============================================================
 # PROGRESS & REPORTS
