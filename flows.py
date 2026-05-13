@@ -306,6 +306,7 @@ async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheet
     await save_user(u, db_path)
     button_count = keyboard_button_count(kb_training_main)
     await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
+    await log_event(u["user_id"], "training", "crisis_completed", {"skill_id": sid}, db_path, sheets_webhook)
     await m.answer("Возвращаемся в тренировку 👇", reply_markup=kb_training_main if button_count <= 5 else None)
 
 # ============================================================
@@ -639,6 +640,10 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual AI-powered detailed analysis before asking for confirmation.
+    fallback_notice = ""
+    if comp.get("analysis_fallback") or r.get("analysis_fallback"):
+        fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
+    msg = f"{fallback_notice}{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
     msg = f"{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
