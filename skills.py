@@ -8,25 +8,25 @@ def propose_plan_override(u: dict, day_number: int, new_skill_id: str):
 # 4-недельные шаблоны по bucket (28 дней)
 PROGRAM_TEMPLATES = {
     "anxiety": {
-        1: ["a_w1_anchor_60_base", "a_w1_task_clarity_alt", "a_w1_anchor_60_base", "a_w1_task_clarity_alt", "a_w1_anchor_60_base", "a_w1_task_clarity_alt", "a_w1_anchor_60_base"],
+        1: ["crisis_grounding", "self_criticism_to_instruction", "ninety_sec_start", "open_only", "two_min_start", "restart_after_break", "task_naming"],
         2: ["a_w2_notice_thought_base", "a_w2_experiment_alt", "a_w2_notice_thought_base", "a_w2_experiment_alt", "a_w2_notice_thought_base", "a_w2_experiment_alt", "a_w2_notice_thought_base"],
         3: ["a_w3_separate_critic_base", "a_w3_support_alt", "a_w3_separate_critic_base", "a_w3_support_alt", "a_w3_separate_critic_base", "a_w3_support_alt", "a_w3_separate_critic_base"],
         4: ["a_w4_env_shield_base", "a_w4_weekly_review_alt", "a_w4_env_shield_base", "a_w4_weekly_review_alt", "a_w4_env_shield_base", "a_w4_weekly_review_alt", "a_w4_env_shield_base"],
     },
     "low_energy": {
-        1: ["e_w1_resistance_timer_base", "e_w1_restore_one_alt", "e_w1_resistance_timer_base", "e_w1_restore_one_alt", "e_w1_resistance_timer_base", "e_w1_restore_one_alt", "e_w1_resistance_timer_base"],
+        1: ["open_only", "ninety_sec_start", "two_min_start", "task_naming", "restart_after_break", "one_tab_focus", "self_criticism_to_instruction"],
         2: ["e_w2_micro_start_base", "e_w2_not_to_do_alt", "e_w2_micro_start_base", "e_w2_not_to_do_alt", "e_w2_micro_start_base", "e_w2_not_to_do_alt", "e_w2_micro_start_base"],
         3: ["e_w3_return_no_punish_base", "e_w3_support_alt", "e_w3_return_no_punish_base", "e_w3_support_alt", "e_w3_return_no_punish_base", "e_w3_support_alt", "e_w3_return_no_punish_base"],
         4: ["e_w4_env_shield_base", "e_w4_weekly_review_alt", "e_w4_env_shield_base", "e_w4_weekly_review_alt", "e_w4_env_shield_base", "e_w4_weekly_review_alt", "e_w4_env_shield_base"],
     },
     "distractibility": {
-        1: ["d_w1_single_window_base", "d_w1_phone_out_alt", "d_w1_single_window_base", "d_w1_phone_out_alt", "d_w1_single_window_base", "d_w1_phone_out_alt", "d_w1_single_window_base"],
+        1: ["one_tab_focus", "ninety_sec_start", "restart_after_break", "open_only", "two_min_start", "task_naming", "self_criticism_to_instruction"],
         2: ["d_w2_soft_return_base", "d_w2_capture_then_do_alt", "d_w2_soft_return_base", "d_w2_capture_then_do_alt", "d_w2_soft_return_base", "d_w2_capture_then_do_alt", "d_w2_soft_return_base"],
         3: ["d_w3_env_shield_base", "d_w3_return_no_punish_alt", "d_w3_env_shield_base", "d_w3_return_no_punish_alt", "d_w3_env_shield_base", "d_w3_return_no_punish_alt", "d_w3_env_shield_base"],
         4: ["d_w4_focus_block_20_base", "d_w4_weekly_review_alt", "d_w4_focus_block_20_base", "d_w4_weekly_review_alt", "d_w4_focus_block_20_base", "d_w4_weekly_review_alt", "d_w4_focus_block_20_base"],
     },
     "mixed": {
-        1: ["m_w1_not_to_do_base", "m_w1_clarity_1line_alt", "m_w1_not_to_do_base", "m_w1_clarity_1line_alt", "m_w1_not_to_do_base", "m_w1_clarity_1line_alt", "m_w1_not_to_do_base"],
+        1: ["open_only", "task_naming", "ninety_sec_start", "two_min_start", "one_tab_focus", "restart_after_break", "self_criticism_to_instruction"],
         2: ["m_w2_notice_thought_base", "m_w2_micro_start_alt", "m_w2_notice_thought_base", "m_w2_micro_start_alt", "m_w2_notice_thought_base", "m_w2_micro_start_alt", "m_w2_notice_thought_base"],
         3: ["m_w3_separate_critic_base", "m_w3_support_alt", "m_w3_separate_critic_base", "m_w3_support_alt", "m_w3_separate_critic_base", "m_w3_support_alt", "m_w3_separate_critic_base"],
         4: ["m_w4_env_shield_base", "m_w4_weekly_review_alt", "m_w4_env_shield_base", "m_w4_weekly_review_alt", "m_w4_env_shield_base", "m_w4_weekly_review_alt", "m_w4_env_shield_base"],
@@ -48,10 +48,10 @@ def build_28_day_plan(bucket: str) -> list:
 
 # MVP fallback plans
 PLANS = {
-    "anxiety": ["notice_thought", "micro_start", "return_no_punish"],
-    "low_energy": ["micro_start", "return_no_punish", "micro_start"],
-    "distractibility": ["micro_start", "micro_start", "return_no_punish"],
-    "mixed": ["return_no_punish", "micro_start", "notice_thought"],
+    "anxiety": ["crisis_grounding", "self_criticism_to_instruction", "ninety_sec_start"],
+    "low_energy": ["open_only", "ninety_sec_start", "two_min_start"],
+    "distractibility": ["one_tab_focus", "restart_after_break", "two_min_start"],
+    "mixed": ["open_only", "task_naming", "restart_after_break"],
 }
 
 def build_plan(bucket: str) -> list:

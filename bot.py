@@ -17,6 +17,8 @@ import time
 import asyncio
 import logging
 import threading
+import datetime as dt
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
 
 import aiosqlite
@@ -52,7 +54,7 @@ from skills import (
 )
 from db import (
     USER_FIELDS, default_user, init_db, migrate_db, get_user, save_user, 
-    log_event, gamify_apply, is_paid, should_ping, EXTRA_USER_COLS
+    log_event, gamify_apply, is_paid, EXTRA_USER_COLS
 )
 from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
@@ -77,6 +79,7 @@ PAYMENT_URL = os.getenv("PAYMENT_URL", "").strip()
 PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
+ADMIN_IDS = {int(x) for x in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "").strip()) if x.isdigit()}
 
 # Unlock full flow while testing (set TEST_MODE=1)
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
@@ -290,12 +293,23 @@ async def cmd_start(m: Message):
     uid = m.from_user.id
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
+    await log_event(
+        uid,
+        "start",
+        {
+            "telegram_username": getattr(m.from_user, "username", None) or "",
+            "telegram_name": getattr(m.from_user, "first_name", None) or getattr(m.from_user, "full_name", "") or "",
+            "stage": u.get("stage"),
+        },
+        db_path=DB_PATH,
+    )
 
 
     # Новый порядок онбординга:
     # 1. Экраны онбординга
     u["stage"] = "ask_name"
     await save_user(u, DB_PATH)
+    await log_event(uid, "onboarding_started", {"stage": u.get("stage")}, db_path=DB_PATH)
     for screen in ONBOARDING_SCREENS:
         await m.answer(screen)
         await asyncio.sleep(0.3)
@@ -312,6 +326,43 @@ async def main_flow(m: Message):
     u = await get_user(uid, DB_PATH)
     text = (m.text or "").strip()
     low = text.lower()
+
+    if await handle_admin_command(m, u, text):
+        return
+    if await handle_user_command(m, u, text):
+        return
+
+    morning_answers = {"😐 норм", "😣 тяжело", "🔋 нет сил", "📱 отвлекаюсь", "🚪 не хочу начинать"}
+    if u.get("stage") == "morning_checkin" and text in morning_answers:
+        remember_checkin_state(u, "last_morning_state", text)
+        u["last_active"] = time.time()
+        was_reactivation = int(u.get("reactivation_count") or 0) > 0
+        u["stage"] = "training"
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "morning_checkin_done", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if was_reactivation:
+            await log_event(uid, "training", "reactivation_success", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Принял. Подберём шаг на сегодня.")
+        await ask_today_action(m, u)
+        return
+
+    evening_answers = {"✅ сделал", "😐 частично", "❌ не сделал", "↩️ срывался, но возвращался"}
+    if u.get("stage") == "evening_checkin" and text in evening_answers:
+        remember_checkin_state(u, "last_evening_state", text)
+        u["last_active"] = time.time()
+        u["stage"] = "training"
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "evening_checkin_done", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if text == "✅ сделал":
+            await m.answer(trainer_done_response(u.get("trainer_key") or "marsha"))
+        elif text == "↩️ срывался, но возвращался":
+            await m.answer("Возврат засчитан. Это ключевой навык.")
+        elif text == "😐 частично":
+            await m.answer("Частично — тоже данные. Завтра уменьшим шаг, если нужно.")
+        else:
+            await m.answer(trainer_failed_response(u.get("trainer_key") or "marsha"))
+        await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+        return
 
     # Глобальный хук: кризис доступен из любого состояния, но не перебиваем активный кризис-флоу
     if (text == "🆘 Кризис" or "кризис" in low) and u.get("stage") not in {"crisis_choose_mode", "crisis_voice", "crisis_text", "crisis_plan_confirm"}:
@@ -539,13 +590,33 @@ async def main_flow(m: Message):
             await m.answer("Выбери кнопкой 👇", reply_markup=kb_trainers)
             return
         u["trainer_key"] = chosen
-        u["stage"] = "trainer_intro"
+        u["stage"] = "notification_consent"
         await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "onboarding", "trainer_selected", {"trainer_key": chosen}, DB_PATH, SHEETS_WEBHOOK_URL)
         # Описание и фото тренера
         await send_trainer_photo_if_any(m.chat.id, chosen, BOT_TOKEN)
         from texts import send_trainer_introduction
         await send_trainer_introduction(m, u)
-        await m.answer("Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+        await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
+        return
+
+    if u.get("stage") == "notification_consent":
+        low = (text or "").lower()
+        if text == "✅ Ок, можно писать" or "можно" in low or "ок" in low:
+            u["notifications_enabled"] = 1
+            u["stage"] = "trainer_intro"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 1}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            return
+        if text == "🔕 Без напоминаний" or "без" in low or "напомин" in low:
+            u["notifications_enabled"] = 0
+            u["stage"] = "trainer_intro"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 0}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Ок, без напоминаний. Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            return
+        await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
         return
 
     # ============================================================
@@ -946,11 +1017,13 @@ async def main_flow(m: Message):
             return
 
         if text == "↩️ Вернулся(лась)" or "вернулся" in low:
-            await log_event(u["user_id"], "training", "return", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["return_count"] += 1
+            screen = engine_handle_action_result(u, "return")
+            u["return_count"] = int(u.get("return_count") or 0) + 1
             gamify_apply(u, 1, "return")
+            apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
-            await m.answer(trainer_say(u.get("trainer_key") or "marsha", "Возврат засчитан. Это ключевой навык."))
+            await log_engine_events(u, screen)
+            await m.answer(trainer_say(u.get("trainer_key") or "marsha", screen["text"]))
             try:
                 await m.answer(trainer_say(u.get("trainer_key") or "marsha", PRAISE.get(u.get("trainer_key") or "marsha", "")))
             except Exception:
@@ -968,7 +1041,7 @@ async def main_flow(m: Message):
                 u["stage"] = "offer"
                 await save_user(u, DB_PATH)
                 return
-            await start_day(m, u, day + 1, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
             return
 
         if text in {"❓ Сомневаюсь", "❓ Сомневаюсь, работает ли"} or "сомневаюсь" in low:
@@ -1109,24 +1182,24 @@ async def main_flow(m: Message):
             await answer_with_keyboard(m, u, "Тестовый режим: продолжаем без оплаты.", kb_training_main, "training_main")
             return
         low = text.lower().strip()
-        if text == "💳 Оплатить со скидкой" or "со скидкой" in low:
-            await m.answer("Ок. Скидка по ссылке 👇")
-            await m.answer(" ", reply_markup=payment_inline_discount(PAYMENT_URL_DISCOUNT))
-            return
-        if text == "💳 Оплатить без скидки" or "без скидки" in low:
-            await m.answer("Ок. Полная цена по ссылке 👇")
-            await m.answer(" ", reply_markup=payment_inline_full(PAYMENT_URL_FULL))
-            return
-        if text == "➕ Ещё 4 дня без оплаты" or "ещё" in low or "дня" in low:
-            await m.answer("Ок. Продолжаем тренировку! 💪")
-            u["stage"] = "training"
+        if text == "7 дней — €20" or "7 дней" in low or "€20" in low or "20" == low:
+            await log_event(u["user_id"], "offer", "payment_click_20", {"payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["payment_status"] = "pending_20"
+            u["last_payment_click"] = "20"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
             return
-        if text == "❌ Не готов(а)" or "не готов" in low:
-            await m.answer("Ок. Если захочешь продолжить — просто напиши /start")
-            u["stage"] = "idle"
+        if text == "Месяц — €40" or "месяц" in low or "€40" in low or "40" == low:
+            await log_event(u["user_id"], "offer", "payment_click_40", {"payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["payment_status"] = "pending_40"
+            u["last_payment_click"] = "40"
             await save_user(u, DB_PATH)
+            if PAYMENT_URL_FULL:
+                await m.answer("Ок. Месяц тренировки по ссылке 👇")
+                await m.answer(" ", reply_markup=payment_inline_40(PAYMENT_URL_FULL))
+            else:
+                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await m.answer(payment_40_stub_text())
             return
         if "ещ" in low:
             u["trial_days"] = 7
@@ -1135,6 +1208,12 @@ async def main_flow(m: Message):
             await answer_with_keyboard(m, u, "Ок. Ещё 4 дня в пробе. Продолжаем.", kb_training_main, "training_main")
             u["stage"] = "training"
             await save_user(u, DB_PATH)
+            await m.answer(payment_declined_soft_text())
+            await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
+            return
+        if text == "Что входит?" or "что входит" in low:
+            await m.answer(payment_includes_text())
+            await answer_with_keyboard(m, u, "Выбери вариант:", kb_pay_choice, "pay_choice")
             return
         await answer_with_keyboard(m, u, "Выбирай кнопкой 👇", kb_pay_choice, "pay_choice")
         return
@@ -1214,13 +1293,18 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     if not user_text:
         user_text = f"У меня проблемы с {bucket}"
     comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
+    if comp.get("analysis_fallback"):
+        await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "show_comprehensive_analysis"}, DB_PATH, SHEETS_WEBHOOK_URL)
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket", bucket)
     plan_ids = build_28_day_plan(u["bucket"])
+    if comp.get("analysis_fallback") and "open_only" in SKILLS_DB:
+        plan_ids[0] = "open_only"
     u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
     u["day"] = 1
     u["stage"] = "confirm_analysis"
     await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     msg = f"{comp.get('short_summary', 'Похоже на тебя?')}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
@@ -1232,6 +1316,10 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
 async def whisper_transcribe(m: Message) -> Optional[str]:
     if not (AI_ANALYSIS_ENABLED and client):
         log.warning("[AI] Whisper disabled: OpenAI client or API key is not configured")
+        try:
+            await log_event(m.from_user.id, "voice", "whisper_error", {"error_type": "not_configured", "error_source": "whisper_transcribe"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        except Exception:
+            pass
         return None
     if not m.voice:
         return None
@@ -1264,25 +1352,115 @@ async def whisper_transcribe(m: Message) -> Optional[str]:
         return text or None
     except Exception as e:
         log.exception("whisper error: %s", e)
+        try:
+            await log_event(m.from_user.id, "voice", "whisper_error", {"error_type": type(e).__name__, "error_source": "whisper_transcribe"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        except Exception:
+            pass
         return None
 
 # ============================================================
 # BACKGROUND TASKS
 # ============================================================
 
-async def background_ping(bot):
+async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
+    button_count = keyboard_button_count(reply_markup)
+    await log_event(
+        u.get("user_id"),
+        u.get("stage", ""),
+        "keyboard_shown" if button_count <= 5 else "keyboard_warning",
+        {"keyboard": keyboard_name, "button_count": button_count, "source": "background"},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+    try:
+        await bot.send_message(
+            u["chat_id"],
+            text,
+            reply_markup=reply_markup if button_count <= 5 else None,
+        )
+    except Exception as e:
+        log.exception("telegram_send_error: %s", e)
+        await log_event(
+            u.get("user_id"),
+            u.get("stage", ""),
+            "telegram_send_error",
+            {"source": "send_background_keyboard", "keyboard": keyboard_name},
+            DB_PATH,
+            SHEETS_WEBHOOK_URL,
+        )
+
+
+async def background_checkins(bot: Bot):
+    """Proactive morning/evening check-ins with per-day anti-spam guards."""
     while True:
-        async with aiosqlite.connect(DB_PATH) as db:
-            cur = await db.execute("SELECT * FROM users")
-            rows = await cur.fetchall()
-        for row in rows:
-            u = dict(zip(USER_FIELDS, row))
-            if should_ping(u, 24) and u.get("stage") in {"training", "await_training_target"}:
-                try:
-                    await bot.send_message(u["chat_id"], inactivity_ping(u.get("trainer_key")))
-                except Exception as e:
-                    log.warning(f"Не удалось отправить сообщение {u['chat_id']}: {e}")
-        await asyncio.sleep(3600)
+        try:
+            async with aiosqlite.connect(DB_PATH) as db:
+                db.row_factory = aiosqlite.Row
+                cur = await db.execute("SELECT * FROM users")
+                rows = await cur.fetchall()
+
+            now_ts = time.time()
+            for row in rows:
+                u = dict(row)
+                if int(u.get("notifications_enabled") if u.get("notifications_enabled") is not None else 1) != 1:
+                    continue
+                if not u.get("chat_id"):
+                    continue
+                if u.get("stage") not in {"training", "await_training_target", "waiting_next_day"}:
+                    continue
+
+                now_local = local_now_for_user(u)
+                today = now_local.date().isoformat()
+
+                if (
+                    in_time_window(now_local, 8, 0, 10, 30)
+                    and u.get("last_morning_checkin_date") != today
+                ):
+                    if user_inactive_over_24h(u, now_ts):
+                        count = int(u.get("reactivation_count") or 0)
+                        if count >= 3:
+                            continue
+                        count += 1
+                        u["reactivation_count"] = count
+                        u["last_morning_checkin_date"] = today
+                        if count < 3:
+                            u["stage"] = "morning_checkin"
+                        await save_user(u, DB_PATH)
+                        await log_event(u["user_id"], u.get("stage", ""), "reactivation_sent", {"count": count}, DB_PATH, SHEETS_WEBHOOK_URL)
+                        if count < 3:
+                            await send_background_keyboard(bot, u, reactivation_text(count), kb_morning_checkin, "morning_checkin")
+                        else:
+                            await bot.send_message(u["chat_id"], reactivation_text(count))
+                        continue
+
+                    u["last_morning_checkin_date"] = today
+                    u["stage"] = "morning_checkin"
+                    await save_user(u, DB_PATH)
+                    await log_event(u["user_id"], "morning_checkin", "morning_checkin_sent", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+                    await send_background_keyboard(
+                        bot,
+                        u,
+                        morning_checkin_text(u.get("name") or "друг"),
+                        kb_morning_checkin,
+                        "morning_checkin",
+                    )
+                    continue
+
+                if (
+                    in_time_window(now_local, 19, 0, 22, 30)
+                    and u.get("last_evening_checkin_date") != today
+                ):
+                    u["last_evening_checkin_date"] = today
+                    u["stage"] = "evening_checkin"
+                    await save_user(u, DB_PATH)
+                    await log_event(u["user_id"], "evening_checkin", "evening_checkin_sent", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+                    await send_background_keyboard(bot, u, evening_checkin_text(), kb_evening_checkin, "evening_checkin")
+
+        except Exception as e:
+            log.warning("background_checkins failed: %s", e)
+            await log_event(0, "background", "db_error", {"error_type": type(e).__name__, "error_source": "background_checkins"}, DB_PATH, SHEETS_WEBHOOK_URL)
+
+        await asyncio.sleep(900)
 
 # ============================================================
 # MAIN
@@ -1297,7 +1475,8 @@ async def main():
         dp.include_router(router)
         await init_db(DB_PATH)
         await migrate_db(DB_PATH)
-        asyncio.create_task(background_ping(bot))
+        asyncio.create_task(background_checkins(bot))
+        asyncio.create_task(sheets_sync_loop(DB_PATH))
         log.info("Bot started")
         await dp.start_polling(bot)
     except asyncio.exceptions.CancelledError:

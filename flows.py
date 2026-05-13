@@ -408,7 +408,8 @@ async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") ->
         "summary": "Похоже на смешанный профиль: немного тревоги + избегание + низкий ресурс.",
         "confidence": 0.55,
         "top_signals": ["избегание", "тревога", "низкая энергия"],
-        "first_action": "Сделай один микро-старт ≤ 2 минут."
+        "first_action": "Сделай один микро-старт ≤ 2 минут.",
+        "analysis_fallback": True,
     }
     if not (client and model):
         log.warning("[AI] Quick analysis fallback: OpenAI client or model is not configured")
@@ -497,7 +498,9 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
         "skills_focus": ["начало без давления", "удержание внимания", "возврат без самокритики"],
         "timeline": "Первые сдвиги - 2–3 недели. Устойчивость - 4–8 недель.",
         "support_guarantee": "Если метод не подойдёт - мы его заменим. Ты не один(а).",
-        "closing_reassurance": "Это работает. И ты справишься."
+        "closing_reassurance": "Ок, начнём с базового паттерна: сложно войти в задачу. Дадим самый маленький шаг.",
+        "analysis_fallback": True,
+        "selected_skill": "open_only",
     }
     if not (client and model):
         log.warning("[AI] Comprehensive analysis fallback: OpenAI client or model is not configured")
@@ -545,7 +548,9 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
             "skills_focus": ["начало", "удержание", "возврат"],
             "timeline": "Первые сдвиги - 2–3 недели.",
             "support_guarantee": "Мы найдём подходящий метод для тебя.",
-            "closing_reassurance": "Ты справишься."
+            "closing_reassurance": "Ок, начнём с базового паттерна: сложно войти в задачу. Дадим самый маленький шаг.",
+            "analysis_fallback": True,
+            "selected_skill": "open_only",
         }
 
     # Ensure all required fields exist
@@ -610,6 +615,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     # Prefer comprehensive bucket if present
     bucket = comp.get("bucket") or r.get("bucket") or "mixed"
     u["bucket"] = bucket
+    if comp.get("analysis_fallback") or r.get("analysis_fallback"):
+        await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "run_analysis"}, db_path, sheets_webhook)
 
     # Save full analysis (include user_text for reference)
     comp_to_store = dict(comp)
@@ -618,6 +625,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 
     # build plan (28 days)
     plan_ids = build_28_day_plan(bucket)
+    if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB:
+        plan_ids[0] = "open_only"
     u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
     u["day"] = 1
 
@@ -626,6 +635,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await save_user(u, db_path)
 
     # Log that analysis was shown
+    await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual AI-powered detailed analysis before asking for confirmation.

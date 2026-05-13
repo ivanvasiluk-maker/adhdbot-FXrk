@@ -515,6 +515,70 @@ def skeptic_text() -> str:
 # 3) KEYBOARDS
 # ============================================================
 
+
+kb_morning_checkin = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😐 норм"), KeyboardButton(text="😣 тяжело")],
+        [KeyboardButton(text="🔋 нет сил"), KeyboardButton(text="📱 отвлекаюсь")],
+        [KeyboardButton(text="🚪 не хочу начинать")],
+    ],
+    resize_keyboard=True
+)
+
+kb_evening_checkin = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ сделал"), KeyboardButton(text="😐 частично")],
+        [KeyboardButton(text="❌ не сделал"), KeyboardButton(text="↩️ срывался, но возвращался")],
+    ],
+    resize_keyboard=True
+)
+
+
+kb_notifications_consent = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Ок, можно писать")],
+        [KeyboardButton(text="🔕 Без напоминаний")],
+    ],
+    resize_keyboard=True,
+)
+
+
+def notifications_consent_text() -> str:
+    return (
+        "Я могу писать утром и вечером:\n"
+        "— утром подобрать шаг\n"
+        "— вечером закрыть день\n"
+        "— если ты пропадёшь, мягко вернуть\n\n"
+        "Можно отключить в любой момент."
+    )
+
+
+def user_help_text() -> str:
+    return (
+        "Что умеет бот:\n"
+        "— помогает выбрать маленький шаг на день\n"
+        "— уменьшает шаг, если сложно начать\n"
+        "— вечером закрывает день без стыда\n"
+        "— показывает прогресс и маршрут\n"
+        "— включает кризисный режим по /crisis\n\n"
+        "Команды: /progress, /settings, /stop, /start_over, /crisis."
+    )
+
+
+def settings_text(notifications_enabled: int, timezone: str) -> str:
+    status = "включены" if int(notifications_enabled or 0) == 1 else "выключены"
+    return (
+        "Настройки:\n"
+        f"— напоминания: {status}\n"
+        f"— часовой пояс: {timezone or 'Europe/Vilnius'}\n\n"
+        "Чтобы отключить напоминания: /stop\n"
+        "Чтобы начать заново: /start_over"
+    )
+
+
+def start_over_confirm_text() -> str:
+    return "Ок. Начинаем заново, но без удаления глобальной аналитики. Как к тебе обращаться? (1 слово)"
+
 kb_input_mode = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧠 Диагностика текстом")],
@@ -666,10 +730,8 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💳 Оплатить со скидкой")],
-        [KeyboardButton(text="💳 Оплатить без скидки")],
-        [KeyboardButton(text="➕ Ещё 4 дня без оплаты")],
-        [KeyboardButton(text="❌ Не готов(а)")],
+        [KeyboardButton(text="7 дней — €20"), KeyboardButton(text="Месяц — €40")],
+        [KeyboardButton(text="Подумаю"), KeyboardButton(text="Что входит?")],
     ],
     resize_keyboard=True
 )
@@ -692,6 +754,18 @@ def payment_inline_full(payment_url_full: str) -> InlineKeyboardMarkup:
         inline_keyboard=[[InlineKeyboardButton(text="Оплатить без скидки", url=payment_url_full)]]
     )
 
+
+def payment_inline_20(payment_url_discount: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="7 дней — €20", url=payment_url_discount)]]
+    )
+
+
+def payment_inline_40(payment_url_full: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Месяц — €40", url=payment_url_full)]]
+    )
+
 kb_yes_no_inline = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да", callback_data="yes")],
@@ -709,18 +783,8 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    (
-        "😮‍💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\n"
-        "Проблема не в силе воли: навыки нужно тренировать системно."
-    ),
-    (
-        "Мы тренируем запуск, внимание и возврат без самокритики.\n\n"
-        "Минимум — 60–120 секунд. Срыв — часть процесса."
-    ),
-    (
-        "⚠️ Это не терапия и не диагноз. В кризис — жми «🆘 Кризис».\n\n"
-        "Дальше выберешь тренера: Марша, Скинни или Бек."
-    ),
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не диагноз.\nВ кризис — жми «🆘 Кризис».',
+    'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая диагностика — и первый навык.',
 ]
 
 # ============================================================
