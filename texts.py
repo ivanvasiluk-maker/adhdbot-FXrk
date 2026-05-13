@@ -109,6 +109,14 @@ def trainer_say(trainer_key: str, text: str) -> str:
     t = TRAINERS.get(trainer_key, TRAINERS["marsha"])
     return f"{t['emoji']} *{t['name']}*: {text}"
 
+
+def keyboard_button_count(reply_markup) -> int:
+    """Count buttons in reply/inline keyboards for overload guardrails."""
+    if not reply_markup:
+        return 0
+    rows = getattr(reply_markup, "keyboard", None) or getattr(reply_markup, "inline_keyboard", None) or []
+    return sum(len(row) for row in rows)
+
 # Crisis limit for non-paid users
 CRISIS_LIMIT = 3
 
@@ -346,6 +354,102 @@ def skill_explain(trainer_key: str, skill: dict) -> str:
         f"\n\nДаже {skill.get('micro', skill.get('minimum',''))} — считается."
     )
 
+
+
+def _skill_steps(skill: dict) -> List[str]:
+    """Return compact action steps, splitting arrow-separated strings when needed."""
+    raw_steps = skill.get("steps") or skill.get("simple")
+    if isinstance(raw_steps, str):
+        candidates = raw_steps.split("→") if "→" in raw_steps else raw_steps.split("\n")
+    elif isinstance(raw_steps, list):
+        candidates = raw_steps
+    else:
+        how = skill.get("how") or ""
+        candidates = how.split("→") if "→" in how else [how]
+
+    steps = []
+    for item in candidates:
+        step = str(item or "").strip()
+        if step:
+            steps.append(step)
+    return steps or ["Открой место, где лежит задача."]
+
+
+def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
+    """Clean skill card with trainer-specific wording over live skill fields."""
+    trainer_key = (user or {}).get("trainer_key") or "marsha"
+    trainer = TRAINERS.get(trainer_key, TRAINERS["marsha"])
+    steps = _skill_steps(skill)
+    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
+    minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
+    why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
+    skill_name = skill.get("name", "Микро-шаг")
+    trainer_variants = skill.get("trainer_variants") or {}
+    trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha")
+    if not trainer_line:
+        trainer_line = {
+            "beck": "Логика такая: уменьшаем вход, чтобы мозгу было легче начать.",
+            "skinny": "Без переговоров. Делаешь только маленький шаг.",
+            "marsha": "Давай бережно: только маленький вход, без давления на результат.",
+        }.get(trainer_key, "Давай бережно: только маленький вход, без давления на результат.")
+
+    if trainer_key == "beck":
+        return (
+            f"{trainer['emoji']} {trainer['name']}\n\n"
+            f"📌 Дело: {today_target}\n\n"
+            f"🧩 Навык: {skill_name}\n\n"
+            f"{trainer_line}\n\n"
+            "Почему это работает:\n"
+            f"{why_short}\n\n"
+            "Сделай:\n"
+            f"{steps_text}\n\n"
+            "Минимум:\n"
+            f"{minimum_action}"
+        )
+
+    if trainer_key == "skinny":
+        return (
+            f"{trainer['emoji']} {trainer['name']}\n\n"
+            f"📌 Дело: {today_target}\n\n"
+            f"🧩 {skill_name}\n\n"
+            f"{trainer_line}\n\n"
+            "Делаешь только это:\n\n"
+            f"{steps_text}\n\n"
+            "Минимум:\n"
+            f"{minimum_action}\n\n"
+            "Сделал — вернулся сюда."
+        )
+
+    return (
+        f"{trainer['emoji']} {trainer['name']}\n\n"
+        f"📌 Дело: {today_target}\n\n"
+        f"🧩 Навык: {skill_name}\n\n"
+        f"{trainer_line}\n\n"
+        "Попробуй:\n"
+        f"{steps_text}\n\n"
+        "Минимум:\n"
+        f"{minimum_action}\n\n"
+        "Если не получится — это не провал, мы просто уменьшим шаг."
+    )
+
+
+def trainer_done_response(trainer_key: str) -> str:
+    """Trainer-styled response for a completed action."""
+    return {
+        "beck": "Факт есть. Ты не просто сделал задачу — ты обошёл входной блок. Это и есть тренировка.",
+        "skinny": "Есть. Не обсуждаем — фиксируем. Один подход засчитан.",
+        "marsha": "Получилось. Даже маленький шаг считается. Сейчас важно не идеально, а вернуться к действию.",
+    }.get(trainer_key or "marsha", "Получилось. Даже маленький шаг считается. Сейчас важно не идеально, а вернуться к действию.")
+
+
+def trainer_failed_response(trainer_key: str) -> str:
+    """Trainer-styled response for a failed/too-hard action."""
+    return {
+        "beck": "Ок. Это данные. Значит, текущий шаг слишком большой. Уменьшаем.",
+        "skinny": "Не сделал — значит шаг большой. Режем задачу.",
+        "marsha": "Ок. Это не провал. Похоже, шаг был тяжёлым. Давай сделаем его меньше.",
+    }.get(trainer_key or "marsha", "Ок. Это не провал. Похоже, шаг был тяжёлым. Давай сделаем его меньше.")
+
 # Раскрытая подача навыка для кнопки «ℹ️ Подробнее»
 TRACK_RATIONALE = {
     "anxiety": "Останавливает тревожный цикл и возвращает в действие через микрошаг.",
@@ -354,27 +458,211 @@ TRACK_RATIONALE = {
     "mixed": "Базовые навыки для возврата, ясности и мягкого старта при прокрастинации.",
 }
 
-def skill_detail_text(skill: dict) -> str:
-    name = skill.get("name", "Навык")
-    goal = skill.get("goal", "")
-    steps = skill.get("steps") or ([skill.get("how")] if skill.get("how") else [])
-    how_more = skill.get("how_more", "")
-    micro = skill.get("micro", skill.get("minimum", ""))
-    track_reason = TRACK_RATIONALE.get(skill.get("track"), "Помогает вернуться в действие без перегруза.")
+def _steps_from_skill(skill: dict) -> List[str]:
+    raw_steps = skill.get("steps") or skill.get("simple")
+    if isinstance(raw_steps, str):
+        candidates = raw_steps.split("→") if "→" in raw_steps else raw_steps.split("\n")
+    elif isinstance(raw_steps, list):
+        candidates = raw_steps
+    else:
+        how = skill.get("how") or ""
+        candidates = how.split("→") if "→" in how else [how]
+    return [str(item).strip() for item in candidates if str(item or "").strip()]
 
-    parts = [f"🧩 {name}", f"🎯 Зачем: {goal}"]
-    if how_more:
-        parts.append(f"🔹 Как работает: {how_more}")
-    elif steps:
-        parts.append("🔹 Шаги:\n" + "\n".join([f"{i+1}. {s}" for i, s in enumerate(steps) if s]))
-    if micro:
-        parts.append(f"⚡ Минимум: {micro}")
-    parts.append(f"🧠 Почему помогает при прокрастинации: {track_reason}")
-    return "\n\n".join([p for p in parts if p.strip()])
+
+def skill_detail_text(skill: dict) -> str:
+    """ℹ️ Details branch: render live skill fields for launch-week skills."""
+    name = skill.get("name", "Навык")
+    goal = skill.get("goal", "Помочь войти в действие без перегруза.")
+    when_to_use = skill.get("when_to_use") or "когда трудно начать, тянет отложить или непонятно, с какого шага войти."
+    steps = _steps_from_skill(skill)
+    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
+    minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
+    example = skill.get("real_life_example") or skill.get("example") or skill.get("how_more")
+    if not example and steps:
+        example = " → ".join(steps[:3])
+    if not example:
+        example = "Открой файл, не работай, назови следующий физический шаг."
+    why_long = skill.get("why_long") or skill.get("why_short") or skill.get("explain") or "Маленький шаг снижает сопротивление и помогает войти в действие."
+
+    return (
+        f"ℹ️ Подробнее о навыке: {name}\n\n"
+        f"Что это:\n{goal}\n\n"
+        f"Когда использовать:\n{when_to_use}\n\n"
+        f"Пример:\n{example}\n\n"
+        f"Шаги:\n{steps_text}\n\n"
+        f"Минимум:\n{minimum}\n\n"
+        f"Почему работает:\n{why_long}"
+    )
+
+
+def simple_explain_text() -> str:
+    """🤔 I don't understand branch: simple explanation without analysis."""
+    return (
+        "Простыми словами:\n"
+        "мы не пытаемся заставить тебя работать.\n"
+        "Мы учим мозг входить в задачу без войны.\n"
+        "Поэтому шаг маленький."
+    )
+
+
+def skeptic_text() -> str:
+    """❓ Skeptic branch: explain metric-based check."""
+    return (
+        "Это не вопрос веры.\n"
+        "Мы проверяем эффект по микро-метрикам:\n"
+        "1. начал ли ты\n"
+        "2. стало ли легче войти\n"
+        "3. смог ли вернуться\n\n"
+        "Если не работает — уменьшаем шаг или меняем навык."
+    )
+
+
+def day3_offer_text() -> str:
+    """Offer shown after day 3 completion/summary."""
+    return (
+        "За 3 дня уже видно:\n\n"
+        "— где ты застреваешь\n"
+        "— что помогает начать\n"
+        "— где ты сливаешься\n"
+        "— какой шаг нужно уменьшать\n\n"
+        "Обычно люди после первого улучшения снова исчезают.\n\n"
+        "Чтобы этого не было, нужна система:\n"
+        "7 дней сопровождения\n"
+        "или месяц тренировки."
+    )
+
+
+def payment_20_stub_text() -> str:
+    return (
+        "Оплата почти готова.\n"
+        "Пока тестируем MVP: напиши «хочу 7 дней», и я включу доступ вручную."
+    )
+
+
+def payment_40_stub_text() -> str:
+    return (
+        "Месячный режим включает:\n"
+        "— ежедневное сопровождение\n"
+        "— память паттернов\n"
+        "— адаптацию навыков\n"
+        "— вечерние итоги\n\n"
+        "Пока оплата подключается.\n"
+        "Я записал твой выбор."
+    )
+
+
+def payment_declined_soft_text() -> str:
+    return (
+        "Ок.\n"
+        "Продолжим в коротком режиме.\n"
+        "Один навык в день.\n"
+        "Если захочешь полное сопровождение — вернёшься."
+    )
+
+
+def payment_includes_text() -> str:
+    return (
+        "Что входит:\n"
+        "— ежедневное сопровождение\n"
+        "— память паттернов\n"
+        "— адаптацию навыков\n"
+        "— вечерние итоги\n"
+        "— уменьшение шага, если действие ломается"
+    )
+
+
+
+def morning_checkin_text(name: str) -> str:
+    return (
+        f"Доброе утро, {name}.\n\n"
+        "Коротко отметь состояние — и я подберу шаг на сегодня."
+    )
+
+
+def evening_checkin_text() -> str:
+    return (
+        "Как прошёл день?\n\n"
+        "Важно не идеально.\n"
+        "Важно: был ли хоть один возврат к действию."
+    )
+
+
+def reactivation_text(count: int) -> str:
+    lines = {
+        1: "Ты не провалился. Просто выпал из цикла. Вернёмся с 30 секунд?",
+        2: "Не надо догонять. Не надо начинать заново. Один маленький шаг — и ты снова внутри.",
+        3: "Я больше не буду дёргать. Маршрут сохранён. Вернёшься — продолжим с маленького шага.",
+    }
+    return lines.get(max(1, min(int(count or 1), 3)), lines[3])
 
 # ============================================================
 # 3) KEYBOARDS
 # ============================================================
+
+
+kb_morning_checkin = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😐 норм"), KeyboardButton(text="😣 тяжело")],
+        [KeyboardButton(text="🔋 нет сил"), KeyboardButton(text="📱 отвлекаюсь")],
+        [KeyboardButton(text="🚪 не хочу начинать")],
+    ],
+    resize_keyboard=True
+)
+
+kb_evening_checkin = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ сделал"), KeyboardButton(text="😐 частично")],
+        [KeyboardButton(text="❌ не сделал"), KeyboardButton(text="↩️ срывался, но возвращался")],
+    ],
+    resize_keyboard=True
+)
+
+
+kb_notifications_consent = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Ок, можно писать")],
+        [KeyboardButton(text="🔕 Без напоминаний")],
+    ],
+    resize_keyboard=True,
+)
+
+
+def notifications_consent_text() -> str:
+    return (
+        "Я могу писать утром и вечером:\n"
+        "— утром подобрать шаг\n"
+        "— вечером закрыть день\n"
+        "— если ты пропадёшь, мягко вернуть\n\n"
+        "Можно отключить в любой момент."
+    )
+
+
+def user_help_text() -> str:
+    return (
+        "Что умеет бот:\n"
+        "— помогает выбрать маленький шаг на день\n"
+        "— уменьшает шаг, если сложно начать\n"
+        "— вечером закрывает день без стыда\n"
+        "— показывает прогресс и маршрут\n"
+        "— включает кризисный режим по /crisis\n\n"
+        "Команды: /progress, /settings, /stop, /start_over, /crisis."
+    )
+
+
+def settings_text(notifications_enabled: int, timezone: str) -> str:
+    status = "включены" if int(notifications_enabled or 0) == 1 else "выключены"
+    return (
+        "Настройки:\n"
+        f"— напоминания: {status}\n"
+        f"— часовой пояс: {timezone or 'Europe/Vilnius'}\n\n"
+        "Чтобы отключить напоминания: /stop\n"
+        "Чтобы начать заново: /start_over"
+    )
+
+
+def start_over_confirm_text() -> str:
+    return "Ок. Начинаем заново, но без удаления глобальной аналитики. Как к тебе обращаться? (1 слово)"
 
 kb_input_mode = ReplyKeyboardMarkup(
     keyboard=[
@@ -400,11 +688,83 @@ kb_trainers = ReplyKeyboardMarkup(
 
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Сделал(а)"), KeyboardButton(text="↩️ Вернулся(лась)")],
-        [KeyboardButton(text="🆘 Кризис"), KeyboardButton(text="📊 Мой прогресс")],
-        [KeyboardButton(text="💪 Давай тренировать навык")],
-        [KeyboardButton(text="❓ Сомневаюсь, работает ли")],
-        [KeyboardButton(text="ℹ️ Подробнее про навык"), KeyboardButton(text="🔁 Заменить навык")],
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="Ещё")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_more_actions = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="🗺 Показать маршрут")],
+        [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="❓ Сомневаюсь")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ],
+    resize_keyboard=True
+)
+
+
+
+kb_skill_card = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🤔 Не понял")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_done = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔁 Ещё круг")],
+        [KeyboardButton(text="🌙 На сегодня хватит")],
+    ],
+    resize_keyboard=True
+)
+
+kb_failed = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="😵 Нет сил")],
+        [KeyboardButton(text="📱 Залип"), KeyboardButton(text="🤔 Не понял")],
+    ],
+    resize_keyboard=True
+)
+
+kb_action_clarify = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Не та причина"), KeyboardButton(text="Не тот навык")],
+        [KeyboardButton(text="Слишком сложно"), KeyboardButton(text="Я не понимаю")],
+    ],
+    resize_keyboard=True
+)
+
+kb_downscale = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_downscale_name_task = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Написал")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_microstep = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="💪 Давай действие")]],
+    resize_keyboard=True
+)
+
+kb_skeptic = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🔁 Заменить навык")],
     ],
     resize_keyboard=True
 )
@@ -421,7 +781,8 @@ kb_crisis_mode = ReplyKeyboardMarkup(
 # Keyboard shown after user requests more details — allows asking for clarification
 kb_more_clarify = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Ты меня не понял")],
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="🤔 Я не понимаю")],
         [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True
@@ -446,18 +807,16 @@ kb_yes_no = ReplyKeyboardMarkup(
 
 kb_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Да, в точку")],
-        [KeyboardButton(text="🤔 Немного не так")],
+        [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="📚 Подробнее")],
+        [KeyboardButton(text="🤔 Не совсем"), KeyboardButton(text="💪 Давай действие")],
     ],
     resize_keyboard=True
 )
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💳 Оплатить со скидкой")],
-        [KeyboardButton(text="💳 Оплатить без скидки")],
-        [KeyboardButton(text="➕ Ещё 4 дня без оплаты")],
-        [KeyboardButton(text="❌ Не готов(а)")],
+        [KeyboardButton(text="7 дней — €20"), KeyboardButton(text="Месяц — €40")],
+        [KeyboardButton(text="Подумаю"), KeyboardButton(text="Что входит?")],
     ],
     resize_keyboard=True
 )
@@ -480,6 +839,18 @@ def payment_inline_full(payment_url_full: str) -> InlineKeyboardMarkup:
         inline_keyboard=[[InlineKeyboardButton(text="Оплатить без скидки", url=payment_url_full)]]
     )
 
+
+def payment_inline_20(payment_url_discount: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="7 дней — €20", url=payment_url_discount)]]
+    )
+
+
+def payment_inline_40(payment_url_full: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="Месяц — €40", url=payment_url_full)]]
+    )
+
 kb_yes_no_inline = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да", callback_data="yes")],
@@ -497,18 +868,8 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    (
-        "😮‍💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\n"
-        "Проблема не в силе воли: навыки нужно тренировать системно."
-    ),
-    (
-        "Мы тренируем запуск, внимание и возврат без самокритики.\n\n"
-        "Минимум — 60–120 секунд. Срыв — часть процесса."
-    ),
-    (
-        "⚠️ Это не терапия и не диагноз. В кризис — жми «🆘 Кризис».\n\n"
-        "Дальше выберешь тренера: Марша, Скинни или Бек."
-    ),
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не диагноз.\nВ кризис — жми «🆘 Кризис».',
+    'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая диагностика — и первый навык.',
 ]
 
 # ============================================================
@@ -671,15 +1032,22 @@ def analysis_contract_long(name: str, trainer_key: str, bucket: str) -> str:
 contract_full_text = analysis_contract_long
 
 def month_map_text(bucket: str) -> str:
-    """Карта тренировки на месяц (показывается сразу после анализа)"""
+    """Предварительный маршрут тренировки: показываем только по запросу или после действия."""
     return (
-        "🗺 КАРТА 4 НЕДЕЛЬ\n\n"
-        "1️⃣ Стабилизация — возврат и запуск\n"
-        "2️⃣ Работа с тревогой / вниманием\n"
-        "3️⃣ Работа с самокритикой\n"
-        "4️⃣ Удержание системы\n\n"
-        "Это не случайные упражнения.\n"
-        "Это последовательная перестройка.\n"
+        "🗺 Твой маршрут пока предварительный.\n\n"
+        "Мы не будем грузить тебя программой на месяц.\n"
+        "Сначала смотрим, где ломается действие.\n\n"
+        "Дальше система будет адаптироваться по твоим данным:\n"
+        "— где ты зависаешь\n"
+        "— какие навыки сработали\n"
+        "— где нужен меньший шаг\n"
+        "— как ты возвращаешься после срыва\n\n"
+        "Первые блоки:\n"
+        "1️⃣ Вход в задачу\n"
+        "2️⃣ Удержание внимания\n"
+        "3️⃣ Возврат после срыва\n"
+        "4️⃣ Работа с самокритикой\n\n"
+        "Выводы будут точнее после первых попыток."
     )
 
 def guarantee_block(trainer_key: str) -> str:
