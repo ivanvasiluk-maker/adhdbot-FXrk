@@ -109,6 +109,14 @@ def trainer_say(trainer_key: str, text: str) -> str:
     t = TRAINERS.get(trainer_key, TRAINERS["marsha"])
     return f"{t['emoji']} *{t['name']}*: {text}"
 
+
+def keyboard_button_count(reply_markup) -> int:
+    """Count buttons in reply/inline keyboards for overload guardrails."""
+    if not reply_markup:
+        return 0
+    rows = getattr(reply_markup, "keyboard", None) or getattr(reply_markup, "inline_keyboard", None) or []
+    return sum(len(row) for row in rows)
+
 # Crisis limit for non-paid users
 CRISIS_LIMIT = 3
 
@@ -346,6 +354,99 @@ def skill_explain(trainer_key: str, skill: dict) -> str:
         f"\n\nДаже {skill.get('micro', skill.get('minimum',''))} — считается."
     )
 
+
+
+def _skill_steps(skill: dict) -> List[str]:
+    """Return compact action steps, splitting arrow-separated strings when needed."""
+    raw_steps = skill.get("steps") or skill.get("simple")
+    if isinstance(raw_steps, str):
+        candidates = raw_steps.split("→") if "→" in raw_steps else raw_steps.split("\n")
+    elif isinstance(raw_steps, list):
+        candidates = raw_steps
+    else:
+        how = skill.get("how") or ""
+        candidates = how.split("→") if "→" in how else [how]
+
+    steps = []
+    for item in candidates:
+        step = str(item or "").strip()
+        if step:
+            steps.append(step)
+    return steps or ["Открой место, где лежит задача."]
+
+
+def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
+    """Clean skill card with trainer-specific wording over the same skill data."""
+    trainer_key = (user or {}).get("trainer_key") or "marsha"
+    trainer = TRAINERS.get(trainer_key, TRAINERS["marsha"])
+    steps = _skill_steps(skill)
+    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
+    minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
+    why_short = skill.get("why_short") or "Сейчас тренируем вход, а не результат."
+    skill_name = skill.get("name", "Микро-шаг")
+
+    if trainer_key == "beck":
+        why_short = skill.get("why_short") or (
+            "Сейчас мы тренируем не результат, а вход в задачу.\n"
+            "Если вход слишком большой, мозг блокирует действие."
+        )
+        return (
+            f"{trainer['emoji']} {trainer['name']}\n\n"
+            f"📌 Дело: {today_target}\n\n"
+            f"🧩 Навык: {skill_name}\n\n"
+            "Логика такая:\n"
+            f"{why_short}\n\n"
+            "Сделай:\n"
+            f"{steps_text}\n\n"
+            "Минимум:\n"
+            f"{minimum_action}"
+        )
+
+    if trainer_key == "skinny":
+        return (
+            f"{trainer['emoji']} {trainer['name']}\n\n"
+            f"📌 Дело: {today_target}\n\n"
+            f"🧩 {skill_name}\n\n"
+            "Без переговоров.\n"
+            "Делаешь только это:\n\n"
+            f"{steps_text}\n\n"
+            "Минимум:\n"
+            f"{minimum_action}\n\n"
+            "Сделал — вернулся сюда."
+        )
+
+    return (
+        f"{trainer['emoji']} {trainer['name']}\n\n"
+        f"📌 Дело: {today_target}\n\n"
+        f"🧩 Навык: {skill_name}\n\n"
+        "Давай очень бережно.\n"
+        "Тебе не нужно делать всё.\n"
+        "Нужно только мягко войти в задачу.\n\n"
+        "Попробуй:\n"
+        f"{steps_text}\n\n"
+        "Минимум:\n"
+        f"{minimum_action}\n\n"
+        "Если не получится — это не провал, мы просто уменьшим шаг."
+    )
+
+
+def trainer_done_response(trainer_key: str) -> str:
+    """Trainer-styled response for a completed action."""
+    return {
+        "beck": "Факт есть. Ты не просто сделал задачу — ты обошёл входной блок. Это и есть тренировка.",
+        "skinny": "Есть. Не обсуждаем — фиксируем. Один подход засчитан.",
+        "marsha": "Получилось. Даже маленький шаг считается. Сейчас важно не идеально, а вернуться к действию.",
+    }.get(trainer_key or "marsha", "Получилось. Даже маленький шаг считается. Сейчас важно не идеально, а вернуться к действию.")
+
+
+def trainer_failed_response(trainer_key: str) -> str:
+    """Trainer-styled response for a failed/too-hard action."""
+    return {
+        "beck": "Ок. Это данные. Значит, текущий шаг слишком большой. Уменьшаем.",
+        "skinny": "Не сделал — значит шаг большой. Режем задачу.",
+        "marsha": "Ок. Это не провал. Похоже, шаг был тяжёлым. Давай сделаем его меньше.",
+    }.get(trainer_key or "marsha", "Ок. Это не провал. Похоже, шаг был тяжёлым. Давай сделаем его меньше.")
+
 # Раскрытая подача навыка для кнопки «ℹ️ Подробнее»
 TRACK_RATIONALE = {
     "anxiety": "Останавливает тревожный цикл и возвращает в действие через микрошаг.",
@@ -354,23 +455,61 @@ TRACK_RATIONALE = {
     "mixed": "Базовые навыки для возврата, ясности и мягкого старта при прокрастинации.",
 }
 
-def skill_detail_text(skill: dict) -> str:
-    name = skill.get("name", "Навык")
-    goal = skill.get("goal", "")
-    steps = skill.get("steps") or ([skill.get("how")] if skill.get("how") else [])
-    how_more = skill.get("how_more", "")
-    micro = skill.get("micro", skill.get("minimum", ""))
-    track_reason = TRACK_RATIONALE.get(skill.get("track"), "Помогает вернуться в действие без перегруза.")
+def _steps_from_skill(skill: dict) -> List[str]:
+    raw_steps = skill.get("steps") or skill.get("simple")
+    if isinstance(raw_steps, str):
+        candidates = raw_steps.split("→") if "→" in raw_steps else raw_steps.split("\n")
+    elif isinstance(raw_steps, list):
+        candidates = raw_steps
+    else:
+        how = skill.get("how") or ""
+        candidates = how.split("→") if "→" in how else [how]
+    return [str(item).strip() for item in candidates if str(item or "").strip()]
 
-    parts = [f"🧩 {name}", f"🎯 Зачем: {goal}"]
-    if how_more:
-        parts.append(f"🔹 Как работает: {how_more}")
-    elif steps:
-        parts.append("🔹 Шаги:\n" + "\n".join([f"{i+1}. {s}" for i, s in enumerate(steps) if s]))
-    if micro:
-        parts.append(f"⚡ Минимум: {micro}")
-    parts.append(f"🧠 Почему помогает при прокрастинации: {track_reason}")
-    return "\n\n".join([p for p in parts if p.strip()])
+
+def skill_detail_text(skill: dict) -> str:
+    """ℹ️ Details branch: what skill is, when to use it, example, minimum."""
+    name = skill.get("name", "Навык")
+    goal = skill.get("goal", "Помочь войти в действие без перегруза.")
+    steps = _steps_from_skill(skill)
+    minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
+    example = skill.get("example") or skill.get("how_more")
+    if not example and steps:
+        example = " → ".join(steps[:3])
+    if not example:
+        example = "Открой файл, не работай, назови следующий физический шаг."
+
+    return (
+        f"ℹ️ Подробнее о навыке: {name}\n\n"
+        f"Что это:\n{goal}\n\n"
+        "Когда использовать:\n"
+        "когда трудно начать, тянет отложить или непонятно, с какого шага войти.\n\n"
+        f"Пример:\n{example}\n\n"
+        "Минимум:\n"
+        f"{minimum}"
+    )
+
+
+def simple_explain_text() -> str:
+    """🤔 I don't understand branch: simple explanation without analysis."""
+    return (
+        "Простыми словами:\n"
+        "мы не пытаемся заставить тебя работать.\n"
+        "Мы учим мозг входить в задачу без войны.\n"
+        "Поэтому шаг маленький."
+    )
+
+
+def skeptic_text() -> str:
+    """❓ Skeptic branch: explain metric-based check."""
+    return (
+        "Это не вопрос веры.\n"
+        "Мы проверяем эффект по микро-метрикам:\n"
+        "1. начал ли ты\n"
+        "2. стало ли легче войти\n"
+        "3. смог ли вернуться\n\n"
+        "Если не работает — уменьшаем шаг или меняем навык."
+    )
 
 # ============================================================
 # 3) KEYBOARDS
@@ -400,11 +539,83 @@ kb_trainers = ReplyKeyboardMarkup(
 
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Сделал(а)"), KeyboardButton(text="↩️ Вернулся(лась)")],
-        [KeyboardButton(text="🆘 Кризис"), KeyboardButton(text="📊 Мой прогресс")],
-        [KeyboardButton(text="💪 Давай тренировать навык")],
-        [KeyboardButton(text="❓ Сомневаюсь, работает ли")],
-        [KeyboardButton(text="ℹ️ Подробнее про навык"), KeyboardButton(text="🔁 Заменить навык")],
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="Ещё")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_more_actions = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="🗺 Показать маршрут")],
+        [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="❓ Сомневаюсь")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ],
+    resize_keyboard=True
+)
+
+
+
+kb_skill_card = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🤔 Не понял")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_done = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔁 Ещё круг")],
+        [KeyboardButton(text="🌙 На сегодня хватит")],
+    ],
+    resize_keyboard=True
+)
+
+kb_failed = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="😵 Нет сил")],
+        [KeyboardButton(text="📱 Залип"), KeyboardButton(text="🤔 Не понял")],
+    ],
+    resize_keyboard=True
+)
+
+kb_action_clarify = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Не та причина"), KeyboardButton(text="Не тот навык")],
+        [KeyboardButton(text="Слишком сложно"), KeyboardButton(text="Я не понимаю")],
+    ],
+    resize_keyboard=True
+)
+
+kb_downscale = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_downscale_name_task = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Написал")],
+        [KeyboardButton(text="🆘 Кризис")],
+    ],
+    resize_keyboard=True
+)
+
+kb_microstep = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="💪 Давай действие")]],
+    resize_keyboard=True
+)
+
+kb_skeptic = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🔁 Заменить навык")],
     ],
     resize_keyboard=True
 )
@@ -421,7 +632,8 @@ kb_crisis_mode = ReplyKeyboardMarkup(
 # Keyboard shown after user requests more details — allows asking for clarification
 kb_more_clarify = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Ты меня не понял")],
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="🤔 Я не понимаю")],
         [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True
@@ -446,8 +658,8 @@ kb_yes_no = ReplyKeyboardMarkup(
 
 kb_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Да, в точку")],
-        [KeyboardButton(text="🤔 Немного не так")],
+        [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="📚 Подробнее")],
+        [KeyboardButton(text="🤔 Не совсем"), KeyboardButton(text="💪 Давай действие")],
     ],
     resize_keyboard=True
 )
@@ -671,15 +883,22 @@ def analysis_contract_long(name: str, trainer_key: str, bucket: str) -> str:
 contract_full_text = analysis_contract_long
 
 def month_map_text(bucket: str) -> str:
-    """Карта тренировки на месяц (показывается сразу после анализа)"""
+    """Предварительный маршрут тренировки: показываем только по запросу или после действия."""
     return (
-        "🗺 КАРТА 4 НЕДЕЛЬ\n\n"
-        "1️⃣ Стабилизация — возврат и запуск\n"
-        "2️⃣ Работа с тревогой / вниманием\n"
-        "3️⃣ Работа с самокритикой\n"
-        "4️⃣ Удержание системы\n\n"
-        "Это не случайные упражнения.\n"
-        "Это последовательная перестройка.\n"
+        "🗺 Твой маршрут пока предварительный.\n\n"
+        "Мы не будем грузить тебя программой на месяц.\n"
+        "Сначала смотрим, где ломается действие.\n\n"
+        "Дальше система будет адаптироваться по твоим данным:\n"
+        "— где ты зависаешь\n"
+        "— какие навыки сработали\n"
+        "— где нужен меньший шаг\n"
+        "— как ты возвращаешься после срыва\n\n"
+        "Первые блоки:\n"
+        "1️⃣ Вход в задачу\n"
+        "2️⃣ Удержание внимания\n"
+        "3️⃣ Возврат после срыва\n"
+        "4️⃣ Работа с самокритикой\n\n"
+        "Выводы будут точнее после первых попыток."
     )
 
 def guarantee_block(trainer_key: str) -> str:
