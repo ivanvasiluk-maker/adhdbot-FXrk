@@ -493,6 +493,13 @@ def skill_detail_text(skill: dict) -> str:
     steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
     minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
     example = skill.get("real_life_example") or skill.get("example") or skill.get("how_more")
+    name = skill.get("name", "Навык")
+    goal = skill.get("goal", "Помочь войти в действие без перегруза.")
+    when_to_use = skill.get("when_to_use") or "когда трудно начать, тянет отложить или непонятно, с какого шага войти."
+    steps = _steps_from_skill(skill)
+    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
+    minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
+    example = skill.get("real_life_example") or skill.get("example") or skill.get("how_more")
     """ℹ️ Details branch: what skill is, when to use it, example, minimum."""
     name = skill.get("name", "Навык")
     goal = skill.get("goal", "Помочь войти в действие без перегруза.")

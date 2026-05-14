@@ -30,6 +30,8 @@ from aiogram.enums import ParseMode
 from dotenv import load_dotenv
 
 # Import modules
+# Keep this as a single import to avoid multiline merge-conflict syntax breaks in deploys.
+from texts import *  # noqa: F403,F401
 from texts import (
     TRAINERS, PRAISE, DAILY_LIVE_LINES, TEST_QUESTIONS, ONBOARDING_SCREENS,
     trainer_say, trainer_confirm_text, kb_trainers, kb_input_mode, kb_yes_no,
@@ -1047,6 +1049,28 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await log_engine_events(u, screen)
             await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+            return
+        if text == "🌙 На сегодня хватит" or "хватит" in low:
+            current_day = int(u.get("day") or 1)
+            plan = get_current_plan(u)
+            max_day = len(plan) if plan else current_day + 1
+            next_day = min(current_day + 1, max_day)
+            u["day"] = next_day
+            u["pending_skill_id"] = None
+            u["pending_skill_day"] = None
+            u["today_target"] = None
+            u["stage"] = "training"
+            await save_user(u, DB_PATH)
+            await log_event(
+                u["user_id"],
+                "training",
+                "day_complete",
+                {"completed_day": current_day, "next_day": next_day},
+                DB_PATH,
+                SHEETS_WEBHOOK_URL,
+            )
+            await log_event(u["user_id"], "training", "done_enough_today", {"completed_day": current_day, "next_day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, f"Ок. День {current_day} закрыт. В следующий раз начнём день {next_day}.", kb_training_main, "training_main")
             u["stage"] = "training"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "training", "done_more_round", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1398,6 +1422,9 @@ async def main_flow(m: Message):
         await save_user(u, DB_PATH)
         await log_engine_events(u, screen)
         await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+        await save_user(u, DB_PATH)
+        await log_engine_events(u, screen)
+        await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
         target = clamp_str(text or "", 200)
         if not target or target.lower() == "пропустить":
             target = "Прокрастинация в целом"
@@ -1477,6 +1504,27 @@ async def main_flow(m: Message):
             await answer_with_keyboard(m, u, "Ещё действия:", kb_more_actions, "more_actions")
             return
 
+        if text == "⬅️ Назад" or low == "назад":
+            await answer_with_keyboard(m, u, "Ок. Возвращаемся к действию.", kb_training_main, "training_main")
+            return
+
+        if text in {"🗺 Показать маршрут", "🗺 Маршрут"} or "маршрут" in low:
+            await log_event(u["user_id"], "training", "route_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await show_route(m, u, "button")
+            await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+            return
+
+            return
+
+        if text in {"🤔 Я не понимаю", "🤔 Не понял"} or low in {"я не понимаю", "не понял", "не понимаю"}:
+            await log_event(u["user_id"], "training", "dont_understand_clicked", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, simple_explain_text(), kb_microstep, "microstep")
+            return
+
+        if text == "Ещё" or text == "Еще" or low in {"ещё", "еще"}:
+            await answer_with_keyboard(m, u, "Ещё действия:", kb_more_actions, "more_actions")
+            return
+
             return
 
         if text in {"🤔 Я не понимаю", "🤔 Не понял"} or low in {"я не понимаю", "не понял", "не понимаю"}:
@@ -1529,6 +1577,17 @@ async def main_flow(m: Message):
             screen = engine_handle_action_result(u, "done")
             previous_done = int(u.get("done_count") or 0)
             u["done_count"] = previous_done + 1
+            gamify_apply(u, 2, "done")
+            apply_engine_updates(u, screen)
+            await save_user(u, DB_PATH)
+            await log_engine_events(u, screen)
+            await m.answer(screen["text"])
+            if previous_done == 0:
+                await show_route(m, u, "first_done")
+            if should_show_day3_offer(u, day):
+                await show_route(m, u, "day3_summary")
+                await show_day3_offer(m, u, "day3_done")
+                return
             gamify_apply(u, 2, "done")
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
@@ -1768,6 +1827,11 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer(payment_declined_soft_text())
             await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
+            return
+        if text == "Что входит?" or "что входит" in low:
+            await m.answer(payment_includes_text())
+            await answer_with_keyboard(m, u, "Выбери вариант:", kb_pay_choice, "pay_choice")
+            return
             return
         if text == "Что входит?" or "что входит" in low:
             await m.answer(payment_includes_text())
