@@ -294,11 +294,6 @@ def apply_engine_updates(u: Dict[str, Any], screen: Dict[str, Any]):
         u[key] = value
     if screen.get("next_state"):
         u["stage"] = screen["next_state"]
-    if button_count > 5:
-        log.warning("Keyboard %s has %s buttons; sending text without markup", keyboard_name, button_count)
-        await m.answer(text)
-        return
-    await m.answer(text, reply_markup=reply_markup)
 
 
 async def show_route(m: Message, u: Dict[str, Any], source: str):
