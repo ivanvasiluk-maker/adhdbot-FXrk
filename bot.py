@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 # Import modules
 # Keep this as a single import to avoid multiline merge-conflict syntax breaks in deploys.
 from texts import *  # noqa: F403,F401
+from texts import send_trainer_introduction as send_text_trainer_introduction
 from skills import (
     SKILLS_DB,
     get_current_plan,
@@ -1058,8 +1059,7 @@ async def main_flow(m: Message):
         await log_event(u["user_id"], "onboarding", "trainer_selected", {"trainer_key": chosen}, DB_PATH, SHEETS_WEBHOOK_URL)
         # Описание и фото тренера
         await send_trainer_photo_if_any(m.chat.id, chosen, BOT_TOKEN)
-        from texts import send_trainer_introduction
-        await send_trainer_introduction(m, u)
+        await send_text_trainer_introduction(m, u)
         await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
         return
 
