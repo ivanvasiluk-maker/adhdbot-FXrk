@@ -42,17 +42,12 @@ from texts import (
     payment_inline_discount, payment_inline_full, payment_inline_20, payment_inline_40,
     CRISIS_LIMIT, resolve_bucket_from_test, create_test_question_keyboard,
     analysis_contract_short, month_map_text, guarantee_block, offer_day_3_text,
-    gamify_status_line, trainer_done_response,
+    gamify_status_line, format_skill_card, trainer_done_response,
     trainer_failed_response, skill_detail_text, simple_explain_text, skeptic_text,
     day3_offer_text, payment_20_stub_text, payment_40_stub_text,
     payment_declined_soft_text, payment_includes_text, morning_checkin_text,
-    evening_checkin_text, reactivation_text, keyboard_button_count, notifications_consent_text, user_help_text, settings_text, start_over_confirm_text
-    kb_more_clarify, payment_inline_discount, payment_inline_full,
-    CRISIS_LIMIT, resolve_bucket_from_test, create_test_question_keyboard,
-    analysis_contract_short, month_map_text, guarantee_block, offer_day_3_text,
-    gamify_status_line, format_skill_card, trainer_done_response,
-    trainer_failed_response, skill_detail_text, simple_explain_text, skeptic_text,
-    inactivity_ping, keyboard_button_count
+    evening_checkin_text, reactivation_text, keyboard_button_count, notifications_consent_text,
+    user_help_text, settings_text, start_over_confirm_text, inactivity_ping,
 )
 from skills import (
     SKILLS_DB,
