@@ -32,7 +32,23 @@ from dotenv import load_dotenv
 # Import modules
 # Keep this as a single import to avoid multiline merge-conflict syntax breaks in deploys.
 from texts import *  # noqa: F403,F401
-from texts import send_trainer_introduction as send_text_trainer_introduction
+from texts import (
+    TRAINERS, PRAISE, DAILY_LIVE_LINES, TEST_QUESTIONS, ONBOARDING_SCREENS,
+    trainer_say, trainer_confirm_text, kb_trainers, kb_input_mode, kb_yes_no,
+    kb_training_main, kb_more_actions, kb_crisis_mode, kb_analysis_confirm, kb_pay_choice,
+    kb_skill_card, kb_done, kb_failed, kb_action_clarify, kb_downscale,
+    kb_downscale_name_task, kb_microstep, kb_skeptic, kb_doubt_response,
+    kb_more_clarify, kb_morning_checkin, kb_evening_checkin, kb_notifications_consent,
+    payment_inline_discount, payment_inline_full, payment_inline_20, payment_inline_40,
+    CRISIS_LIMIT, resolve_bucket_from_test, create_test_question_keyboard,
+    analysis_contract_short, month_map_text, guarantee_block, offer_day_3_text,
+    gamify_status_line, format_skill_card, trainer_done_response,
+    trainer_failed_response, skill_detail_text, simple_explain_text, skeptic_text,
+    day3_offer_text, payment_20_stub_text, payment_40_stub_text,
+    payment_declined_soft_text, payment_includes_text, morning_checkin_text,
+    evening_checkin_text, reactivation_text, keyboard_button_count, notifications_consent_text,
+    user_help_text, settings_text, start_over_confirm_text, inactivity_ping,
+)
 from skills import (
     SKILLS_DB,
     get_current_plan,
@@ -278,6 +294,11 @@ def apply_engine_updates(u: Dict[str, Any], screen: Dict[str, Any]):
         u[key] = value
     if screen.get("next_state"):
         u["stage"] = screen["next_state"]
+    if button_count > 5:
+        log.warning("Keyboard %s has %s buttons; sending text without markup", keyboard_name, button_count)
+        await m.answer(text)
+        return
+    await m.answer(text, reply_markup=reply_markup)
 
 
 async def show_route(m: Message, u: Dict[str, Any], source: str):
@@ -730,6 +751,35 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
     await save_user(u, DB_PATH)
     await log_engine_events(u, screen)
     await answer_with_keyboard(m, u, screen["text"], kb_downscale, "downscale")
+async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
+    """Показать уменьшенный action-step внутри текущего тренировочного loop."""
+    skill_id = _select_downscale_skill(u)
+    u["stage"] = "downscale_action"
+    await save_user(u, DB_PATH)
+    await log_event(
+        u["user_id"],
+        "training",
+        "downscale_triggered",
+        {"reason": reason, "pattern": DOWNSCALE_PATTERN, "skill": skill_id, "day": int(u.get("day") or 1)},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+    await answer_with_keyboard(
+        m,
+        u,
+        "Понял.\n\n"
+        "Тогда таймер — уже слишком большой шаг.\n\n"
+        "Не ставим таймер.\n\n"
+        "Сделай только это:\n"
+        "1. Открой место, где лежит задача.\n"
+        "2. Не работай.\n"
+        "3. Назови следующий физический шаг.\n\n"
+        "Минимум:\n"
+        "одно слово.\n\n"
+        "Это и есть тренировка входа.",
+        kb_downscale,
+        "downscale",
+    )
 
 @router.message(CommandStart())
 async def cmd_start(m: Message):
@@ -823,6 +873,10 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await log_engine_events(u, screen)
             await answer_with_keyboard(m, u, screen["text"], kb_failed, "failed")
+            await log_event(u["user_id"], "training", "not_done", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["stage"] = "failed_options"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, trainer_failed_response(u.get("trainer_key") or "marsha"), kb_failed, "failed")
             return
 
         if u.get("stage") == "failed_options":
@@ -1012,6 +1066,21 @@ async def main_flow(m: Message):
             )
             await log_event(u["user_id"], "training", "done_enough_today", {"completed_day": current_day, "next_day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, f"Ок. День {current_day} закрыт. В следующий раз начнём день {next_day}.", kb_training_main, "training_main")
+            u["stage"] = "training"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "training", "done_more_round", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            plan = get_current_plan(u)
+            day = int(u.get("day") or 1)
+            sid = plan[max(0, min(len(plan) - 1, day - 1))] if plan else next(iter(SKILLS_DB.keys()))
+            skill = SKILLS_DB.get(sid) or list(SKILLS_DB.values())[0]
+            target = u.get("today_target") or "Прокрастинация в целом"
+            await answer_with_keyboard(m, u, format_skill_card(u, skill, target), kb_skill_card, "skill_card")
+            return
+        if text == "🌙 На сегодня хватит" or "хватит" in low:
+            u["stage"] = "training"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "training", "done_enough_today", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. На сегодня фиксируем подход.", kb_training_main, "training_main")
             return
         reply = await ai_micro_reflect(text or "", trainer_key, client, OPENAI_CHAT_MODEL)
         await log_event(u["user_id"], "training", "post_done_reflect", {"len": len(text or "")}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1059,7 +1128,8 @@ async def main_flow(m: Message):
         await log_event(u["user_id"], "onboarding", "trainer_selected", {"trainer_key": chosen}, DB_PATH, SHEETS_WEBHOOK_URL)
         # Описание и фото тренера
         await send_trainer_photo_if_any(m.chat.id, chosen, BOT_TOKEN)
-        await send_text_trainer_introduction(m, u)
+        from texts import send_trainer_introduction
+        await send_trainer_introduction(m, u)
         await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
         return
 
@@ -1347,6 +1417,44 @@ async def main_flow(m: Message):
         await save_user(u, DB_PATH)
         await log_engine_events(u, screen)
         await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+        await save_user(u, DB_PATH)
+        await log_engine_events(u, screen)
+        await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+        target = clamp_str(text or "", 200)
+        if not target or target.lower() == "пропустить":
+            target = "Прокрастинация в целом"
+
+        day = int(u.get("pending_skill_day") or u.get("day") or 1)
+        plan = get_current_plan(u)
+        sid = u.get("pending_skill_id")
+        if not sid or sid not in SKILLS_DB:
+            if plan:
+                idx = max(0, min(len(plan) - 1, day - 1))
+                sid = plan[idx]
+            else:
+                sid = next(iter(SKILLS_DB.keys()))
+
+        trainer_key = u.get("trainer_key") or "marsha"
+        skill = SKILLS_DB.get(sid) or list(SKILLS_DB.values())[0]
+        msg = format_skill_card(u, skill, target)
+
+        u["today_target"] = target
+        u["pending_skill_id"] = None
+        u["pending_skill_day"] = None
+        u["stage"] = "training"
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "training", "target_set", {"day": day, "text": target}, DB_PATH, SHEETS_WEBHOOK_URL)
+        button_count = sum(len(row) for row in kb_skill_card.keyboard)
+        await log_event(
+            u["user_id"],
+            "training",
+            "skill_card_shown",
+            {"skill_id": sid, "trainer_key": trainer_key, "button_count": button_count},
+            DB_PATH,
+            SHEETS_WEBHOOK_URL,
+        )
+
+        await answer_with_keyboard(m, u, msg, kb_skill_card, "skill_card")
         await m.answer(gamify_status_line(u))
         return
 
@@ -1380,6 +1488,38 @@ async def main_flow(m: Message):
             msg = skill_detail_text(skill)
             await log_event(u["user_id"], "training", "details_clicked", {"skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, msg, kb_more_clarify, "detail")
+            return
+
+        if text in {"🤔 Я не понимаю", "🤔 Не понял"} or low in {"я не понимаю", "не понял", "не понимаю"}:
+            await log_event(u["user_id"], "training", "dont_understand_clicked", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, simple_explain_text(), kb_microstep, "microstep")
+            return
+
+        if text == "Ещё" or text == "Еще" or low in {"ещё", "еще"}:
+            await answer_with_keyboard(m, u, "Ещё действия:", kb_more_actions, "more_actions")
+            return
+
+        if text == "⬅️ Назад" or low == "назад":
+            await answer_with_keyboard(m, u, "Ок. Возвращаемся к действию.", kb_training_main, "training_main")
+            return
+
+        if text in {"🗺 Показать маршрут", "🗺 Маршрут"} or "маршрут" in low:
+            await log_event(u["user_id"], "training", "route_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await show_route(m, u, "button")
+            await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+            return
+
+            return
+
+        if text in {"🤔 Я не понимаю", "🤔 Не понял"} or low in {"я не понимаю", "не понял", "не понимаю"}:
+            await log_event(u["user_id"], "training", "dont_understand_clicked", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, simple_explain_text(), kb_microstep, "microstep")
+            return
+
+        if text == "Ещё" or text == "Еще" or low in {"ещё", "еще"}:
+            await answer_with_keyboard(m, u, "Ещё действия:", kb_more_actions, "more_actions")
+            return
+
             return
 
         if text in {"🤔 Я не понимаю", "🤔 Не понял"} or low in {"я не понимаю", "не понял", "не понимаю"}:
@@ -1443,6 +1583,34 @@ async def main_flow(m: Message):
                 await show_route(m, u, "day3_summary")
                 await show_day3_offer(m, u, "day3_done")
                 return
+            gamify_apply(u, 2, "done")
+            apply_engine_updates(u, screen)
+            await save_user(u, DB_PATH)
+            await log_engine_events(u, screen)
+            await m.answer(screen["text"])
+            if previous_done == 0:
+                await show_route(m, u, "first_done")
+            if should_show_day3_offer(u, day):
+                await show_route(m, u, "day3_summary")
+                await show_day3_offer(m, u, "day3_done")
+                return
+            await log_event(u["user_id"], "training_done", "done", {"day": day})
+            previous_done = int(u.get("done_count") or 0)
+            u["done_count"] = previous_done + 1
+            gamify_apply(u, 2, "done")
+            trainer = u.get("trainer_key") or "marsha"
+            await m.answer(trainer_done_response(trainer))
+            if trainer == "skinny":
+                await m.answer("Что почувствовал во время выполнения?")
+            elif trainer == "beck":
+                await m.answer("Что заметил во время выполнения?")
+            else:
+                await m.answer("Как тебе было это делать?")
+            # post_done_reflection этап убран, сразу переходим к следующему этапу
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            if previous_done == 0:
+                await show_route(m, u, "first_done")
             await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
             return
 
@@ -1463,6 +1631,11 @@ async def main_flow(m: Message):
             if should_show_day3_offer(u, day):
                 await show_route(m, u, "day3_summary")
                 await show_day3_offer(m, u, "day3_return")
+            if not TEST_MODE and day == 3 and u.get("trial_phase") == "trial3":
+                await show_route(m, u, "day3_summary")
+                await answer_with_keyboard(m, u, "Ты уже видел(а):\nэто не мотивация.\nЭто тренировка.\n\n💳 Сейчас — цена со скидкой.", kb_pay_choice, "pay_choice")
+                u["stage"] = "offer"
+                await save_user(u, DB_PATH)
                 return
             if not TEST_MODE and day >= 7 and u.get("trial_phase") in ("trial3", "trial7", None):
                 await answer_with_keyboard(m, u, "Выбирай вариант оплаты:", kb_pay_choice, "pay_choice")
@@ -1603,6 +1776,12 @@ async def main_flow(m: Message):
 
     # OFFER stage
     if u.get("stage") == "offer":
+        if TEST_MODE:
+            u["stage"] = "training"
+            u["trial_phase"] = "paid"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Тестовый режим: продолжаем без оплаты.", kb_training_main, "training_main")
+            return
         low = text.lower().strip()
         if text == "7 дней — €20" or "7 дней" in low or "€20" in low or "20" == low:
             await log_event(u["user_id"], "offer", "payment_click_20", {"payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1615,6 +1794,7 @@ async def main_flow(m: Message):
             else:
                 await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await m.answer(payment_20_stub_text())
+            await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
             return
         if text == "Месяц — €40" or "месяц" in low or "€40" in low or "40" == low:
             await log_event(u["user_id"], "offer", "payment_click_40", {"payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1633,10 +1813,20 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "offer", "free_mode_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["free_mode"] = 1
             u["payment_status"] = "free_mode"
+        if "ещ" in low:
+            u["trial_days"] = 7
+            u["trial_phase"] = "trial7"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок. Ещё 4 дня в пробе. Продолжаем.", kb_training_main, "training_main")
             u["stage"] = "training"
             await save_user(u, DB_PATH)
             await m.answer(payment_declined_soft_text())
             await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
+            return
+        if text == "Что входит?" or "что входит" in low:
+            await m.answer(payment_includes_text())
+            await answer_with_keyboard(m, u, "Выбери вариант:", kb_pay_choice, "pay_choice")
+            return
             return
         if text == "Что входит?" or "что входит" in low:
             await m.answer(payment_includes_text())
@@ -1737,6 +1927,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     if comp.get("analysis_fallback"):
         fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
     msg = f"{fallback_notice}{comp.get('short_summary', 'Похоже на тебя?')}\n\nЭто похоже на тебя?"
+    msg = f"{comp.get('short_summary', 'Похоже на тебя?')}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 
 # ============================================================
@@ -1918,6 +2109,7 @@ async def main():
         await migrate_db(DB_PATH)
         asyncio.create_task(background_checkins(bot))
         start_sheets_sync_background_task(DB_PATH)
+        asyncio.create_task(sheets_sync_loop(DB_PATH))
         log.info("Bot started")
         await dp.start_polling(bot)
     except asyncio.exceptions.CancelledError:
