@@ -644,6 +644,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     if comp.get("analysis_fallback") or r.get("analysis_fallback"):
         fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
     msg = f"{fallback_notice}{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
+    msg = f"{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(
