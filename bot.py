@@ -48,7 +48,7 @@ from db import (
 )
 from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
-    send_trainer_photo_if_any, send_trainer_introduction, run_analysis,
+    send_trainer_photo_if_any, run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
     _extract_json, clamp_str
 )
