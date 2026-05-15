@@ -1269,7 +1269,7 @@ async def main_flow(m: Message):
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(analysis_next_step_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
+            await m.answer(analysis_next_step_long(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
             await answer_with_keyboard(m, u, "Что дальше?", kb_analysis_confirm, "analysis")
             return
         if "в точку" in low or (text == "✅ Да, в точку"):
