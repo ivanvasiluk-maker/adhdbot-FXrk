@@ -377,7 +377,6 @@ def _skill_steps(skill: dict) -> List[str]:
 
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     """Clean skill card with trainer-specific wording over live skill fields."""
-    """Clean skill card with trainer-specific wording over the same skill data."""
     trainer_key = (user or {}).get("trainer_key") or "marsha"
     trainer = TRAINERS.get(trainer_key, TRAINERS["marsha"])
     steps = _skill_steps(skill)
@@ -395,21 +394,12 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         }.get(trainer_key, "Давай бережно: только маленький вход, без давления на результат.")
 
     if trainer_key == "beck":
-    why_short = skill.get("why_short") or "Сейчас тренируем вход, а не результат."
-    skill_name = skill.get("name", "Микро-шаг")
-
-    if trainer_key == "beck":
-        why_short = skill.get("why_short") or (
-            "Сейчас мы тренируем не результат, а вход в задачу.\n"
-            "Если вход слишком большой, мозг блокирует действие."
-        )
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"📌 Дело: {today_target}\n\n"
             f"🧩 Навык: {skill_name}\n\n"
             f"{trainer_line}\n\n"
             "Почему это работает:\n"
-            "Логика такая:\n"
             f"{why_short}\n\n"
             "Сделай:\n"
             f"{steps_text}\n\n"
@@ -423,7 +413,6 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
             f"📌 Дело: {today_target}\n\n"
             f"🧩 {skill_name}\n\n"
             f"{trainer_line}\n\n"
-            "Без переговоров.\n"
             "Делаешь только это:\n\n"
             f"{steps_text}\n\n"
             "Минимум:\n"
@@ -436,9 +425,6 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         f"📌 Дело: {today_target}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
         f"{trainer_line}\n\n"
-        "Давай очень бережно.\n"
-        "Тебе не нужно делать всё.\n"
-        "Нужно только мягко войти в задачу.\n\n"
         "Попробуй:\n"
         f"{steps_text}\n\n"
         "Минимум:\n"
@@ -493,19 +479,6 @@ def skill_detail_text(skill: dict) -> str:
     steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
     minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
     example = skill.get("real_life_example") or skill.get("example") or skill.get("how_more")
-    name = skill.get("name", "Навык")
-    goal = skill.get("goal", "Помочь войти в действие без перегруза.")
-    when_to_use = skill.get("when_to_use") or "когда трудно начать, тянет отложить или непонятно, с какого шага войти."
-    steps = _steps_from_skill(skill)
-    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
-    minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
-    example = skill.get("real_life_example") or skill.get("example") or skill.get("how_more")
-    """ℹ️ Details branch: what skill is, when to use it, example, minimum."""
-    name = skill.get("name", "Навык")
-    goal = skill.get("goal", "Помочь войти в действие без перегруза.")
-    steps = _steps_from_skill(skill)
-    minimum = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
-    example = skill.get("example") or skill.get("how_more")
     if not example and steps:
         example = " → ".join(steps[:3])
     if not example:
@@ -520,11 +493,6 @@ def skill_detail_text(skill: dict) -> str:
         f"Шаги:\n{steps_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
         f"Почему работает:\n{why_long}"
-        "Когда использовать:\n"
-        "когда трудно начать, тянет отложить или непонятно, с какого шага войти.\n\n"
-        f"Пример:\n{example}\n\n"
-        "Минимум:\n"
-        f"{minimum}"
     )
 
 
