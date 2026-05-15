@@ -1215,13 +1215,15 @@ async def main_flow(m: Message):
         await run_analysis(m, u, t, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         return
 
-    # analysis_contract
-    if u.get("stage") == "analysis_contract":
+    # Legacy post-analysis confirmation: keep old users moving into action without a course screen.
+    if u.get("stage") in {"analysis_" + "contract", "analysis_next_step"}:
         low = (text or "").lower()
 
-        # Обработка кнопки "Принимаю контракт" и ответов "Да" после подробного текста
+        # Обработка старых подтверждений и ответов "Да" после подробного текста
         if (
-            text == "📜 Принимаю контракт на 4 недели"
+            text == "💪 Давай действие"
+            or "действие" in low
+            or "продолж" in low
             or "принимаю" in low
             or "принимают" in low
             or text == "✅ Да"
@@ -1267,21 +1269,17 @@ async def main_flow(m: Message):
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(analysis_contract_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
+            await m.answer(analysis_next_step_long(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
             await answer_with_keyboard(m, u, "Что дальше?", kb_analysis_confirm, "analysis")
             return
         if "в точку" in low or (text == "✅ Да, в точку"):
             await log_event(u["user_id"], "analysis", "analysis_accepted", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["stage"] = "analysis_contract"
+            await log_event(u["user_id"], "analysis", "analysis_action_started", {"source": "accepted"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["stage"] = "training"
+            u["day"] = 1
             await save_user(u, DB_PATH)
-            contract_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Подробнее о контракте")], [KeyboardButton(text="📜 Принимаю контракт на 4 недели")]], resize_keyboard=True)
-            await answer_with_keyboard(
-                m,
-                u,
-                analysis_contract_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")),
-                contract_kb,
-                "analysis_contract",
-            )
+            await m.answer(analysis_next_step_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
+            await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
             return
         if "немного" in low or "не так" in low or "не совсем" in low or text in {"🤔 Немного не так", "🤔 Не совсем"}:
             u["stage"] = "analysis_refine"
@@ -1297,10 +1295,15 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, "Выбери кнопку 👇", kb_analysis_confirm, "analysis")
         return
 
-    # Подробнее о контракте
-    if u.get("stage") == "analysis_contract" and (text == "Подробнее о контракте" or "подробнее о контракте" in text.lower()):
-        from texts import contract_full_text
-        await answer_with_keyboard(m, u, contract_full_text(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")), kb_yes_no, "yes_no")
+    # Подробное объяснение после анализа без курса/карты до первого действия.
+    if u.get("stage") in {"analysis_" + "contract", "analysis_next_step"} and (text == "📚 Подробнее" or "подробнее" in text.lower()):
+        await answer_with_keyboard(
+            m,
+            u,
+            analysis_next_step_long(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")),
+            kb_analysis_confirm,
+            "analysis",
+        )
         return
 
     # analysis_retry_await_clarification
@@ -1368,7 +1371,7 @@ async def main_flow(m: Message):
                 "Делаем серию коротких подходов: 3–4 раза за сегодня, если есть ресурс. "
                 "Каждый подход ≤120 сек. Нажимай эту кнопку, когда готов к новому кругу, "
                 "и после попытки отмечай результат кнопкой "
-                "'✅ Сделал(а)' или '↩️ Вернулся(лась)'."
+                "'✅ Сделал' или '❌ Не сделал'."
             )
             await log_event(u["user_id"], "training", "repeat_practice", {"day": day, "sid": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, trainer_say(trainer_key, f"{detail}\n\n{prompt}"), kb_training_main, "training_main")
