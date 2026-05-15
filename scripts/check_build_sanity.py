@@ -111,10 +111,54 @@ def check_file(path: Path) -> list[str]:
     ]
 
 
+
+def check_launch_week_invariants() -> list[str]:
+    """Guard the launch-week UX invariants that do not need live Telegram/Sheets credentials."""
+    errors: list[str] = []
+
+    bot_text = (REPO_ROOT / "bot.py").read_text(encoding="utf-8")
+    texts_text = (REPO_ROOT / "texts.py").read_text(encoding="utf-8")
+    engine_text = (REPO_ROOT / "core" / "engine.py").read_text(encoding="utf-8")
+    sheets_text = (REPO_ROOT / "sheets_sync.py").read_text(encoding="utf-8")
+
+    forbidden_post_analysis = (
+        "📜 Принимаю контракт на 4 недели",
+        "Подробнее о контракте",
+        "контракт на 4 недели",
+        "analysis_contract",
+        "Первые изменения — через 2–3 недели",
+        "Устойчивость — 4–8 недель",
+    )
+    for marker in forbidden_post_analysis:
+        if marker in bot_text or marker in texts_text:
+            errors.append(f"launch invariant: forbidden post-analysis course/contract marker remains: {marker!r}")
+
+    required_skill_buttons = (
+        '"✅ Сделал"',
+        '"❌ Не сделал"',
+        '"😣 Слишком сложно"',
+        '"🤔 Не понял"',
+        '"🆘 Кризис"',
+    )
+    for marker in required_skill_buttons:
+        if marker not in engine_text:
+            errors.append(f"launch invariant: core skill-card button missing: {marker}")
+    for marker in ('"✅ Сделал(а)"', '"↩️ Вернулся(лась)"', '"ℹ️ Подробнее"'):
+        if marker in engine_text:
+            errors.append(f"launch invariant: stale core skill-card button remains: {marker}")
+
+    for sensitive_key in ("problem_text", "voice_transcript", "crisis_text", "medical_details"):
+        if sensitive_key not in sheets_text:
+            errors.append(f"launch invariant: Sheets sanitizer missing sensitive key: {sensitive_key}")
+
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
     for path in repo_files():
         errors.extend(check_file(path))
+    errors.extend(check_launch_week_invariants())
 
     if errors:
         print("Build sanity check failed:", file=sys.stderr)
