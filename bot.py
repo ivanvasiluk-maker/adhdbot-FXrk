@@ -1345,6 +1345,24 @@ async def main_flow(m: Message):
         await run_analysis(m, u, combined_text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         return
 
+    # taking_test
+    # Если пользователь отправил текст вместо ответа через callback-кнопки,
+    # возвращаем к текущему вопросу и сохраняем прогресс теста.
+    if u.get("stage") == "taking_test":
+        test_answers = u.get("test_answers") or []
+        next_q_num = len(test_answers) + 1
+        next_q = next((x for x in TEST_QUESTIONS if x["id"] == next_q_num), None)
+        if not next_q:
+            next_q_num = 1
+            next_q = TEST_QUESTIONS[0]
+            u["test_answers"] = []
+            await save_user(u, DB_PATH)
+        await m.answer(
+            f"Чтобы пройти тест, выбери вариант кнопкой ниже 👇\n\n❓ Вопрос {next_q_num}/5:\n\n{next_q['text']}",
+            reply_markup=create_test_question_keyboard(next_q_num),
+        )
+        return
+
     # Вопрос перед выдачей навыка
     if u.get("stage") == "await_training_target":
         screen = engine_get_next_screen(u, {"type": "target_submitted", "text": text})
