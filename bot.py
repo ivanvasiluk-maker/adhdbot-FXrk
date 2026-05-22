@@ -81,7 +81,6 @@ PAYMENT_URL = os.getenv("PAYMENT_URL", "").strip()
 PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
-ADMIN_IDS = {int(x) for x in re.split(r"[,\s]+", os.getenv("ADMIN_IDS", "").strip()) if x.isdigit()}
 
 # Unlock full flow while testing (set TEST_MODE=1)
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
@@ -298,6 +297,7 @@ async def show_route(m: Message, u: Dict[str, Any], source: str):
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     """Show paid offer after day 3 completion/summary."""
     u["stage"] = "offer"
+    u["last_offer_shown_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     await save_user(u, DB_PATH)
     await log_event(
         u["user_id"],
@@ -311,15 +311,23 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
 
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
-    """Day 3 offer is shown only for unpaid users outside free mode."""
+    """Day 3 offer is shown only for unpaid users outside free mode.
+
+    Admin fast-forward (testmode/flag) allows testing offer path without waiting 3 days.
+    """
+    if int(u.get("fast_forward_enabled") or 0) == 1 or int(u.get("is_test_user") or 0) == 1 or TEST_MODE:
+        if is_paid(u) or int(u.get("free_mode") or 0) == 1:
+            return False
+        return True
     state = dict(u)
     state["day"] = day
     return engine_should_show_offer(state)
 
 
-def is_admin(uid: int) -> bool:
-    """Admin commands are available only for user IDs listed in ADMIN_IDS."""
-    return uid in ADMIN_IDS
+def is_admin(user_id: int) -> bool:
+    """Admin commands are available only for user IDs listed in ADMIN_IDS env."""
+    ids = os.getenv("ADMIN_IDS", "")
+    return str(user_id) in [x.strip() for x in ids.split(",") if x.strip()]
 
 
 def current_skill_id(u: Dict[str, Any]) -> str:
@@ -393,7 +401,7 @@ async def build_admin_stats_text(db_path: str) -> str:
         "action_downscaled": 0,
         "offer_shown": 0,
         "payment_click_20": 0,
-        "payment_click_40": 0,
+        "payment_click_month_1498": 0,
         "payment_declined_soft": 0,
         "crisis_clicked": 0,
     }
@@ -419,7 +427,7 @@ async def build_admin_stats_text(db_path: str) -> str:
         if trainer in trainer_stats:
             if name == "action_done":
                 trainer_stats[trainer]["action_done"] += 1
-            elif name in {"payment_click_20", "payment_click_40"}:
+            elif name in {"payment_click_20", "payment_click_month_1498"}:
                 trainer_stats[trainer]["offer_click"] += 1
 
         skill_id = _stats_skill_id(data, user)
@@ -453,7 +461,7 @@ async def build_admin_stats_text(db_path: str) -> str:
         f"Дошли до day3: {sum(1 for u in users_rows if int(u.get('day') or 0) >= 3)}",
         f"Offer shown: {event_counts['offer_shown']}",
         f"€20 clicks: {event_counts['payment_click_20']}",
-        f"€40 clicks: {event_counts['payment_click_40']}",
+        f"€14.98 clicks: {event_counts['payment_click_month_1498']}",
         f"Подумаю: {event_counts['payment_declined_soft']}",
         f"Crisis clicked: {event_counts['crisis_clicked']}",
         "",
@@ -535,12 +543,12 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     command = (text.split(maxsplit=1)[0] if text else "").lower()
     admin_commands = {
         "/testmode_on", "/testmode_off", "/set_day", "/show_offer",
-        "/reset_me", "/debug_user", "/health", "/mark_paid", "/mark_free", "/sync_sheets", "/stats",
+        "/reset_me", "/debug_user", "/whoami", "/health", "/mark_paid", "/mark_free", "/sync_sheets", "/stats",
     }
     if command not in admin_commands:
         return False
     if not is_admin(uid):
-        await m.answer("Нет доступа.")
+        await m.answer("Команда недоступна.")
         return True
 
     if command == "/testmode_on":
@@ -548,7 +556,14 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["fast_forward_enabled"] = 1
         await save_user(u, DB_PATH)
         await log_event(uid, u.get("stage", ""), "testmode_on", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer("Тестовый режим включён. Можно проходить дни без ожидания.")
+        await m.answer("""Тестовый режим включён.
+Можно проходить дни без ожидания.
+
+Команды:
+/set_day 3
+/show_offer
+/debug_user
+/reset_me""")
         return True
 
     if command == "/testmode_off":
@@ -566,11 +581,13 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             return True
         day = int(parts[1])
         u["day"] = day
+        if "current_day" in u:
+            u["current_day"] = day
         u["pending_skill_day"] = None
         u["stage"] = "training"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(f"День установлен: {day}.")
+        await m.answer(f"День установлен: {day}.\nМожно вызвать /show_offer.")
         return True
 
     if command == "/show_offer":
@@ -579,13 +596,22 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
 
     if command == "/reset_me":
-        fresh = await reset_current_user(uid, m.chat.id)
+        u["stage"] = "ask_name"
+        u["day"] = 1
+        if "current_day" in u:
+            u["current_day"] = 1
+        u["trainer_key"] = None
+        u["bucket"] = None
+        u["analysis_json"] = None
+        u["pending_skill_id"] = None
+        u["today_target"] = None
+        u["payment_status"] = "free"
+        u["free_mode"] = 0
+        if int(u.get("is_test_user") or 0) != 1:
+            u["fast_forward_enabled"] = 0
+        await save_user(u, DB_PATH)
         await log_event(uid, "admin", "admin_reset_user", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(
-            "Сбросил твой профиль до свежего онбординга.\n\n"
-            "Как к тебе обращаться? (1 слово)",
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
-        )
+        await m.answer("Твой тестовый профиль сброшен. Напиши /start.")
         return True
 
     if command == "/debug_user":
@@ -597,16 +623,30 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"username: @{username if username else '-'}\n"
             f"stage: {u.get('stage')}\n"
             f"day: {u.get('day')}\n"
+            f"current_day: {u.get('current_day', u.get('day'))}\n"
             f"trainer_key: {u.get('trainer_key')}\n"
             f"bucket: {u.get('bucket')}\n"
-            f"current_skill: {sid}\n"
+            f"pending_skill_id: {u.get('pending_skill_id')}\n"
+            f"today_target: {u.get('today_target')}\n"
             f"payment_status: {u.get('payment_status')}\n"
-            f"paid_until: {u.get('paid_until')}\n"
             f"trial_phase: {u.get('trial_phase')}\n"
-            f"last_payment_click: {u.get('last_payment_click')}\n"
             f"free_mode: {u.get('free_mode')}\n"
-            f"last_active: {u.get('last_active')}\n"
-            f"test_mode: {bool(TEST_MODE or int(u.get('is_test_user') or 0))}"
+            f"is_test_user: {u.get('is_test_user')}\n"
+            f"fast_forward_enabled: {u.get('fast_forward_enabled')}\n"
+            f"paid_until: {u.get('paid_until')}\n"
+            f"last_payment_click: {u.get('last_payment_click')}\n"
+            f"last_offer_shown_at: {u.get('last_offer_shown_at')}\n"
+            f"last_active: {u.get('last_active')}"
+        )
+        return True
+
+    if command == "/whoami":
+        username = getattr(m.from_user, "username", None) or "-"
+        first_name = getattr(m.from_user, "first_name", None) or "-"
+        await m.answer(
+            f"user_id: {uid}\n"
+            f"username: {username}\n"
+            f"first_name: {first_name}"
         )
         return True
 
@@ -1652,19 +1692,21 @@ async def main_flow(m: Message):
                 await m.answer(" ", reply_markup=payment_inline_20(PAYMENT_URL_DISCOUNT))
             else:
                 await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await log_event(u["user_id"], "offer", "payment_stub_shown", {"offer": "7_days_20"}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await m.answer(payment_20_stub_text())
             return
-        if text == "Месяц — €40" or "месяц" in low or "€40" in low or "40" == low:
-            await log_event(u["user_id"], "offer", "payment_click_40", {"payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["payment_status"] = "pending_40"
-            u["last_payment_click"] = "40"
+        if text == "Месяц — €14.98" or "месяц" in low or "€14.98" in low or "14.98" == low:
+            await log_event(u["user_id"], "offer", "payment_click_month_1498", {"payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["payment_status"] = "pending_month_1498"
+            u["last_payment_click"] = "month_1498"
             await save_user(u, DB_PATH)
             if PAYMENT_URL_FULL:
                 await m.answer("Ок. Месяц тренировки по ссылке 👇")
-                await m.answer(" ", reply_markup=payment_inline_40(PAYMENT_URL_FULL))
+                await m.answer(" ", reply_markup=payment_inline_month_1498(PAYMENT_URL_FULL))
             else:
-                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "40"}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await m.answer(payment_40_stub_text())
+                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await log_event(u["user_id"], "offer", "payment_stub_shown", {"offer": "month_1498"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await m.answer(payment_month_1498_stub_text())
             return
         if text == "Подумаю" or "подумаю" in low:
             await log_event(u["user_id"], "offer", "payment_declined_soft", {}, DB_PATH, SHEETS_WEBHOOK_URL)
