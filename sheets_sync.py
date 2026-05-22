@@ -149,12 +149,13 @@ def error_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
 
 PAYMENT_EVENTS = {
     "payment_click_20",
-    "payment_click_40",
+    "payment_click_month_1498",
     "payment_declined_soft",
     "payment_completed",
     "free_mode_started",
     "paid_mode_started",
     "payment_error",
+    "payment_stub_shown",
 }
 
 
@@ -210,8 +211,8 @@ def payment_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = No
     name = _event_name(event)
     if name == "payment_click_20":
         offer_type, amount = "7_days", 20
-    elif name == "payment_click_40":
-        offer_type, amount = "month", 40
+    elif name == "payment_click_month_1498":
+        offer_type, amount = "month", 14.98
     else:
         offer_type = data.get("payment_click") or data.get("source") or ""
         amount = data.get("amount") or ""
@@ -257,7 +258,7 @@ def daily_summary_to_sheet_row(date: str, users: List[Dict[str, Any]], events: L
         sum(1 for user in users if int(user.get("day") or 0) >= 3),
         count("offer_shown"),
         count("payment_click_20"),
-        count("payment_click_40"),
+        count("payment_click_month_1498"),
         count("payment_completed"),
         count("crisis_clicked", "crisis_open", "crisis_message"),
     ]

@@ -529,7 +529,7 @@ def day3_offer_text() -> str:
         "Обычно люди после первого улучшения снова исчезают.\n\n"
         "Чтобы этого не было, нужна система:\n"
         "7 дней сопровождения\n"
-        "или месяц тренировки."
+        "или месяц тренировки за €14.98."
     )
 
 
@@ -540,7 +540,7 @@ def payment_20_stub_text() -> str:
     )
 
 
-def payment_40_stub_text() -> str:
+def payment_month_1498_stub_text() -> str:
     return (
         "Месячный режим включает:\n"
         "— ежедневное сопровождение\n"
@@ -815,7 +815,7 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="7 дней — €20"), KeyboardButton(text="Месяц — €40")],
+        [KeyboardButton(text="7 дней — €20"), KeyboardButton(text="Месяц — €14.98")],
         [KeyboardButton(text="Подумаю"), KeyboardButton(text="Что входит?")],
     ],
     resize_keyboard=True
@@ -846,9 +846,9 @@ def payment_inline_20(payment_url_discount: str) -> InlineKeyboardMarkup:
     )
 
 
-def payment_inline_40(payment_url_full: str) -> InlineKeyboardMarkup:
+def payment_inline_month_1498(payment_url_full: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Месяц — €40", url=payment_url_full)]]
+        inline_keyboard=[[InlineKeyboardButton(text="Месяц — €14.98", url=payment_url_full)]]
     )
 
 kb_yes_no_inline = InlineKeyboardMarkup(
