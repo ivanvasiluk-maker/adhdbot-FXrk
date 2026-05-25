@@ -62,6 +62,7 @@ USER_FIELDS = [
     "return_count",
     "analysis_retry_count",
     "has_started_training",
+    "last_offer_shown_at",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -170,6 +171,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "return_count": 0,
         "analysis_retry_count": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
+        "last_offer_shown_at": None,
     }
 
 async def init_db(db_path: str):
@@ -216,7 +218,8 @@ async def init_db(db_path: str):
                 done_count INTEGER,
                 return_count INTEGER,
                 analysis_retry_count INTEGER,
-                has_started_training INTEGER
+                has_started_training INTEGER,
+                last_offer_shown_at TEXT
             )
             """
         )
@@ -305,7 +308,8 @@ EXTRA_USER_COLS = {
     "has_started_training": "INTEGER",  # 1 если юзер начал день 1
     "pending_skill_id": "TEXT",
     "pending_skill_day": "INTEGER",
-    "today_target": "TEXT"
+    "today_target": "TEXT",
+    "last_offer_shown_at": "TEXT"
 }
 
 async def migrate_db(db_path: str):
