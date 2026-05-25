@@ -527,9 +527,13 @@ def day3_offer_text() -> str:
         "— где ты сливаешься\n"
         "— какой шаг нужно уменьшать\n\n"
         "Обычно люди после первого улучшения снова исчезают.\n\n"
-        "Чтобы этого не было, нужна система:\n"
-        "7 дней сопровождения\n"
-        "или месяц тренировки за €14.98."
+        "Чтобы этого не было, нужна система сопровождения:\n"
+        "— один навык в день\n"
+        "— контроль выполнения\n"
+        "— адаптация под твои срывы\n"
+        "— вечерний итог\n"
+        "— возврат без самокритики\n\n"
+        "Продолжить месяц за €14.98?"
     )
 
 
@@ -542,13 +546,10 @@ def payment_20_stub_text() -> str:
 
 def payment_month_1498_stub_text() -> str:
     return (
-        "Месячный режим включает:\n"
-        "— ежедневное сопровождение\n"
-        "— память паттернов\n"
-        "— адаптацию навыков\n"
-        "— вечерние итоги\n\n"
-        "Пока оплата подключается.\n"
-        "Я записал твой выбор."
+        "Оплата почти готова.\n\n"
+        "Пока тестируем запуск:\n"
+        "напиши сюда «хочу месяц»,\n"
+        "и я включу доступ вручную."
     )
 
 
@@ -563,12 +564,16 @@ def payment_declined_soft_text() -> str:
 
 def payment_includes_text() -> str:
     return (
-        "Что входит:\n"
-        "— ежедневное сопровождение\n"
-        "— память паттернов\n"
-        "— адаптацию навыков\n"
-        "— вечерние итоги\n"
-        "— уменьшение шага, если действие ломается"
+        "В месяц за €14.98 входит:\n\n"
+        "— ежедневный короткий навык\n"
+        "— утренний чек-ин\n"
+        "— вечернее закрытие дня\n"
+        "— адаптация, если шаг слишком большой\n"
+        "— память: где ты чаще всего срываешься\n"
+        "— недельный мини-отчёт\n"
+        "— кризисный режим\n\n"
+        "Это не терапия и не диагноз.\n"
+        "Это тренировка навыков саморегуляции."
     )
 
 
@@ -815,8 +820,9 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="7 дней — €20"), KeyboardButton(text="Месяц — €14.98")],
-        [KeyboardButton(text="Подумаю"), KeyboardButton(text="Что входит?")],
+        [KeyboardButton(text="💳 Месяц — €14.98")],
+        [KeyboardButton(text="📦 Что входит?")],
+        [KeyboardButton(text="🤔 Подумаю")],
     ],
     resize_keyboard=True
 )
@@ -848,7 +854,7 @@ def payment_inline_20(payment_url_discount: str) -> InlineKeyboardMarkup:
 
 def payment_inline_month_1498(payment_url_full: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Месяц — €14.98", url=payment_url_full)]]
+        inline_keyboard=[[InlineKeyboardButton(text="Оплатить €14.98", url=payment_url_full)]]
     )
 
 kb_yes_no_inline = InlineKeyboardMarkup(

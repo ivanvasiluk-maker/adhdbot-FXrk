@@ -80,6 +80,8 @@ DB_PATH = os.getenv("DB_PATH", "bot.db").strip()
 PAYMENT_URL = os.getenv("PAYMENT_URL", "").strip()
 PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
+PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
+ENABLE_PAYMENTS = os.getenv("ENABLE_PAYMENTS", "").lower() in {"1", "true", "yes", "on"}
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
 # Unlock full flow while testing (set TEST_MODE=1)
@@ -303,7 +305,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         u["user_id"],
         "offer",
         "offer_shown",
-        {"source": source, "day": int(u.get("day") or 0)},
+        {"source": source, "day": int(u.get("day") or 0), "price_month": "14.98"},
         DB_PATH,
         SHEETS_WEBHOOK_URL,
     )
@@ -321,7 +323,10 @@ def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
         return True
     state = dict(u)
     state["day"] = day
-    return engine_should_show_offer(state)
+    if not engine_should_show_offer(state):
+        return False
+    has_payment_url = bool(PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)
+    return ENABLE_PAYMENTS or has_payment_url
 
 
 def is_admin(user_id: int) -> bool:
@@ -547,7 +552,9 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     }
     if command not in admin_commands:
         return False
-    if not is_admin(uid):
+    if command == "/show_offer" and int(u.get("is_test_user") or 0) == 1:
+        pass
+    elif not is_admin(uid):
         await m.answer("Команда недоступна.")
         return True
 
@@ -584,13 +591,16 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         if "current_day" in u:
             u["current_day"] = day
         u["pending_skill_day"] = None
-        u["stage"] = "training"
+        u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(f"День установлен: {day}.\nМожно вызвать /show_offer.")
         return True
 
     if command == "/show_offer":
+        if not (is_admin(uid) or int(u.get("is_test_user") or 0) == 1):
+            await m.answer("Команда недоступна.")
+            return True
         await log_event(uid, u.get("stage", ""), "admin_show_offer", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         await show_day3_offer(m, u, "manual_test")
         return True
@@ -660,7 +670,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"Sheets configured {str(bool(SHEETS_WEBHOOK_URL)).lower()}\n"
             f"Sheets sync enabled {str(bool(SHEETS_SYNC_ENABLED)).lower()}\n"
             f"Sheets interval {SHEETS_SYNC_INTERVAL_SECONDS}s batch {SHEETS_SYNC_BATCH_SIZE}\n"
-            f"Payments configured {str(bool(PAYMENT_URL_DISCOUNT and PAYMENT_URL_FULL)).lower()}\n"
+            f"Payments configured {str(bool(ENABLE_PAYMENTS or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)).lower()}\n"
             f"Testmode {str(bool(TEST_MODE or int(u.get('is_test_user') or 0))).lower()}"
         )
         return True
@@ -754,7 +764,7 @@ def remember_checkin_state(u: Dict[str, Any], key: str, value: str):
 
 
 async def ask_today_action(m: Message, u: Dict[str, Any]):
-    u["stage"] = "training"
+    u["stage"] = "waiting_next_day"
     await save_user(u, DB_PATH)
     await start_day(m, u, int(u.get("day") or 1), DB_PATH, SHEETS_WEBHOOK_URL)
 
@@ -837,7 +847,7 @@ async def main_flow(m: Message):
         remember_checkin_state(u, "last_morning_state", text)
         u["last_active"] = time.time()
         was_reactivation = int(u.get("reactivation_count") or 0) > 0
-        u["stage"] = "training"
+        u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "morning_checkin_done", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
         if was_reactivation:
@@ -850,7 +860,7 @@ async def main_flow(m: Message):
     if u.get("stage") == "evening_checkin" and text in evening_answers:
         remember_checkin_state(u, "last_evening_state", text)
         u["last_active"] = time.time()
-        u["stage"] = "training"
+        u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "evening_checkin_done", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
         if text == "✅ сделал":
@@ -893,7 +903,7 @@ async def main_flow(m: Message):
                 await send_downscale(m, u, "failed_stuck_phone")
                 return
             if text == "🤔 Не понял" or low in {"не понял", "не понимаю", "я не понимаю"}:
-                u["stage"] = "training"
+                u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 await log_event(u["user_id"], "training", "dont_understand_clicked", {"source": "failed_options"}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await answer_with_keyboard(m, u, simple_explain_text(), kb_microstep, "microstep")
@@ -923,7 +933,7 @@ async def main_flow(m: Message):
                 return
             if text == "Не та причина":
                 await log_event(u["user_id"], "training", "clarification_selected", {"choice": "wrong_reason"}, DB_PATH, SHEETS_WEBHOOK_URL)
-                u["stage"] = "training"
+                u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 await answer_with_keyboard(m, u, "Ок. Причину сейчас не переразбираем. Проверим через действие: какой минимальный вход в задачу возможен?", kb_downscale, "downscale")
                 await send_downscale(m, u, "wrong_reason")
@@ -935,7 +945,7 @@ async def main_flow(m: Message):
             if text in {"Я не понимаю", "🤔 Я не понимаю", "🤔 Не понял"}:
                 await log_event(u["user_id"], "training", "clarification_selected", {"choice": "dont_understand"}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await log_event(u["user_id"], "training", "dont_understand_clicked", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-                u["stage"] = "training"
+                u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 await answer_with_keyboard(m, u, simple_explain_text(), kb_microstep, "microstep")
                 return
@@ -986,7 +996,7 @@ async def main_flow(m: Message):
                     await show_route(m, u, "first_done")
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_route(m, u, "day3_summary")
-                    await show_day3_offer(m, u, "day3_downscale_done")
+                    await show_day3_offer(m, u, "day3_auto")
                     return
                 await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
                 return
@@ -1004,7 +1014,7 @@ async def main_flow(m: Message):
                     await show_route(m, u, "first_done")
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_route(m, u, "day3_summary")
-                    await show_day3_offer(m, u, "day3_downscale_name_done")
+                    await show_day3_offer(m, u, "day3_auto")
                     return
                 await answer_with_keyboard(m, u, "Одно слово — это уже контакт с задачей. Что дальше?", kb_done, "done")
                 return
@@ -1057,7 +1067,7 @@ async def main_flow(m: Message):
             u["pending_skill_id"] = None
             u["pending_skill_day"] = None
             u["today_target"] = None
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await log_event(
                 u["user_id"],
@@ -1192,7 +1202,7 @@ async def main_flow(m: Message):
 
     # Legacy stage: не показываем карту автоматически, сразу ведём к первому действию
     if u.get("stage") == "diagnosis_done":
-        u["stage"] = "training"
+        u["stage"] = "waiting_next_day"
         u["day"] = 1
         await save_user(u, DB_PATH)
         await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1284,7 +1294,7 @@ async def main_flow(m: Message):
             or text == "✅ Да"
             or low.strip() == "да"
         ):
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             u["day"] = 1
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "day1_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1301,7 +1311,7 @@ async def main_flow(m: Message):
     if u.get("stage") == "analysis_map":
         low = (text or "").lower()
         if "принимаю" in low or "принимают" in low:
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             u["day"] = 1
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "day1_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1317,7 +1327,7 @@ async def main_flow(m: Message):
         low = text.lower()
         if "давай действие" in low or text == "💪 Давай действие":
             await log_event(u["user_id"], "analysis", "analysis_action_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             u["day"] = 1
             await save_user(u, DB_PATH)
             await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1330,7 +1340,7 @@ async def main_flow(m: Message):
         if "в точку" in low or (text == "✅ Да, в точку"):
             await log_event(u["user_id"], "analysis", "analysis_accepted", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await log_event(u["user_id"], "analysis", "analysis_action_started", {"source": "accepted"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             u["day"] = 1
             await save_user(u, DB_PATH)
             await m.answer(analysis_next_step_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
@@ -1519,7 +1529,7 @@ async def main_flow(m: Message):
                 await show_route(m, u, "first_done")
             if should_show_day3_offer(u, day):
                 await show_route(m, u, "day3_summary")
-                await show_day3_offer(m, u, "day3_done")
+                await show_day3_offer(m, u, "day3_auto")
                 return
             await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
             return
@@ -1540,7 +1550,7 @@ async def main_flow(m: Message):
                 await send_weekly_summary(m, u, DB_PATH)
             if should_show_day3_offer(u, day):
                 await show_route(m, u, "day3_summary")
-                await show_day3_offer(m, u, "day3_return")
+                await show_day3_offer(m, u, "day3_auto")
                 return
             if not TEST_MODE and day >= 7 and u.get("trial_phase") in ("trial3", "trial7", None):
                 await answer_with_keyboard(m, u, "Выбирай вариант оплаты:", kb_pay_choice, "pay_choice")
@@ -1602,7 +1612,7 @@ async def main_flow(m: Message):
             return
 
         if text == "⬅️ Назад" or "назад" in low:
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
             return
@@ -1625,7 +1635,7 @@ async def main_flow(m: Message):
 
     if u.get("stage") == "crisis_text":
         if text and text.lower().strip() in {"⬅️ назад", "назад"}:
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
             return
@@ -1637,7 +1647,7 @@ async def main_flow(m: Message):
 
     if u.get("stage") == "crisis_voice":
         if text and text.lower().strip() in {"⬅️ назад", "назад"}:
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
             return
@@ -1665,13 +1675,13 @@ async def main_flow(m: Message):
                 await save_user(u, DB_PATH)
                 await log_event(u["user_id"], u.get("stage", ""), "plan_change_accept", {"day": day_num, "skill": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await m.answer("✅ Ок. Я обновил план. Завтра будет эта версия.")
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Возвращаемся в тренировку.", kb_training_main, "training_main")
             return
         if text == "❌ Нет" or "нет" in low:
             u["pending_plan_change"] = None
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], u.get("stage", ""), "plan_change_reject", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, "Ок. План не меняю. Возвращаемся.", kb_training_main, "training_main")
@@ -1682,45 +1692,37 @@ async def main_flow(m: Message):
     # OFFER stage
     if u.get("stage") == "offer":
         low = text.lower().strip()
-        if text == "7 дней — €20" or "7 дней" in low or "€20" in low or "20" == low:
-            await log_event(u["user_id"], "offer", "payment_click_20", {"payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["payment_status"] = "pending_20"
-            u["last_payment_click"] = "20"
-            await save_user(u, DB_PATH)
-            if PAYMENT_URL_DISCOUNT:
-                await m.answer("Ок. 7 дней сопровождения по ссылке 👇")
-                await m.answer(" ", reply_markup=payment_inline_20(PAYMENT_URL_DISCOUNT))
-            else:
-                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "20"}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await log_event(u["user_id"], "offer", "payment_stub_shown", {"offer": "7_days_20"}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await m.answer(payment_20_stub_text())
-            return
-        if text == "Месяц — €14.98" or "месяц" in low or "€14.98" in low or "14.98" == low:
+        if text == "💳 Месяц — €14.98" or "месяц" in low or "€14.98" in low or "14.98" == low:
             await log_event(u["user_id"], "offer", "payment_click_month_1498", {"payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["payment_status"] = "pending_month_1498"
-            u["last_payment_click"] = "month_1498"
+            u["last_payment_click"] = "month_14_98"
             await save_user(u, DB_PATH)
-            if PAYMENT_URL_FULL:
-                await m.answer("Ок. Месяц тренировки по ссылке 👇")
-                await m.answer(" ", reply_markup=payment_inline_month_1498(PAYMENT_URL_FULL))
+            pay_url = PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL
+            if pay_url:
+                await m.answer("Ок. Месячный режим SKILLER.\n\nВключает:\n— ежедневное сопровождение\n— память паттернов\n— адаптацию навыков\n— вечерние итоги\n— недельный отчёт\n\nЦена: €14.98 за месяц.\nНажми кнопку ниже для оплаты.")
+                await m.answer(" ", reply_markup=payment_inline_month_1498(pay_url))
             else:
                 await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await log_event(u["user_id"], "offer", "payment_stub_shown", {"offer": "month_1498"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await log_event(u["user_id"], "offer", "payment_stub_shown", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await m.answer(payment_month_1498_stub_text())
             return
-        if text == "Подумаю" or "подумаю" in low:
+        if text == "🤔 Подумаю" or "подумаю" in low:
             await log_event(u["user_id"], "offer", "payment_declined_soft", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await log_event(u["user_id"], "offer", "free_mode_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["free_mode"] = 1
             u["payment_status"] = "free_mode"
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await m.answer(payment_declined_soft_text())
             await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
             return
-        if text == "Что входит?" or "что входит" in low:
+        if text == "📦 Что входит?" or "что входит" in low:
+            await log_event(u["user_id"], "offer", "offer_details_clicked", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(payment_includes_text())
-            await answer_with_keyboard(m, u, "Выбери вариант:", kb_pay_choice, "pay_choice")
+            await answer_with_keyboard(m, u, "Выбери вариант:", ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="💳 Месяц — €14.98")],[KeyboardButton(text="⬅️ Назад")]], resize_keyboard=True), "offer_details")
+            return
+        if text == "⬅️ Назад" or "назад" in low:
+            await answer_with_keyboard(m, u, day3_offer_text(), kb_pay_choice, "pay_choice")
             return
         await answer_with_keyboard(m, u, "Выбирай кнопкой 👇", kb_pay_choice, "pay_choice")
         return
@@ -1743,7 +1745,7 @@ async def on_callbacks(c: CallbackQuery):
         return
     if u.get("stage") == "confirm_analysis":
         if c.data == "yes":
-            u["stage"] = "training"
+            u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             # Показываем первый навык сразу после онбординга (через callback)
             await start_day(m=c.message, u=u, day=1, db_path=DB_PATH, sheets_webhook=SHEETS_WEBHOOK_URL)
