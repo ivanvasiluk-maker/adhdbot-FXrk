@@ -63,6 +63,7 @@ USER_FIELDS = [
     "analysis_retry_count",
     "has_started_training",
     "last_offer_shown_at",
+    "profile_json",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -172,6 +173,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "analysis_retry_count": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
         "last_offer_shown_at": None,
+        "profile_json": {},
     }
 
 async def init_db(db_path: str):
@@ -219,7 +221,8 @@ async def init_db(db_path: str):
                 return_count INTEGER,
                 analysis_retry_count INTEGER,
                 has_started_training INTEGER,
-                last_offer_shown_at TEXT
+                last_offer_shown_at TEXT,
+                profile_json TEXT DEFAULT '{}'
             )
             """
         )
@@ -309,7 +312,8 @@ EXTRA_USER_COLS = {
     "pending_skill_id": "TEXT",
     "pending_skill_day": "INTEGER",
     "today_target": "TEXT",
-    "last_offer_shown_at": "TEXT"
+    "last_offer_shown_at": "TEXT",
+    "profile_json": "TEXT DEFAULT '{}'"
 }
 
 async def migrate_db(db_path: str):
@@ -386,6 +390,90 @@ async def log_event(
     except Exception as e:
         log.warning("log_event failed: %s", e)
 
+
+
+PATTERN_LABELS = {
+    "perfectionism_start_block": "идеальный образ результата делает вход слишком дорогим",
+    "entry_too_large": "первый шаг ощущается слишком большим",
+    "micro_entry_block": "даже подготовка к старту воспринимается как задача",
+    "start_avoidance": "сложно войти в действие",
+    "anxiety_avoidance": "тревога делает вход в задачу небезопасным",
+    "boredom_avoidance": "нет быстрого подкрепления, и мозг теряет интерес",
+}
+
+REASON_LABELS = {
+    "fear_of_bad_result": "страх сделать плохо или неидеально",
+    "task_too_big": "задача воспринимается слишком большой",
+    "unclear_first_step": "неясен первый физический шаг",
+    "low_energy": "мало ресурса для входа",
+    "no_visible_result": "не видно быстрого результата",
+}
+
+SKILL_LABELS = {
+    "open_only": "открыть задачу без требования работать",
+    "task_naming": "назвать задачу одним словом",
+    "ninety_sec_start": "90 секунд входа",
+    "bad_first_step": "плохой первый шаг",
+    "restart_after_break": "возврат после срыва",
+}
+
+
+def label(mapping: dict, value: Optional[str], fallback: str) -> str:
+    if not value:
+        return fallback
+    return mapping.get(value, value)
+
+
+async def get_user_profile(user_id: int, db_path: str = "bot.db") -> dict:
+    user = await get_user(user_id, db_path)
+    raw = user.get("profile_json") or "{}"
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db") -> dict:
+    profile = await get_user_profile(user_id, db_path)
+    profile.update(patch or {})
+    profile["updated_at"] = datetime.utcnow().isoformat()
+
+    profile_json = json.dumps(profile, ensure_ascii=False)
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE users SET profile_json = ? WHERE user_id = ?",
+            (profile_json, user_id),
+        )
+        await db.commit()
+    return profile
+
+
+def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
+    main_pattern = label(PATTERN_LABELS, profile.get("main_pattern"), "застревание перед действием")
+    reason = label(REASON_LABELS, profile.get("avoidance_reason"), "неопределённость / перегруз")
+    trigger = profile.get("emotional_trigger") or "напряжение перед стартом"
+    skill = label(SKILL_LABELS, profile.get("best_skill"), "маленький вход в задачу")
+
+    return f"""🧭 Твоя предварительная карта
+
+Пока это не диагноз, а рабочая гипотеза по твоим действиям.
+
+Главный паттерн:
+{main_pattern}
+
+Что часто запускает избегание:
+{reason}
+
+Что может сбивать:
+{trigger}
+
+Что уже похоже помогает:
+{skill}
+
+Дальше карта будет уточняться по тому, что ты реально пробуешь."""
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
     """Применить геймификацию"""
