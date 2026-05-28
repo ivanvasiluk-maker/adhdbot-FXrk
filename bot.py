@@ -14,6 +14,7 @@ import sys
 import io
 import re
 import json
+import random
 import time
 import asyncio
 import logging
@@ -297,6 +298,36 @@ async def show_route(m: Message, u: Dict[str, Any], source: str):
     await m.answer(month_map_text(u.get("bucket")))
 
 
+def profile_patch_from_diagnosis(comp: Dict[str, Any]) -> Dict[str, Any]:
+    """Map diagnosis output to profile categories only (no free text)."""
+    bucket = (comp.get("bucket") or "mixed").strip()
+    mapping = {
+        "anxiety": {
+            "main_pattern": "anxiety_avoidance",
+            "avoidance_reason": "fear_of_bad_result",
+            "emotional_trigger": "shame_or_anxiety",
+        },
+        "low_energy": {
+            "main_pattern": "start_avoidance",
+            "avoidance_reason": "low_energy",
+            "emotional_trigger": "fatigue_or_overload",
+        },
+        "distractibility": {
+            "main_pattern": "start_avoidance",
+            "avoidance_reason": "unclear_first_step",
+            "emotional_trigger": "distraction_or_restlessness",
+        },
+        "mixed": {
+            "main_pattern": "start_avoidance",
+            "avoidance_reason": "task_too_big",
+            "emotional_trigger": "shame_or_anxiety",
+        },
+    }
+    patch = dict(mapping.get(bucket, mapping["mixed"]))
+    patch["recommended_track"] = "procrastination"
+    return patch
+
+
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     """Show paid offer after day 3 completion/summary."""
     u["stage"] = "offer"
@@ -315,6 +346,13 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     best_skill = label(SKILL_LABELS, profile.get("best_skill"), "маленький вход в задачу")
     weak_point = label(REASON_LABELS, profile.get("avoidance_reason"), "вход при перегрузе")
     await log_event(u["user_id"], "offer", "profile_summary_shown", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer("""За эти дни бот уже начал собирать твою карту:
+— где ломается вход
+— какие навыки помогают
+— где нужен меньший шаг
+— как ты реагируешь на срывы
+
+Дальше система станет точнее.""")
     await answer_with_keyboard(m, u, day3_offer_text(main_pattern, best_skill, weak_point), kb_pay_choice, "pay_choice")
 
 
@@ -339,6 +377,42 @@ def is_admin(user_id: int) -> bool:
     """Admin commands are available only for user IDs listed in ADMIN_IDS env."""
     ids = os.getenv("ADMIN_IDS", "")
     return str(user_id) in [x.strip() for x in ids.split(",") if x.strip()]
+
+
+
+
+def _today_iso():
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+def should_show_micro_habit(u: Dict[str, Any], source: str = "done") -> bool:
+    if source == "after_crisis":
+        return False
+    if random.random() > 0.38:
+        return False
+    if (u.get("last_micro_habit_date") or "") == _today_iso():
+        return False
+    if u.get("stage") in {"crisis_choose_mode","crisis_voice","crisis_text","crisis_plan_confirm","confirm_analysis"}:
+        return False
+    return True
+
+async def maybe_show_micro_habit(m: Message, u: Dict[str, Any], source: str = "done"):
+    if not should_show_micro_habit(u, source):
+        return False
+    habits = LONG_TERM_MICRO_HABITS
+    last_id = u.get("last_micro_habit_id")
+    pool = [h for h in habits if h.get("id") != last_id] or habits
+    habit = random.choice(pool)
+    trainer = (u.get("trainer_key") or "marsha").lower()
+    variant = (habit.get("trainer_variants") or {}).get(trainer, "")
+    text = f"{habit.get('title')}\n\n{habit.get('text')}" + (f"\n\n{variant}" if variant else "")
+    u["last_micro_habit_id"] = habit.get("id")
+    u["last_micro_habit_date"] = _today_iso()
+    u["pending_skill_id"] = u.get("pending_skill_id")
+    u["micro_habit_json"] = json.dumps(habit, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "training", "micro_habit_shown", {"habit_id": habit.get("id"), "micro_habit_id": habit.get("id"), "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, text, kb_micro_habit, "micro_habit")
+    return True
 
 
 def current_skill_id(u: Dict[str, Any]) -> str:
@@ -1030,6 +1104,10 @@ async def main_flow(m: Message):
                     await show_route(m, u, "day3_summary")
                     await show_day3_offer(m, u, "day3_auto")
                     return
+                if random.random() < 0.25:
+                    await m.answer(random.choice(SYSTEM_PHRASES))
+                if await maybe_show_micro_habit(m, u, "done"):
+                    return
                 await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
                 return
 
@@ -1110,6 +1188,8 @@ async def main_flow(m: Message):
                 SHEETS_WEBHOOK_URL,
             )
             await log_event(u["user_id"], "training", "done_enough_today", {"completed_day": current_day, "next_day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
+            if await maybe_show_micro_habit(m, u, "day_closed"):
+                return
             await answer_with_keyboard(m, u, f"Ок. День {current_day} закрыт. В следующий раз начнём день {next_day}.", kb_training_main, "training_main")
             return
         reply = await ai_micro_reflect(text or "", trainer_key, client, OPENAI_CHAT_MODEL)
@@ -1117,6 +1197,36 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, trainer_say(trainer_key, reply), kb_done, "done")
         return
 
+
+
+    if text == "🤔 Зачем это?":
+        habit = {}
+        try:
+            habit = json.loads(u.get("micro_habit_json") or "{}")
+        except Exception:
+            habit = {}
+        await log_event(u["user_id"], "training", "micro_habit_why_clicked", {"habit_id": habit.get("id"), "micro_habit_id": habit.get("id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(habit.get("why") or "Это снижает трение входа и упрощает возврат.")
+        return
+    if text == "👍 Попробую":
+        habit = {}
+        try:
+            habit = json.loads(u.get("micro_habit_json") or "{}")
+        except Exception:
+            habit = {}
+        await log_event(u["user_id"], "training", "micro_habit_try_clicked", {"habit_id": habit.get("id"), "micro_habit_id": habit.get("id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Ок. Даже один маленький эксперимент считается.")
+        await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+        return
+    if text == "➡️ Дальше":
+        habit = {}
+        try:
+            habit = json.loads(u.get("micro_habit_json") or "{}")
+        except Exception:
+            habit = {}
+        await log_event(u["user_id"], "training", "micro_habit_skipped", {"habit_id": habit.get("id"), "micro_habit_id": habit.get("id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(m, u, "Ок. Возвращаемся к системе шагов.", kb_training_main, "training_main")
+        return
 
     # ask_name
     if u["stage"] == "ask_name":
@@ -1578,6 +1688,10 @@ async def main_flow(m: Message):
                 await show_route(m, u, "day3_summary")
                 await show_day3_offer(m, u, "day3_auto")
                 return
+            if random.random() < 0.25:
+                await m.answer(random.choice(SYSTEM_PHRASES))
+            if await maybe_show_micro_habit(m, u, "done"):
+                return
             await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
             return
 
@@ -1782,6 +1896,13 @@ async def main_flow(m: Message):
             main_pattern = label(PATTERN_LABELS, profile.get("main_pattern"), "сложно войти в действие")
             best_skill = label(SKILL_LABELS, profile.get("best_skill"), "маленький вход в задачу")
             weak_point = label(REASON_LABELS, profile.get("avoidance_reason"), "вход при перегрузе")
+            await m.answer("""За эти дни бот уже начал собирать твою карту:
+— где ломается вход
+— какие навыки помогают
+— где нужен меньший шаг
+— как ты реагируешь на срывы
+
+Дальше система станет точнее.""")
             await answer_with_keyboard(m, u, day3_offer_text(main_pattern, best_skill, weak_point), kb_pay_choice, "pay_choice")
             return
         await answer_with_keyboard(m, u, "Выбирай кнопкой 👇", kb_pay_choice, "pay_choice")
@@ -1874,8 +1995,16 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     u["stage"] = "confirm_analysis"
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await update_user_profile(u["user_id"], {"recommended_track": "procrastination"}, DB_PATH)
-    await log_event(u["user_id"], "analysis", "profile_signal_collected", {"source": "diagnosis", "recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
+    diagnosis_profile_patch = profile_patch_from_diagnosis(comp)
+    await update_user_profile(u["user_id"], diagnosis_profile_patch, DB_PATH)
+    await log_event(
+        u["user_id"],
+        "analysis",
+        "profile_signal_collected",
+        {"source": "diagnosis", **diagnosis_profile_patch},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
     await log_event(u["user_id"], "analysis", "recommended_track_shown", {"recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     fallback_notice = ""

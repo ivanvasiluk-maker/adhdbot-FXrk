@@ -64,6 +64,9 @@ USER_FIELDS = [
     "has_started_training",
     "last_offer_shown_at",
     "profile_json",
+    "last_micro_habit_id",
+    "last_micro_habit_date",
+    "micro_habit_json",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -174,6 +177,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
         "last_offer_shown_at": None,
         "profile_json": {},
+        "last_micro_habit_id": None,
+        "last_micro_habit_date": None,
+        "micro_habit_json": None,
     }
 
 async def init_db(db_path: str):
@@ -222,7 +228,10 @@ async def init_db(db_path: str):
                 analysis_retry_count INTEGER,
                 has_started_training INTEGER,
                 last_offer_shown_at TEXT,
-                profile_json TEXT DEFAULT '{}'
+                profile_json TEXT DEFAULT '{}',
+                last_micro_habit_id TEXT,
+                last_micro_habit_date TEXT,
+                micro_habit_json TEXT
             )
             """
         )
@@ -313,7 +322,10 @@ EXTRA_USER_COLS = {
     "pending_skill_day": "INTEGER",
     "today_target": "TEXT",
     "last_offer_shown_at": "TEXT",
-    "profile_json": "TEXT DEFAULT '{}'"
+    "profile_json": "TEXT DEFAULT '{}'",
+    "last_micro_habit_id": "TEXT",
+    "last_micro_habit_date": "TEXT",
+    "micro_habit_json": "TEXT"
 }
 
 async def migrate_db(db_path: str):

@@ -80,6 +80,8 @@ ALLOWED_KEYS = {
     "action_done_count",
     "action_failed_count",
     "downscale_count",
+    "habit_id",
+    "micro_habit_id",
 }
 
 log = logging.getLogger("sheets_sync")
