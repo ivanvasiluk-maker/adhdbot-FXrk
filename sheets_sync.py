@@ -66,6 +66,22 @@ ALLOWED_KEYS = {
     "payment_click",
     "error_type",
     "error_source",
+    "main_pattern",
+    "avoidance_reason",
+    "emotional_trigger",
+    "best_skill",
+    "failed_skill",
+    "recommended_track",
+    "next_theme",
+    "last_successful_skill",
+    "needs_downscale",
+    "needs_minimum_action",
+    "next_skill_hint",
+    "action_done_count",
+    "action_failed_count",
+    "downscale_count",
+    "habit_id",
+    "micro_habit_id",
 }
 
 log = logging.getLogger("sheets_sync")

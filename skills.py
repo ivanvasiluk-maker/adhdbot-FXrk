@@ -1,3 +1,12 @@
+TRACKS = {
+    "procrastination": {"title": "Запуск и прокрастинация", "description": "Старт, внимание, возврат после срыва", "enabled": True},
+    "anxiety": {"title": "Тревога и действие", "description": "Действовать при тревоге и неопределённости", "enabled": False},
+    "burnout": {"title": "Энергия и восстановление", "description": "Ресурс, усталость, минимальный день", "enabled": False},
+    "shame": {"title": "Стыд и страх оценки", "description": "Ошибки, видимость, самокритика", "enabled": False},
+    "career": {"title": "Профориентация и жизненный вектор", "description": "Смысл, выбор, работа, направление", "enabled": False},
+    "migration": {"title": "Жизнь в миграции", "description": "Адаптация, язык, быт, опора", "enabled": False},
+}
+
 # Предложить изменение плана на определённый день
 def propose_plan_override(u: dict, day_number: int, new_skill_id: str):
     if new_skill_id not in SKILLS_DB:
