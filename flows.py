@@ -670,7 +670,7 @@ def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str
 
 async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
     """Запустить анализ"""
-    from texts import kb_analysis_confirm, kb_analysis_need_more
+    from texts import kb_analysis_confirm, kb_analysis_need_more, preliminary_hypothesis_note
 
     if analysis_needs_more_input(user_text):
         u["analysis_json"] = json.dumps({"user_text": clamp_str(user_text, 1000), "needs_more": True}, ensure_ascii=False)
@@ -723,7 +723,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual precise analysis before asking for confirmation.
-    msg = f"{format_comprehensive_analysis(comp_to_store, r)}\n\nЭто похоже на тебя?"
+    msg = f"{format_comprehensive_analysis(comp_to_store, r)}\n\n{preliminary_hypothesis_note()}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(

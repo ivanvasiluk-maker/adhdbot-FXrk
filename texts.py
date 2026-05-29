@@ -537,6 +537,98 @@ def day3_offer_text(main_pattern: str = "сложно войти в действ
     )
 
 
+
+def preliminary_hypothesis_note() -> str:
+    return (
+        "Пока это предварительная гипотеза.\n\n"
+        "Мы ещё не знаем тебя достаточно хорошо.\n\n"
+        "Первые дни система будет смотреть:\n"
+        "— где ломается вход\n"
+        "— какие навыки помогают\n"
+        "— где нужен меньший шаг\n"
+        "— как ты реагируешь на срывы\n"
+        "— что облегчает старт именно тебе\n\n"
+        "Поэтому более точная карта появится через несколько дней практики."
+    )
+
+
+def day3_primary_map_text(
+    start_pattern: str,
+    avoidance_trigger: str,
+    best_skills: str,
+    downscale_pattern: str,
+    preferred_activation: str,
+    return_pattern: str,
+) -> str:
+    return (
+        "🧭 Первичная карта\n\n"
+        "За эти дни уже видно,\n"
+        "что проблема не сводится к “лени”.\n\n"
+        "Что система заметила:\n\n"
+        f"— тебе особенно трудно начинать:\n{start_pattern}\n\n"
+        f"— чаще всего вход ломается из-за:\n{avoidance_trigger}\n\n"
+        f"— лучше всего сработали:\n{best_skills}\n\n"
+        f"— когда шаг становится слишком большим:\n{downscale_pattern}\n\n"
+        f"— похоже, тебе легче действовать:\n{preferred_activation}\n\n"
+        f"— после срывов ты чаще:\n{return_pattern}\n\n"
+        "Это ещё не полная картина.\n"
+        "Но система уже начала подстраивать тренировки под тебя.\n\n"
+        "Следующие недели нужны не для “мотивации”,\n"
+        "а чтобы собрать устойчивую модель:\n"
+        "— как тебе легче входить в задачи\n"
+        "— как удерживать внимание\n"
+        "— как возвращаться без самокритики\n"
+        "— какие навыки реально работают именно у тебя\n\n"
+        "Сейчас у нас уже есть первые сигналы.\n"
+        "Но устойчивые паттерны появляются только через повторения.\n\n"
+        "Следующий этап —\n"
+        "не просто упражнения,\n"
+        "а сбор устойчивой модели:\n"
+        "что помогает именно тебе,\n"
+        "где ломается внимание,\n"
+        "и как выстроить систему,\n"
+        "в которую мозгу легче возвращаться."
+    )
+
+
+def profile_map_details_text() -> str:
+    return (
+        "Сейчас выводы ещё предварительные.\n\n"
+        "Точная модель строится не по словам,\n"
+        "а по повторяющимся действиям:\n\n"
+        "— какие навыки ты избегаешь\n"
+        "— где возвращаешься\n"
+        "— какие форматы помогают\n"
+        "— как реагируешь на перегруз\n"
+        "— какие шаги оказываются слишком большими\n\n"
+        "Поэтому система становится точнее\n"
+        "не после длинных анкет,\n"
+        "а после реальных попыток."
+    )
+
+
+def profile_signals_text(
+    return_count: int,
+    downscale_count: int,
+    done_count: int,
+    avoidance_trigger: str,
+    best_skills: str,
+    preferred_activation: str,
+) -> str:
+    return (
+        "📊 Что уже видно:\n\n"
+        f"Возвраты после срыва: {return_count}\n"
+        f"Downscale: {downscale_count}\n"
+        f"Успешные подходы: {done_count}\n\n"
+        "Чаще всего мешает:\n"
+        f"😬 {avoidance_trigger}\n\n"
+        "Лучше всего помогают:\n"
+        f"{best_skills}\n\n"
+        "Похоже, тебе легче начинать:\n"
+        f"{preferred_activation}\n\n"
+        "Это пока предварительная карта."
+    )
+
 def payment_20_stub_text() -> str:
     return (
         "Оплата почти готова.\n"
@@ -564,17 +656,21 @@ def payment_declined_soft_text() -> str:
 
 def payment_includes_text() -> str:
     return (
-        "В месячном режиме мы не просто даём упражнения.\n\n"
-        "Мы собираем твою карту действия:\n\n"
-        "— где ты застреваешь\n"
-        "— какие задачи тебя блокируют\n"
-        "— что запускает избегание\n"
+        "Сейчас у нас уже есть первые сигналы.\n"
+        "Но устойчивые паттерны появляются только через повторения.\n\n"
+        "Следующий этап —\n"
+        "не просто упражнения,\n"
+        "а сбор устойчивой модели:\n"
+        "что помогает именно тебе,\n"
+        "где ломается внимание,\n"
+        "и как выстроить систему,\n"
+        "в которую мозгу легче возвращаться.\n\n"
+        "В месячном режиме система смотрит:\n"
+        "— где ломается вход\n"
         "— какие навыки реально помогают\n"
-        "— как ты возвращаешься после срыва\n\n"
-        "В конце месяца у тебя будет:\n"
-        "личный протокол запуска,\n"
-        "стратегия возврата\n"
-        "и понимание, какие темы брать дальше."
+        "— где нужен меньший шаг\n"
+        "— как ты возвращаешься после срыва\n"
+        "— какой формат запуска подходит тебе"
     )
 
 
@@ -703,9 +799,8 @@ kb_training_main = ReplyKeyboardMarkup(
 
 kb_more_actions = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="🗺 Показать маршрут")],
-        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🔁 Заменить навык")],
-        [KeyboardButton(text="❓ Сомневаюсь")],
+        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="😑 Ты меня не понял")],
         [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True
@@ -823,7 +918,26 @@ kb_yes_no = ReplyKeyboardMarkup(
 kb_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="📚 Подробнее")],
-        [KeyboardButton(text="🤔 Не совсем"), KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="😑 Ты меня не понял"), KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="🤔 Не совсем")],
+    ],
+    resize_keyboard=True
+)
+
+kb_misunderstood_reasons = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="5. Хочу объяснить иначе")],
+    ],
+    resize_keyboard=True
+)
+
+kb_analysis_need_more = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
+        [KeyboardButton(text="📱 Отвлечения"), KeyboardButton(text="🌀 Слишком много вариантов")],
+        [KeyboardButton(text="😶 Не вижу смысла")],
     ],
     resize_keyboard=True
 )
@@ -866,9 +980,9 @@ kb_micro_habit = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💳 Месяц — €14.98")],
-        [KeyboardButton(text="📚 Что будет дальше")],
-        [KeyboardButton(text="🧭 Показать карту ещё раз")],
+        [KeyboardButton(text="💳 Продолжить за €14.98")],
+        [KeyboardButton(text="📚 Подробнее о карте")],
+        [KeyboardButton(text="🧭 Показать мои сигналы")],
         [KeyboardButton(text="🤔 Подумаю")],
     ],
     resize_keyboard=True
@@ -922,7 +1036,7 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
 
 ONBOARDING_SCREENS = [
     '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не диагноз.\nВ кризис — жми «🆘 Кризис».',
-    'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая диагностика — и первый навык.',
+    'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
 
 # ============================================================

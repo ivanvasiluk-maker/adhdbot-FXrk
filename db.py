@@ -435,10 +435,21 @@ REASON_LABELS = {
 
 SKILL_LABELS = {
     "open_only": "открыть задачу без требования работать",
-    "task_naming": "назвать задачу одним словом",
     "ninety_sec_start": "90 секунд входа",
     "bad_first_step": "плохой первый шаг",
+    "task_naming": "назвать задачу одним словом",
+    "one_tab_focus": "одно окно для удержания внимания",
+    "visible_next_step": "сделать следующий шаг видимым",
+    "phone_far_3min": "убрать телефон на 3 минуты",
+    "restart_after_slip": "возврат после выпадения",
     "restart_after_break": "возврат после срыва",
+    "self_criticism_to_instruction": "перевести самокритику в инструкцию",
+    "check_the_facts_light": "проверить факт против приговора",
+    "urge_surf_60": "пережить импульс отвлечься 60 секунд",
+    "body_before_task": "сначала тело, потом задача",
+    "minimum_viable_day": "минимально жизнеспособный день",
+    "body_doubling_plan": "запуск рядом с человеком",
+    "if_then_plan": "если–то план для маленького входа",
 }
 
 
