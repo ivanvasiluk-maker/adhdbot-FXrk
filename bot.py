@@ -53,7 +53,7 @@ from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
     send_trainer_photo_if_any, run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
-    _extract_json, clamp_str
+    format_comprehensive_analysis, normalize_analysis, _extract_json, clamp_str
 )
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
 from core.engine import (
@@ -61,6 +61,8 @@ from core.engine import (
     handle_action_result as engine_handle_action_result,
     handle_downscale as engine_handle_downscale,
     should_show_offer as engine_should_show_offer,
+    build_day_core_updates as engine_build_day_core_updates,
+    core_round_count_today as engine_core_round_count_today,
 )
 import sheets_sync as sheets_sync_module
 
@@ -206,6 +208,30 @@ def user_is_in_action_loop(u: Dict[str, Any]) -> bool:
     return bool(u.get("analysis_json") or u.get("plan_json") or u.get("has_started_training")) and u.get("stage") in ACTION_RELATED_STAGES
 
 
+
+
+def mark_day_core_round_done(u: Dict[str, Any]) -> int:
+    """Increment today's fixed core-skill round counter and return the new value."""
+    sid = current_skill_id(u)
+    updates = engine_build_day_core_updates(u, sid) if sid else {}
+    u.update(updates)
+    current = engine_core_round_count_today(u)
+    u["day_core_round_count"] = current + 1
+    return int(u["day_core_round_count"])
+
+
+def replace_day_core_skill(u: Dict[str, Any], skill_id: str):
+    """Explicit replacement: swap today's core skill and reset its daily rounds."""
+    if skill_id:
+        u.update(engine_build_day_core_updates(u, skill_id, reset_rounds=True))
+
+
+def clear_day_core_lock(u: Dict[str, Any]):
+    """Admin/test helper: allow a new core skill without waiting for local midnight."""
+    u["day_core_skill_id"] = None
+    u["day_core_skill_date"] = None
+    u["day_core_round_count"] = 0
+
 def _remember_downscale_pattern(u: Dict[str, Any], skill_id: str):
     """Сохранить локальную адаптацию без запуска повторной диагностики."""
     data: Dict[str, Any] = {}
@@ -224,8 +250,8 @@ def _remember_downscale_pattern(u: Dict[str, Any], skill_id: str):
 def _select_downscale_skill(u: Dict[str, Any]) -> str:
     """Выбрать и поставить текущий навык downscale на сегодняшний день."""
     skill_id = DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL
-    day = int(u.get("day") or 1)
-    propose_plan_override(u, day, skill_id)
+    # Downscale is an in-day version, not a replacement of today's core skill.
+    # Explicit replacement is handled by the "Заменить навык" branch.
     u["pending_skill_id"] = None
     u["pending_skill_day"] = None
     _remember_downscale_pattern(u, skill_id)
@@ -381,6 +407,20 @@ def is_admin(user_id: int) -> bool:
 
 
 
+def local_date_for_user(u: Dict[str, Any]) -> str:
+    try:
+        return dt.datetime.now(ZoneInfo(str(u.get("timezone") or "Europe/Vilnius"))).date().isoformat()
+    except Exception:
+        return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+
+def day_core_test_mode_enabled(u: Dict[str, Any]) -> bool:
+    return int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1
+
+
+def has_stale_day_core_lock(u: Dict[str, Any]) -> bool:
+    return bool(u.get("day_core_skill_date")) and u.get("day_core_skill_date") != local_date_for_user(u)
+
 def _today_iso():
     return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
@@ -416,6 +456,9 @@ async def maybe_show_micro_habit(m: Message, u: Dict[str, Any], source: str = "d
 
 
 def current_skill_id(u: Dict[str, Any]) -> str:
+    locked = u.get("day_core_skill_id")
+    if not day_core_test_mode_enabled(u) and locked in SKILLS_DB and u.get("day_core_skill_date") == local_date_for_user(u):
+        return locked
     plan = get_current_plan(u)
     if not plan:
         return ""
@@ -671,6 +714,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         if "current_day" in u:
             u["current_day"] = day
         u["pending_skill_day"] = None
+        clear_day_core_lock(u)
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -696,6 +740,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["profile_json"] = {}
         u["pending_skill_id"] = None
         u["today_target"] = None
+        clear_day_core_lock(u)
         u["payment_status"] = "free"
         u["free_mode"] = 0
         if int(u.get("is_test_user") or 0) != 1:
@@ -856,8 +901,7 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
     """Показать уменьшенный action-step внутри текущего тренировочного loop."""
     screen = engine_handle_downscale(u, reason)
     skill_id = screen.get("skill_id") or DOWNSCALE_PRIMARY_SKILL
-    day = int(u.get("day") or 1)
-    propose_plan_override(u, day, skill_id)
+    # Keep the current core skill fixed; this is only a smaller version for the same day.
     u["pending_skill_id"] = None
     u["pending_skill_day"] = None
     _remember_downscale_pattern(u, skill_id)
@@ -1094,6 +1138,7 @@ async def main_flow(m: Message):
                 await log_event(u["user_id"], "training", "downscale_done", {"stage": "downscale_action", "day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
                 previous_done = int(u.get("done_count") or 0)
                 u["done_count"] = previous_done + 1
+                mark_day_core_round_done(u)
                 gamify_apply(u, 2, "downscale_done")
                 u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
@@ -1116,6 +1161,7 @@ async def main_flow(m: Message):
                 await log_event(u["user_id"], "training", "downscale_done", {"stage": "downscale_name_task", "day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
                 previous_done = int(u.get("done_count") or 0)
                 u["done_count"] = previous_done + 1
+                mark_day_core_round_done(u)
                 gamify_apply(u, 2, "downscale_done")
                 u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
@@ -1161,12 +1207,32 @@ async def main_flow(m: Message):
     # Пост-выполнение: только два варианта, без перегруза кнопками
     if u.get("stage") == "waiting_next_day":
         trainer_key = u.get("trainer_key") or "marsha"
+        if text == "🧭 Моя карта" or "моя карта" in low:
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            txt = render_short_user_map(profile, u.get("name"))
+            await log_event(u["user_id"], "training", "profile_map_requested", {"source": "day_core_stop"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, txt, kb_done, "done")
+            return
         if text == "🔁 Ещё круг" or "еще круг" in low or "ещё круг" in low:
+            if not day_core_test_mode_enabled(u) and has_stale_day_core_lock(u):
+                current_day = int(u.get("day") or 1)
+                plan = get_current_plan(u)
+                max_day = len(plan) if plan else current_day + 1
+                u["day"] = min(current_day + 1, max_day)
+                u["today_target"] = None
+                u["pending_skill_id"] = None
+                u["pending_skill_day"] = None
+                clear_day_core_lock(u)
+                await save_user(u, DB_PATH)
+                await log_event(u["user_id"], "training", "day_core_date_rollover", {"from_day": current_day, "to_day": u["day"]}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await ask_today_action(m, u)
+                return
             screen = engine_get_next_screen(u, {"type": "repeat_skill_card"})
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
             await log_engine_events(u, screen)
-            await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+            markup = kb_day_core_stop if screen.get("buttons") == ["🌙 На сегодня хватит", "🧭 Моя карта"] else kb_skill_card
+            await answer_with_keyboard(m, u, screen["text"], markup, "day_core_stop" if markup is kb_day_core_stop else "skill_card")
             return
         if text == "🌙 На сегодня хватит" or "хватит" in low:
             current_day = int(u.get("day") or 1)
@@ -1513,6 +1579,25 @@ async def main_flow(m: Message):
         )
         return
 
+    # analysis_need_more
+    if u.get("stage") == "analysis_need_more":
+        if not text:
+            await answer_with_keyboard(m, u, "Выбери, что чаще ломает вход 👇", kb_analysis_need_more, "analysis_need_more")
+            return
+        previous_text = ""
+        try:
+            previous_text = (json.loads(u.get("analysis_json") or "{}") or {}).get("user_text", "")
+        except Exception:
+            previous_text = ""
+        combined_text = clamp_str(f"{previous_text}\n\nЧаще ломает вход: {text}", 1500)
+        u["analysis_json"] = json.dumps({"user_text": combined_text}, ensure_ascii=False)
+        u["stage"] = "run_analysis"
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "analysis", "analysis_extra_signal_added", {"answer": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Ок. Теперь точнее.")
+        await run_analysis(m, u, combined_text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        return
+
     # analysis_retry_await_clarification
     if u.get("stage") == "analysis_retry_await_clarification":
         if not text:
@@ -1673,6 +1758,7 @@ async def main_flow(m: Message):
             screen = engine_handle_action_result(u, "done")
             previous_done = int(u.get("done_count") or 0)
             u["done_count"] = previous_done + 1
+            mark_day_core_round_done(u)
             gamify_apply(u, 2, "done")
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
@@ -1698,6 +1784,7 @@ async def main_flow(m: Message):
         if text == "↩️ Вернулся(лась)" or "вернулся" in low:
             screen = engine_handle_action_result(u, "return")
             u["return_count"] = int(u.get("return_count") or 0) + 1
+            mark_day_core_round_done(u)
             gamify_apply(u, 1, "return")
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
@@ -1747,6 +1834,7 @@ async def main_flow(m: Message):
 
             plan[idx] = new_sid
             u["plan_json"] = json.dumps(plan, ensure_ascii=False)
+            replace_day_core_skill(u, new_sid)
             await save_user(u, DB_PATH)
 
             skill_msg = format_skill(new_sid, u.get("trainer_key") or "marsha") if new_sid in SKILLS_DB else "Выбран новый навык."
@@ -1983,6 +2071,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     if not user_text:
         user_text = f"У меня проблемы с {bucket}"
     comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
+    comp = normalize_analysis(comp, user_text)
     if comp.get("analysis_fallback"):
         await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "show_comprehensive_analysis"}, DB_PATH, SHEETS_WEBHOOK_URL)
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
@@ -2007,10 +2096,9 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     )
     await log_event(u["user_id"], "analysis", "recommended_track_shown", {"recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
-    fallback_notice = ""
-    if comp.get("analysis_fallback"):
-        fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
-    msg = f"{fallback_notice}{comp.get('short_summary', 'Похоже на тебя?')}\n\nЭто похоже на тебя?"
+    comp_for_message = dict(comp)
+    comp_for_message["user_text"] = user_text
+    msg = f"{format_comprehensive_analysis(comp_for_message)}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 
 # ============================================================
