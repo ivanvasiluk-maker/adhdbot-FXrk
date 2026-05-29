@@ -235,15 +235,10 @@ async def advance_day(m: Message, u: Dict[str, Any], next_day: int, db_path: str
 # ============================================================
 
 async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheets_webhook: str, client=None, model: str = "gpt-4o-mini"):
-    """Обработка кризиса пользователя"""
+    """Short crisis flow: stabilize first, do not explain at length."""
     from db import gamify_apply
-    fallback_sid = "return_no_punish"  # безопасный навык по умолчанию
-    
-    name = u.get("name") or "друг"
-    trainer_key = u.get("trainer_key") or "marsha"
-    bucket = u.get("bucket") or "mixed"
+    from texts import kb_crisis_stabilize, crisis_stabilize_text
 
-    # increment first; limit free crisis uses
     u["crisis_count"] = int(u.get("crisis_count") or 0) + 1
     await save_user(u, db_path)
 
@@ -251,64 +246,12 @@ async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheet
         await m.answer("🆘 Кризис — доступен без ограничений в полной версии.")
         return
 
-    await log_event(u["user_id"], u.get("stage",""), "crisis_message", {"len": len(user_text)}, db_path, sheets_webhook)
+    await log_event(u["user_id"], u.get("stage", ""), "crisis_message", {"len": len(user_text or "")}, db_path, sheets_webhook)
     gamify_apply(u, 1, "crisis_used")
-
-    await m.answer(trainer_say(trainer_key, "Ок. Сейчас быстро стабилизируем и вернём контроль."))
-    
-    # AI crisis help (если доступно)
-    try:
-        r = await ai_crisis_help(trainer_key, bucket, user_text, client, model)
-    except Exception as e:
-        log.error(f"ai_crisis_help failed: {e}")
-        # жёсткий фолбэк, чтобы не было тишины
-        r = {
-            "support": "Ок. Берём один шаг, чтобы вернуть контроль.",
-            "skill_id": "return_no_punish",
-            "why_this": "Возврат без самонаказания снимает ступор и даёт действие.",
-            "micro_step": "Скажи «Возвращаюсь» и сделай 60–120 сек самого первого шага.",
-            "plan_change": None,
-        }
-
-    sid = r.get("skill_id") or fallback_sid
-    if sid not in SKILLS_DB:
-        log.warning(f"[CRISIS] skill_id {sid} not in SKILLS_DB, fallback to {fallback_sid}")
-        sid = fallback_sid
-    from skills import format_skill, suggest_alternative_skill
-    trainer_key = u.get("trainer_key") or "marsha"
-    # Use format_skill for modern skill presentation
-    skill_msg = format_skill(sid, trainer_key)
-    micro_step = r.get("micro_step") or SKILLS_DB[sid].get("minimum", SKILLS_DB[sid].get("how"))
-    msg = (
-        f"🆘 {name}, коротко:\n"
-        f"{r['support']}\n\n"
-        f"{skill_msg}\n"
-        f"✅ Микро-шаг: {micro_step}\n\n"
-        f"Почему это сейчас: {r['why_this']}"
-    )
-    await m.answer(msg)
-
-    pc = r.get("plan_change")
-    if pc:
-        day_num = int(u.get("day") or 1) + int(pc.get("day_offset") or 1)
-        new_sid = pc.get("replace_with")
-        if new_sid in SKILLS_DB:
-            u["pending_plan_change"] = json.dumps({"day_num": day_num, "skill_id": new_sid}, ensure_ascii=False)
-            u["stage"] = "crisis_plan_confirm"
-            await save_user(u, db_path)
-            await m.answer(
-                f"Хочешь, я на завтра (день {day_num}) заменю навык на:\n"
-                f"➡️ {SKILLS_DB[new_sid]['name']} ?",
-                reply_markup=kb_yes_no
-            )
-            return
-
-    u["stage"] = "training"
+    u["stage"] = "crisis_stabilize"
     await save_user(u, db_path)
-    button_count = keyboard_button_count(kb_training_main)
-    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
-    await log_event(u["user_id"], "training", "crisis_completed", {"skill_id": sid}, db_path, sheets_webhook)
-    await m.answer("Возвращаемся в тренировку 👇", reply_markup=kb_training_main if button_count <= 5 else None)
+    await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_shown", {}, db_path, sheets_webhook)
+    await m.answer(crisis_stabilize_text(), reply_markup=kb_crisis_stabilize)
 
 # ============================================================
 # AI CRISIS HELP

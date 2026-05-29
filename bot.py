@@ -356,6 +356,39 @@ async def record_profile_signal(user_id: int, stage: str, patch: Dict[str, Any],
     await log_event(user_id, stage, "profile_map_updated", event_meta, DB_PATH, SHEETS_WEBHOOK_URL)
 
 
+def done_flow_text(include_system_line: bool = False) -> str:
+    text = "Есть. Один подход засчитан."
+    if include_system_line:
+        text += "\n\nМы сейчас тренируем возврат, а не мотивацию."
+    return text
+
+
+def today_progress_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    done_today = int(u.get("day_core_round_count") or 0)
+    downscale_today = int(profile.get("downscale_count_today") or 0)
+    return_today = int(profile.get("return_count_today") or 0)
+    return (
+        "Сегодня уже:\n"
+        f"— {done_today} подхода\n"
+        f"— {downscale_today} раз уменьшили шаг\n"
+        f"— {return_today} возврата\n\n"
+        "Это уже не “ничего не делал”. Это тренировка."
+    )
+
+
+def _today_profile_counter_patch(profile: Dict[str, Any], counter_key: str, date_key: str) -> Dict[str, Any]:
+    today = _today_iso()
+    current = int(profile.get(counter_key) or 0) if profile.get(date_key) == today else 0
+    return {date_key: today, counter_key: current + 1}
+
+
+async def send_crisis_stabilize(m: Message, u: Dict[str, Any], source: str):
+    u["stage"] = "crisis_stabilize"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], u["stage"], "crisis_open", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
+
+
 def _remember_downscale_pattern(u: Dict[str, Any], skill_id: str):
     """Сохранить локальную адаптацию без запуска повторной карты."""
     data: Dict[str, Any] = {}
@@ -680,17 +713,22 @@ def day_core_test_mode_enabled(u: Dict[str, Any]) -> bool:
 def has_stale_day_core_lock(u: Dict[str, Any]) -> bool:
     return bool(u.get("day_core_skill_date")) and u.get("day_core_skill_date") != local_date_for_user(u)
 
-def _today_iso():
+def _today_iso(u: Optional[Dict[str, Any]] = None):
+    if u:
+        return local_date_for_user(u)
     return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 def should_show_micro_habit(u: Dict[str, Any], source: str = "done") -> bool:
-    if source == "after_crisis":
+    # Side skill is a small optional system habit: max once per user-local day,
+    # and never immediately after crisis/overload/downscale.
+    blocked_sources = {"after_crisis", "failed", "failed_too_hard", "failed_no_energy", "downscale", "downscale_done", "too_hard", "overload"}
+    if source in blocked_sources or "crisis" in source or "downscale" in source or "overload" in source:
         return False
     if random.random() > 0.38:
         return False
-    if (u.get("last_micro_habit_date") or "") == _today_iso():
+    if (u.get("last_micro_habit_date") or "") == _today_iso(u):
         return False
-    if u.get("stage") in {"crisis_choose_mode","crisis_voice","crisis_text","crisis_plan_confirm","confirm_analysis"}:
+    if u.get("stage") in {"crisis_choose_mode","crisis_voice","crisis_text","crisis_plan_confirm","confirm_analysis", "failed_options", "downscale_action", "downscale_name_task"}:
         return False
     return True
 
@@ -705,7 +743,7 @@ async def maybe_show_micro_habit(m: Message, u: Dict[str, Any], source: str = "d
     variant = (habit.get("trainer_variants") or {}).get(trainer, "")
     text = f"{habit.get('title')}\n\n{habit.get('text')}" + (f"\n\n{variant}" if variant else "")
     u["last_micro_habit_id"] = habit.get("id")
-    u["last_micro_habit_date"] = _today_iso()
+    u["last_micro_habit_date"] = _today_iso(u)
     u["pending_skill_id"] = u.get("pending_skill_id")
     u["micro_habit_json"] = json.dumps(habit, ensure_ascii=False)
     await save_user(u, DB_PATH)
@@ -915,10 +953,8 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return True
 
     if command == "/crisis":
-        u["stage"] = "crisis_choose_mode"
-        await save_user(u, DB_PATH)
         await log_event(uid, u.get("stage", ""), "crisis_clicked", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, "🆘 Ок. Как удобнее?", kb_crisis_mode, "crisis_mode")
+        await send_crisis_stabilize(m, u, "command")
         return True
 
     return False
@@ -1156,27 +1192,122 @@ async def ask_today_action(m: Message, u: Dict[str, Any]):
     await start_day(m, u, int(u.get("day") or 1), DB_PATH, SHEETS_WEBHOOK_URL)
 
 
+FAILED_REASON_SKILL_MAP = {
+    "failed_too_hard": {
+        "skill_ids": ["task_naming", "open_only", "visible_next_step"],
+        "trigger": "шаг слишком большой",
+        "avoidance_pattern": "entry_too_large",
+        "downscale_pattern": "needs_smaller_step",
+        "intro": "Ок. Значит, шаг был слишком большой. Не давим. Уменьшаем вход.",
+    },
+    "failed_no_energy": {
+        "skill_ids": ["body_before_task", "minimum_viable_day", "open_only"],
+        "trigger": "нет ресурса на вход",
+        "avoidance_pattern": "low_energy",
+        "downscale_pattern": "needs_resource_step",
+        "energy_pattern": "low_start_energy",
+        "intro": "Ок. Это не про дисциплину. Сначала ресурс, потом задача.",
+    },
+    "failed_stuck_phone": {
+        "skill_ids": ["phone_far_3min", "one_tab_focus", "visible_next_step"],
+        "trigger": "уход в быстрый дофамин",
+        "avoidance_pattern": "dopamine_avoidance",
+        "attention_pattern": "scroll_autopilot",
+        "downscale_pattern": "needs_stimulus_control",
+        "intro": "Ок. Это залипание, не лень. Работаем не запретом, а паузой и средой.",
+    },
+}
+
+
+def failed_reason_skill(reason: str) -> tuple[str, Dict[str, Any]]:
+    config = FAILED_REASON_SKILL_MAP.get(reason) or FAILED_REASON_SKILL_MAP["failed_too_hard"]
+    for skill_id in config["skill_ids"]:
+        if skill_id in SKILLS_DB:
+            return skill_id, config
+    return DOWNSCALE_PRIMARY_SKILL, config
+
+
+def failed_reason_explanation(reason: str, u: Dict[str, Any]) -> str:
+    target = u.get("today_target") or "текущая задача"
+    if reason == "failed_stuck_phone":
+        return (
+            "Ок. Логика простая.\n\n"
+            "Ты не обязан запрещать себе скролл.\n"
+            "Сейчас тренируем момент ДО автопилота.\n\n"
+            "Пример:\n"
+            f"задача — {target}.\n"
+            "Рука тянется к ленте → ты ловишь этот момент → убираешь телефон на 3 минуты или оставляешь одно окно.\n\n"
+            "Физический шаг: положи телефон дальше руки или закрой лишние вкладки."
+        )
+    if reason == "failed_no_energy":
+        return (
+            "Ок. Логика простая.\n\n"
+            "Если энергии нет, задача не уменьшается силой воли.\n"
+            "Сначала снижаем физиологический перегруз.\n\n"
+            "Пример:\n"
+            f"задача — {target}.\n"
+            "Перед входом: вода, плечи вниз, один выдох, 30 секунд контакта с местом задачи.\n\n"
+            "Физический шаг: поставь воду рядом или встань на 20 секунд."
+        )
+    return (
+        "Ок. Логика простая.\n\n"
+        "Если шаг не сделался — он был слишком крупный или мутный.\n"
+        "Мы не спорим с этим. Режем до физического действия.\n\n"
+        "Пример:\n"
+        f"задача — {target}.\n"
+        "Не “поработать”, а назвать задачу одним словом, открыть место или оставить следующий шаг видимым.\n\n"
+        "Физический шаг: напиши одно слово про задачу или открой место задачи без работы."
+    )
+
 async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
-    """Показать уменьшенный action-step внутри текущего тренировочного loop."""
-    screen = engine_handle_downscale(u, reason)
-    skill_id = screen.get("skill_id") or DOWNSCALE_PRIMARY_SKILL
-    # Keep the current core skill fixed; this is only a smaller version for the same day.
+    """Показать причино-специфичный маленький action-step внутри текущего loop."""
+    skill_id, config = failed_reason_skill(reason)
+    skill = dict(SKILLS_DB.get(skill_id) or SKILLS_DB[DOWNSCALE_PRIMARY_SKILL])
+    skill.setdefault("skill_id", skill_id)
+
+    # Keep the current core skill fixed; this is only a smaller in-day response.
     u["pending_skill_id"] = None
     u["pending_skill_day"] = None
     _remember_downscale_pattern(u, skill_id)
-    u["stage"] = screen.get("next_state") or "downscale_action"
+    u["stage"] = "downscale_action"
     await save_user(u, DB_PATH)
+
     profile = await get_user_profile(u["user_id"], DB_PATH)
     downscale_count = int(profile.get("downscale_count") or 0) + 1
-    await record_profile_signal(u["user_id"], "training", {
-        "avoidance_pattern": "entry_too_large",
-        "avoidance_trigger": "перегруз перед стартом",
-        "downscale_pattern": "needs_smaller_step",
-        "energy_pattern": "low_start_energy" if reason == "failed_no_energy" else profile.get("energy_pattern") or "unknown",
+    signal_patch = {
+        "avoidance_pattern": config.get("avoidance_pattern"),
+        "avoidance_trigger": config.get("trigger"),
+        "attention_pattern": config.get("attention_pattern") or profile.get("attention_pattern"),
+        "downscale_pattern": config.get("downscale_pattern"),
+        "energy_pattern": config.get("energy_pattern") or profile.get("energy_pattern") or "unknown",
+        "next_skill_hint": skill_id,
         "downscale_count": downscale_count,
-    }, source=f"downscale_{reason}")
-    await log_engine_events(u, screen)
-    await answer_with_keyboard(m, u, screen["text"], kb_downscale, "downscale")
+        **_today_profile_counter_patch(profile, "downscale_count_today", "downscale_count_date"),
+    }
+    await record_profile_signal(u["user_id"], "training", signal_patch, source=f"downscale_{reason}")
+    await log_event(
+        u["user_id"],
+        "training",
+        "failed_reason_selected",
+        {"reason": reason, "skill_id": skill_id, "avoidance_trigger": config.get("trigger")},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+    await log_event(
+        u["user_id"],
+        "training",
+        "downscale_triggered",
+        {"reason": reason, "skill": skill_id},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+
+    text = (
+        f"{config.get('intro')}\n\n"
+        f"{format_skill_card(u, skill, u.get('today_target') or 'текущая задача')}"
+    )
+    await answer_with_keyboard(m, u, text, kb_downscale, "downscale")
+
 
 @router.message(CommandStart())
 async def cmd_start(m: Message):
@@ -1283,11 +1414,8 @@ async def main_flow(m: Message):
         return
 
     # Глобальный хук: кризис доступен из любого состояния, но не перебиваем активный кризис-флоу
-    if (text == "🆘 Кризис" or "кризис" in low) and u.get("stage") not in {"crisis_choose_mode", "crisis_voice", "crisis_text", "crisis_plan_confirm"}:
-        u["stage"] = "crisis_choose_mode"
-        await save_user(u, DB_PATH)
-        await log_event(u["user_id"], u["stage"], "crisis_open", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, "🆘 Ок. Как удобнее?", kb_crisis_mode, "crisis_mode")
+    if (text == "🆘 Кризис" or "кризис" in low) and u.get("stage") not in {"crisis_stabilize", "crisis_choose_mode", "crisis_voice", "crisis_text", "crisis_plan_confirm"}:
+        await send_crisis_stabilize(m, u, "global")
         return
 
     # "Ты меня не понял" is a rebuild flow, not a dead-end explanation.
@@ -1330,7 +1458,8 @@ async def main_flow(m: Message):
                 u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 await log_event(u["user_id"], "training", "dont_understand_clicked", {"source": "failed_options"}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await answer_with_keyboard(m, u, simple_explain_text(), kb_microstep, "microstep")
+                await log_event(u["user_id"], "training", "failed_reason_selected", {"reason": "failed_dont_understand"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await answer_with_keyboard(m, u, failed_reason_explanation("failed_too_hard", u), kb_microstep, "microstep")
                 return
             if is_misunderstood(text):
                 u["stage"] = "action_clarification"
@@ -1436,18 +1565,10 @@ async def main_flow(m: Message):
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                 }, source="downscale_done")
-                await m.answer(trainer_done_response(u.get("trainer_key") or "marsha"))
-                if previous_done == 0:
-                    await show_route(m, u, "first_done")
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
-                    await show_route(m, u, "day3_summary")
                     await show_day3_offer(m, u, "day3_auto")
                     return
-                if random.random() < 0.25:
-                    await m.answer(random.choice(SYSTEM_PHRASES))
-                if await maybe_show_micro_habit(m, u, "done"):
-                    return
-                await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
+                await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25), kb_done, "done")
                 return
 
         if u.get("stage") == "downscale_name_task":
@@ -1467,14 +1588,10 @@ async def main_flow(m: Message):
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                 }, source="downscale_done")
-                await m.answer(trainer_done_response(u.get("trainer_key") or "marsha"))
-                if previous_done == 0:
-                    await show_route(m, u, "first_done")
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
-                    await show_route(m, u, "day3_summary")
                     await show_day3_offer(m, u, "day3_auto")
                     return
-                await answer_with_keyboard(m, u, "Одно слово — это уже контакт с задачей. Что дальше?", kb_done, "done")
+                await answer_with_keyboard(m, u, done_flow_text(False), kb_done, "done")
                 return
         if text in {"💪 Давай действие", "💪 Сделать микрошаг"}:
             await send_downscale(m, u, "microstep_button")
@@ -1506,6 +1623,18 @@ async def main_flow(m: Message):
             )
             return
 
+    if u.get("stage") == "after_action_note":
+        note = " ".join((text or "").split()[:5]).strip()
+        if not note:
+            await m.answer("Напиши 1–5 слов: что изменилось после шага?")
+            return
+        u["stage"] = "waiting_next_day"
+        await save_user(u, DB_PATH)
+        await update_user_profile(u["user_id"], {"last_after_action_note": note}, DB_PATH)
+        await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note)}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(m, u, "Записал.", kb_done, "done")
+        return
+
     # Пост-выполнение: только два варианта, без перегруза кнопками
     if u.get("stage") == "waiting_next_day":
         trainer_key = u.get("trainer_key") or "marsha"
@@ -1515,7 +1644,20 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "training", "profile_map_requested", {"source": "day_core_stop"}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, txt, kb_done, "done")
             return
+        if text == "📌 Что изменилось?" or "что изменилось" in low:
+            u["stage"] = "after_action_note"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "training", "after_action_note_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Напиши 1-5 слов: что изменилось после шага?")
+            return
         if text == "🔁 Ещё круг" or "еще круг" in low or "ещё круг" in low:
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            if int(u.get("day_core_round_count") or 0) >= 3 and not day_core_test_mode_enabled(u):
+                await log_event(u["user_id"], "training", "daily_progression_stop_suggested", {"rounds": int(u.get("day_core_round_count") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await answer_with_keyboard(m, u, today_progress_text(u, profile), kb_day_core_stop, "day_core_stop")
+                return
+            if random.random() < 0.35:
+                await m.answer(today_progress_text(u, profile))
             if not day_core_test_mode_enabled(u) and has_stale_day_core_lock(u):
                 current_day = int(u.get("day") or 1)
                 plan = get_current_plan(u)
@@ -1536,7 +1678,7 @@ async def main_flow(m: Message):
             markup = kb_day_core_stop if screen.get("buttons") == ["🌙 На сегодня хватит", "🧭 Моя карта"] else kb_skill_card
             await answer_with_keyboard(m, u, screen["text"], markup, "day_core_stop" if markup is kb_day_core_stop else "skill_card")
             return
-        if text == "🌙 На сегодня хватит" or "хватит" in low:
+        if text in {"🌙 На сегодня хватит", "🌙 Хватит на сегодня"} or "хватит" in low:
             current_day = int(u.get("day") or 1)
             plan = get_current_plan(u)
             max_day = len(plan) if plan else current_day + 1
@@ -1560,9 +1702,7 @@ async def main_flow(m: Message):
                 return
             await answer_with_keyboard(m, u, f"Ок. День {current_day} закрыт. В следующий раз начнём день {next_day}.", kb_training_main, "training_main")
             return
-        reply = await ai_micro_reflect(text or "", trainer_key, client, OPENAI_CHAT_MODEL)
-        await log_event(u["user_id"], "training", "post_done_reflect", {"len": len(text or "")}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, trainer_say(trainer_key, reply), kb_done, "done")
+        await answer_with_keyboard(m, u, "Выбери кнопкой 👇", kb_done, "done")
         return
 
 
@@ -2115,10 +2255,7 @@ async def main_flow(m: Message):
             return
 
         if text == "🆘 Кризис" or "кризис" in low:
-            u["stage"] = "crisis_choose_mode"
-            await save_user(u, DB_PATH)
-            await log_event(u["user_id"], u["stage"], "crisis_open", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, "🆘 Ок. Как удобнее?", kb_crisis_mode, "crisis_mode")
+            await send_crisis_stabilize(m, u, "training_main")
             return
 
         if text in {"📊 Мой прогресс", "📊 Прогресс"} or "мой прогресс" in low or "прогресс" in low:
@@ -2144,18 +2281,10 @@ async def main_flow(m: Message):
                 "action_done_count": done_count,
             }, source="action_done")
             await log_engine_events(u, screen)
-            await m.answer(screen["text"])
-            if previous_done == 0:
-                await show_route(m, u, "first_done")
             if should_show_day3_offer(u, day):
-                await show_route(m, u, "day3_summary")
                 await show_day3_offer(m, u, "day3_auto")
                 return
-            if random.random() < 0.25:
-                await m.answer(random.choice(SYSTEM_PHRASES))
-            if await maybe_show_micro_habit(m, u, "done"):
-                return
-            await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
+            await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25), kb_done, "done")
             return
 
         if text == "↩️ Вернулся(лась)" or "вернулся" in low:
@@ -2166,9 +2295,11 @@ async def main_flow(m: Message):
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
             return_pattern = "strong_return_skill" if int(u.get("return_count") or 0) >= 2 else "return_after_slip"
+            profile = await get_user_profile(u["user_id"], DB_PATH)
             await record_profile_signal(u["user_id"], "training", {
                 "return_pattern": return_pattern,
                 "return_count": int(u.get("return_count") or 0),
+                **_today_profile_counter_patch(profile, "return_count_today", "return_count_date"),
             }, source="return_after_slip")
             await log_engine_events(u, screen)
             await m.answer(trainer_say(u.get("trainer_key") or "marsha", screen["text"]))
@@ -2225,6 +2356,34 @@ async def main_flow(m: Message):
             return
 
         await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
+        return
+
+    # crisis stabilization: calm -> skill -> choice
+    if u.get("stage") == "crisis_stabilize":
+        low = (text or "").lower().strip()
+        if text == "✅ Сделал" or low == "сделал":
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_done", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Контроль чуть ближе. Возвращайся только к маленькому шагу.", kb_training_main, "training_main")
+            return
+        if text == "↩️ Вернуться в тренировку" or "вернуться" in low:
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_return_training", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Только маленький шаг. Без героизма.", kb_training_main, "training_main")
+            return
+        if text == "🆘 Мне всё ещё плохо" or "всё ещё плохо" in low or "все еще плохо" in low:
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_still_bad", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
+            return
+        if text == "✍️ Написать, что происходит" or "написать" in low:
+            u["stage"] = "crisis_text"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_write_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Напиши 1–3 предложения: что происходит прямо сейчас?")
+            return
+        await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
         return
 
     # crisis_choose_mode
