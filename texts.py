@@ -834,6 +834,14 @@ kb_day_core_stop = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+kb_day_core_stop = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 На сегодня хватит")],
+        [KeyboardButton(text="🧭 Моя карта")],
+    ],
+    resize_keyboard=True
+)
+
 kb_failed = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="😵 Нет сил")],
