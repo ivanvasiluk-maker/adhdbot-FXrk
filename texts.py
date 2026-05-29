@@ -942,6 +942,15 @@ kb_analysis_need_more = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+kb_analysis_need_more = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
+        [KeyboardButton(text="📱 Отвлечения"), KeyboardButton(text="🌀 Слишком много вариантов")],
+        [KeyboardButton(text="😶 Не вижу смысла")],
+    ],
+    resize_keyboard=True
+)
+
 
 
 LONG_TERM_MICRO_HABITS = [
