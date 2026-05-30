@@ -67,6 +67,9 @@ USER_FIELDS = [
     "last_micro_habit_id",
     "last_micro_habit_date",
     "micro_habit_json",
+    "day_core_skill_id",
+    "day_core_skill_date",
+    "day_core_round_count",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -180,6 +183,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "last_micro_habit_id": None,
         "last_micro_habit_date": None,
         "micro_habit_json": None,
+        "day_core_skill_id": None,
+        "day_core_skill_date": None,
+        "day_core_round_count": 0,
     }
 
 async def init_db(db_path: str):
@@ -231,7 +237,10 @@ async def init_db(db_path: str):
                 profile_json TEXT DEFAULT '{}',
                 last_micro_habit_id TEXT,
                 last_micro_habit_date TEXT,
-                micro_habit_json TEXT
+                micro_habit_json TEXT,
+                day_core_skill_id TEXT,
+                day_core_skill_date TEXT,
+                day_core_round_count INTEGER DEFAULT 0
             )
             """
         )
@@ -325,7 +334,10 @@ EXTRA_USER_COLS = {
     "profile_json": "TEXT DEFAULT '{}'",
     "last_micro_habit_id": "TEXT",
     "last_micro_habit_date": "TEXT",
-    "micro_habit_json": "TEXT"
+    "micro_habit_json": "TEXT",
+    "day_core_skill_id": "TEXT",
+    "day_core_skill_date": "TEXT",
+    "day_core_round_count": "INTEGER DEFAULT 0"
 }
 
 async def migrate_db(db_path: str):
@@ -423,10 +435,21 @@ REASON_LABELS = {
 
 SKILL_LABELS = {
     "open_only": "открыть задачу без требования работать",
-    "task_naming": "назвать задачу одним словом",
     "ninety_sec_start": "90 секунд входа",
     "bad_first_step": "плохой первый шаг",
+    "task_naming": "назвать задачу одним словом",
+    "one_tab_focus": "одно окно для удержания внимания",
+    "visible_next_step": "сделать следующий шаг видимым",
+    "phone_far_3min": "убрать телефон на 3 минуты",
+    "restart_after_slip": "возврат после выпадения",
     "restart_after_break": "возврат после срыва",
+    "self_criticism_to_instruction": "перевести самокритику в инструкцию",
+    "check_the_facts_light": "проверить факт против приговора",
+    "urge_surf_60": "пережить импульс отвлечься 60 секунд",
+    "body_before_task": "сначала тело, потом задача",
+    "minimum_viable_day": "минимально жизнеспособный день",
+    "body_doubling_plan": "запуск рядом с человеком",
+    "if_then_plan": "если–то план для маленького входа",
 }
 
 

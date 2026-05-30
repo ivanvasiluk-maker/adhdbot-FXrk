@@ -72,8 +72,12 @@ async def run():
         print("[SMOKE] done best_skill:", p3.get("best_skill"))
         print("[SMOKE] done action_done_count:", p3.get("action_done_count"))
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
-        print("[SMOKE] offer has month button:", any("€14.98" in t and "Месяц" in t for t in kb_texts))
-        print("[SMOKE] offer contains primary map title:", "Твоя первичная карта" in offer_text)
+        has_adaptive_payment = any("€14.98" in t and "Продолжить" in t for t in kb_texts)
+        has_primary_map = "🧭 Первичная карта" in offer_text
+        assert has_adaptive_payment, kb_texts
+        assert has_primary_map, offer_text
+        print("[SMOKE] offer has adaptive payment button:", has_adaptive_payment)
+        print("[SMOKE] offer contains primary map title:", has_primary_map)
         print("[SMOKE] payment url month set:", bool(bot.PAYMENT_URL_MONTH_1498))
         print("[SMOKE] OK")
 
