@@ -2668,6 +2668,34 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
         return
 
+    # crisis stabilization: calm -> skill -> choice
+    if u.get("stage") == "crisis_stabilize":
+        low = (text or "").lower().strip()
+        if text == "✅ Сделал" or low == "сделал":
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_done", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Контроль чуть ближе. Возвращайся только к маленькому шагу.", kb_training_main, "training_main")
+            return
+        if text == "↩️ Вернуться в тренировку" or "вернуться" in low:
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_return_training", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Только маленький шаг. Без героизма.", kb_training_main, "training_main")
+            return
+        if text == "🆘 Мне всё ещё плохо" or "всё ещё плохо" in low or "все еще плохо" in low:
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_still_bad", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
+            return
+        if text == "✍️ Написать, что происходит" or "написать" in low:
+            u["stage"] = "crisis_text"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_write_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Напиши 1–3 предложения: что происходит прямо сейчас?")
+            return
+        await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
+        return
+
     # crisis_choose_mode
     if u.get("stage") == "crisis_choose_mode":
         low = (text or "").lower().strip()
