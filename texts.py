@@ -528,12 +528,9 @@ def day3_offer_text(main_pattern: str = "сложно войти в действ
         f"Где ещё ломается:\n{weak_point}\n\n"
         "Это не диагноз.\n"
         "Это рабочая карта, которую мы строим по твоим действиям.\n\n"
-        "Дальше можно собрать полную карту на 30 дней:\n"
-        "— какие задачи тебя блокируют\n"
-        "— какие эмоции запускают избегание\n"
-        "— какие навыки работают именно у тебя\n"
-        "— какой режим и среда тебе подходят\n\n"
-        "Продолжить на месяц?"
+        "Дальше собираем полную карту на 30 дней:\n"
+        "навыки, среда, возврат, внимание, отдых и личный режим.\n\n"
+        "Месяц — €14.98"
     )
 
 
@@ -562,32 +559,18 @@ def day3_primary_map_text(
 ) -> str:
     return (
         "🧭 Первичная карта\n\n"
-        "За эти дни уже видно,\n"
-        "что проблема не сводится к “лени”.\n\n"
-        "Что система заметила:\n\n"
-        f"— тебе особенно трудно начинать:\n{start_pattern}\n\n"
-        f"— чаще всего вход ломается из-за:\n{avoidance_trigger}\n\n"
-        f"— лучше всего сработали:\n{best_skills}\n\n"
-        f"— когда шаг становится слишком большим:\n{downscale_pattern}\n\n"
-        f"— похоже, тебе легче действовать:\n{preferred_activation}\n\n"
-        f"— после срывов ты чаще:\n{return_pattern}\n\n"
-        "Это ещё не полная картина.\n"
-        "Но система уже начала подстраивать тренировки под тебя.\n\n"
-        "Следующие недели нужны не для “мотивации”,\n"
-        "а чтобы собрать устойчивую модель:\n"
-        "— как тебе легче входить в задачи\n"
-        "— как удерживать внимание\n"
-        "— как возвращаться без самокритики\n"
-        "— какие навыки реально работают именно у тебя\n\n"
-        "Сейчас у нас уже есть первые сигналы.\n"
-        "Но устойчивые паттерны появляются только через повторения.\n\n"
-        "Следующий этап —\n"
-        "не просто упражнения,\n"
-        "а сбор устойчивой модели:\n"
-        "что помогает именно тебе,\n"
-        "где ломается внимание,\n"
-        "и как выстроить систему,\n"
-        "в которую мозгу легче возвращаться."
+        "За 3 дня уже видно:\n\n"
+        f"— где ломается вход:\n{start_pattern}\n\n"
+        f"— что помогает начать:\n{best_skills}\n\n"
+        f"— где нужен меньший шаг:\n{downscale_pattern}\n\n"
+        f"— как ты реагируешь на срыв:\n{return_pattern}\n\n"
+        "Дополнительные сигналы:\n"
+        f"— чаще всего вход ломается из-за: {avoidance_trigger}\n"
+        f"— тебе может быть легче начинать задачи:\n{preferred_activation}\n\n"
+        "Это не диагноз. Это твоя рабочая карта действия.\n\n"
+        "Дальше собираем полную карту на 30 дней:\n"
+        "навыки, среда, возврат, внимание, отдых и личный режим.\n\n"
+        "Месяц — €14.98"
     )
 
 
@@ -678,7 +661,8 @@ def payment_includes_text() -> str:
 def morning_checkin_text(name: str) -> str:
     return (
         f"Доброе утро, {name}.\n\n"
-        "Коротко отметь состояние — и я подберу шаг на сегодня."
+        "Что сегодня больше мешает?\n\n"
+        "Отметь состояние — и я подберу core skill / версию шага на сегодня."
     )
 
 
@@ -705,9 +689,9 @@ def reactivation_text(count: int) -> str:
 
 kb_morning_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="😐 норм"), KeyboardButton(text="😣 тяжело")],
-        [KeyboardButton(text="🔋 нет сил"), KeyboardButton(text="📱 отвлекаюсь")],
-        [KeyboardButton(text="🚪 не хочу начинать")],
+        [KeyboardButton(text="📱 Залипаю"), KeyboardButton(text="🚪 Не могу начать")],
+        [KeyboardButton(text="😵 Нет сил"), KeyboardButton(text="🌀 Всё слишком большое")],
+        [KeyboardButton(text="😬 Тревога")],
     ],
     resize_keyboard=True
 )
@@ -811,7 +795,7 @@ kb_more_actions = ReplyKeyboardMarkup(
 kb_skill_card = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🤔 Не понял")],
+        [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="🤔 Не понял")],
         [KeyboardButton(text="🆘 Кризис")],
     ],
     resize_keyboard=True
@@ -822,14 +806,6 @@ kb_done = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔁 Ещё круг")],
         [KeyboardButton(text="🌙 Хватит на сегодня")],
         [KeyboardButton(text="📌 Что изменилось?")],
-    ],
-    resize_keyboard=True
-)
-
-kb_day_core_stop = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🌙 На сегодня хватит")],
-        [KeyboardButton(text="🧭 Моя карта")],
     ],
     resize_keyboard=True
 )

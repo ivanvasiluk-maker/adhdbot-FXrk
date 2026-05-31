@@ -37,6 +37,7 @@ from texts import *  # noqa: F403,F401
 from texts import send_trainer_introduction as send_text_trainer_introduction
 from skills import (
     SKILLS_DB,
+    CORE_LAUNCH_WEEK_SKILL_IDS,
     get_current_plan,
     build_28_day_plan,
     build_plan,
@@ -90,6 +91,7 @@ SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
 # Unlock full flow while testing (set TEST_MODE=1)
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
+TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
 STARTUP_CHECK = os.getenv("BOT_STARTUP_CHECK", "").lower() in {"1", "true", "yes", "on", "check"}
 
 AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
@@ -193,6 +195,8 @@ router = Router()
 DOWNSCALE_PATTERN = "initiation_before_tool"
 DOWNSCALE_PRIMARY_SKILL = "open_only"
 DOWNSCALE_FALLBACK_SKILL = "task_naming"
+MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS = 3
+
 ACTION_RELATED_STAGES = {
     "training",
     "await_training_target",
@@ -249,7 +253,12 @@ def _preferred_activation_from_profile(profile: Dict[str, Any]) -> str:
     raw = str(profile.get("preferred_activation") or "").strip()
     best_skill = str(profile.get("best_skill") or profile.get("last_successful_skill") or "")
     if raw == "body_doubling" or best_skill == "body_doubling_plan":
-        return "👥 рядом с другим человеком"
+        return (
+            "👥 в коворкинге\n"
+            "👥 рядом с человеком\n"
+            "👥 на коротком созвоне\n"
+            "👥 при ощущении присутствия другого"
+        )
     if raw == "small_visible_step" or best_skill in {"open_only", "visible_next_step", "ninety_sec_start", "task_naming"}:
         return "🧩 когда первый шаг маленький и видимый"
     if raw == "phone_away" or best_skill == "phone_far_3min":
@@ -322,6 +331,8 @@ def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dic
     downscale_count = int(profile.get("downscale_count") or 0)
     return_count = int(u.get("return_count") or profile.get("return_count") or 0)
     preferred_activation = _preferred_activation_from_profile(profile)
+    worst_skill = profile.get("worst_skill") or profile.get("failed_skill") or ""
+    slip_pattern = profile.get("slip_pattern") or profile.get("return_pattern") or ("strong_return_skill" if return_count >= 2 else "return_needs_small_step")
     summary = {
         "main_pattern": str(profile.get("main_pattern") or profile.get("avoidance_pattern") or "start_avoidance"),
         "start_pattern_text": _start_pattern_from_profile(profile),
@@ -330,14 +341,18 @@ def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dic
         "downscale_pattern": _downscale_pattern_from_profile(profile),
         "preferred_activation": preferred_activation,
         "return_pattern": _return_pattern_from_profile(u, profile),
+        "slip_pattern": slip_pattern,
         "done_count": done_count,
         "downscale_count": downscale_count,
         "return_count": return_count,
         "best_skill": profile.get("best_skill") or profile.get("last_successful_skill") or "open_only",
         "failed_skill": profile.get("failed_skill") or "",
+        "worst_skill": worst_skill,
         "energy_pattern": profile.get("energy_pattern") or ("low_start_energy" if downscale_count else "unknown"),
+        "attention_pattern": profile.get("attention_pattern") or "unknown",
+        "side_skill_interest": profile.get("side_skill_interest") or "unknown",
     }
-    if "рядом с другим человеком" in preferred_activation:
+    if "рядом с человеком" in preferred_activation or "коворкинге" in preferred_activation or "созвоне" in preferred_activation:
         summary["preferred_activation_code"] = "body_doubling"
     elif "отвлечения" in preferred_activation:
         summary["preferred_activation_code"] = "phone_away"
@@ -577,6 +592,112 @@ def rebuild_current_skill(u: Dict[str, Any]) -> str:
     apply_skill_rebuild(u, new_sid)
     return new_sid
 
+def _profile_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value if v]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(v) for v in parsed if v]
+        except Exception:
+            return [value]
+    return []
+
+
+def _skill_replacement_count_today(profile: Dict[str, Any], u: Dict[str, Any]) -> int:
+    if profile.get("skill_replace_date") != local_date_for_user(u):
+        return 0
+    try:
+        return max(0, int(profile.get("skill_replace_count_today") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
+    plan = get_current_plan(u)
+    day = int(u.get("day") or 1)
+    current_sid = current_skill_id(u) or (plan[max(0, min(len(plan) - 1, day - 1))] if plan else "open_only")
+    current_skill = SKILLS_DB.get(current_sid, {})
+    track = current_skill.get("track") or u.get("bucket") or "mixed"
+    candidates: List[str] = []
+    suggested = suggest_alternative_skill(track, current_sid)
+    if suggested:
+        candidates.append(suggested)
+    candidates.extend([sid for sid in CORE_LAUNCH_WEEK_SKILL_IDS if sid in SKILLS_DB])
+    candidates.extend([sid for sid, skill in SKILLS_DB.items() if skill.get("track") == track])
+    candidates.extend([sid for sid in SKILLS_DB])
+    for sid in candidates:
+        if sid in SKILLS_DB and sid != current_sid and sid not in seen_today:
+            return sid
+    for sid in candidates:
+        if sid in SKILLS_DB and sid != current_sid:
+            return sid
+    return current_sid if current_sid in SKILLS_DB else ("open_only" if "open_only" in SKILLS_DB else next(iter(SKILLS_DB.keys())))
+
+
+async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], reason: str) -> bool:
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    today = local_date_for_user(u)
+    count = _skill_replacement_count_today(profile, u)
+    if count >= MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS:
+        u["stage"] = "await_input_mode"
+        u["pending_skill_id"] = None
+        u["pending_skill_day"] = None
+        clear_day_core_lock(u)
+        await save_user(u, DB_PATH)
+        await record_profile_signal(u["user_id"], "training", {
+            "skill_replace_limit_reached": True,
+            "skill_replace_count_today": count,
+            "skill_replace_date": today,
+        }, source="skill_replace_limit")
+        await log_event(u["user_id"], "training", "skill_replace_limit_reached", {"count": count, "reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Три замены подряд — это уже сигнал, что карта собрана мимо.\n\n"
+            "Не буду дальше крутить случайные навыки.\n"
+            "Нужно быстро пересобрать диагностику и выбрать другой вход.",
+            kb_input_mode,
+            "input_mode",
+        )
+        return True
+
+    seen_today = _profile_list(profile.get("skill_replace_seen_today")) if profile.get("skill_replace_date") == today else []
+    new_sid = choose_replacement_skill(u, seen_today)
+    plan = get_current_plan(u) or build_28_day_plan(u.get("bucket") or "mixed")
+    day = int(u.get("day") or 1)
+    idx = max(0, min(len(plan) - 1, day - 1))
+    plan[idx] = new_sid
+    u["plan_json"] = json.dumps(plan, ensure_ascii=False)
+    u["stage"] = "training"
+    replace_day_core_skill(u, new_sid)
+    await save_user(u, DB_PATH)
+
+    seen_today.append(new_sid)
+    await record_profile_signal(u["user_id"], "training", {
+        "skill_replace_date": today,
+        "skill_replace_count_today": count + 1,
+        "skill_replace_seen_today": seen_today[-MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS:],
+        "last_replacement_skill": new_sid,
+    }, source="skill_replace")
+    await log_event(u["user_id"], "training", "skill_replaced", {
+        "skill_id": new_sid,
+        "count": count + 1,
+        "max_count": MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS,
+        "reason": reason,
+    }, DB_PATH, SHEETS_WEBHOOK_URL)
+
+    skill = dict(SKILLS_DB[new_sid])
+    skill.setdefault("skill_id", new_sid)
+    text = (
+        f"Ок. Предлагаю другой навык. Замена {count + 1}/{MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS}.\n\n"
+        f"{format_skill_card(u, skill, u.get('today_target') or 'текущая задача')}"
+    )
+    await answer_with_keyboard(m, u, text, kb_skill_card, "skill_card")
+    return True
+
+
 async def show_route(m: Message, u: Dict[str, Any], source: str):
     """Show the preliminary route only at allowed moments."""
     await log_event(
@@ -631,12 +752,19 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     profile_patch = {
         "main_pattern": summary["main_pattern"],
         "avoidance_trigger": summary["avoidance_trigger"],
-        "preferred_activation": summary["preferred_activation_code"],
-        "best_skill": summary["best_skill"],
-        "failed_skill": summary["failed_skill"],
-        "return_pattern": summary["return_pattern"],
-        "downscale_pattern": summary["downscale_pattern"],
         "energy_pattern": summary["energy_pattern"],
+        "best_skill": summary["best_skill"],
+        "worst_skill": summary["worst_skill"],
+        "failed_skill": summary["failed_skill"],
+        "preferred_activation": summary["preferred_activation_code"],
+        "slip_pattern": summary["slip_pattern"],
+        "return_pattern": summary["return_pattern"],
+        "attention_pattern": summary["attention_pattern"],
+        "side_skill_interest": summary["side_skill_interest"],
+        "done_count": summary["done_count"],
+        "downscale_count": summary["downscale_count"],
+        "return_count": summary["return_count"],
+        "downscale_pattern": summary["downscale_pattern"],
     }
     await update_user_profile(u["user_id"], profile_patch, DB_PATH)
 
@@ -646,12 +774,19 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "price_month": "14.98",
         "main_pattern": summary["main_pattern"],
         "avoidance_trigger": summary["avoidance_trigger"],
-        "preferred_activation": summary["preferred_activation_code"],
-        "best_skill": summary["best_skill"],
-        "failed_skill": summary["failed_skill"],
-        "return_pattern": summary["return_pattern"],
-        "downscale_pattern": summary["downscale_pattern"],
         "energy_pattern": summary["energy_pattern"],
+        "best_skill": summary["best_skill"],
+        "worst_skill": summary["worst_skill"],
+        "failed_skill": summary["failed_skill"],
+        "preferred_activation": summary["preferred_activation_code"],
+        "slip_pattern": summary["slip_pattern"],
+        "return_pattern": summary["return_pattern"],
+        "attention_pattern": summary["attention_pattern"],
+        "side_skill_interest": summary["side_skill_interest"],
+        "done_count": summary["done_count"],
+        "downscale_count": summary["downscale_count"],
+        "return_count": summary["return_count"],
+        "downscale_pattern": summary["downscale_pattern"],
     }
     await log_event(u["user_id"], "offer", "offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "offer", "profile_map_updated", {"source": source, **profile_patch}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -914,12 +1049,41 @@ async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
     return fresh
 
 
+async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str):
+    u["is_test_user"] = 1
+    u["fast_forward_enabled"] = 1
+    u["free_mode"] = 0
+    u["payment_status"] = "trial"
+    u["trial_phase"] = "trial3"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], u.get("stage", ""), "test_cheat_activated", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer(
+        "Тестовый чит включён.\n\n"
+        "Теперь можно прокликивать функции без ожидания календарных дней и paywall.\n\n"
+        "Команды для теста:\n"
+        "/set_day 3\n"
+        "/show_offer\n"
+        "/debug_user\n"
+        "/reset_me\n"
+        "/testmode_off"
+    )
+
+
 async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     """Handle simple user commands; does not require admin access."""
     if not text or not text.startswith("/"):
         return False
     uid = m.from_user.id
     command = text.split(maxsplit=1)[0].lower()
+
+    if command == "/test_access":
+        code = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) == 2 else ""
+        if TEST_CHEAT_CODE and code == TEST_CHEAT_CODE:
+            await activate_test_cheat(m, u, "command")
+        else:
+            await log_event(uid, u.get("stage", ""), "test_cheat_failed", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Код не подошёл.")
+        return True
 
     if command == "/help":
         await log_event(uid, u.get("stage", ""), "help_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -970,11 +1134,11 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     }
     if command not in admin_commands:
         return False
-    if command == "/show_offer" and int(u.get("is_test_user") or 0) == 1:
-        pass
-    elif not is_admin(uid):
-        await m.answer("Команда недоступна.")
-        return True
+    test_user_commands = {"/set_day", "/show_offer", "/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health"}
+    if not is_admin(uid):
+        if not (int(u.get("is_test_user") or 0) == 1 and command in test_user_commands):
+            await m.answer("Команда недоступна.")
+            return True
 
     if command == "/testmode_on":
         u["is_test_user"] = 1
@@ -1001,8 +1165,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/set_day":
         parts = text.split()
-        if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) not in {1, 2, 3}:
-            await m.answer("Формат: /set_day 1|2|3")
+        if len(parts) != 2 or not parts[1].isdigit() or not (1 <= int(parts[1]) <= 28):
+            await m.answer("Формат: /set_day 1..28")
             return True
         day = int(parts[1])
         u["day"] = day
@@ -1186,7 +1350,121 @@ def remember_checkin_state(u: Dict[str, Any], key: str, value: str):
     u["analysis_json"] = json.dumps(data, ensure_ascii=False)
 
 
+MORNING_STATE_SKILL_MAP = {
+    "📱 Залипаю": {
+        "skill_id": "phone_far_3min",
+        "avoidance_trigger": "уход в быстрый дофамин",
+        "avoidance_pattern": "dopamine_avoidance",
+        "attention_pattern": "scroll_autopilot",
+        "message": "Ок. Сегодня берём не силу воли, а среду: меньше быстрых крючков.",
+    },
+    "🚪 Не могу начать": {
+        "skill_id": "open_only",
+        "avoidance_trigger": "не получается войти в задачу",
+        "avoidance_pattern": "start_avoidance",
+        "preferred_activation": "small_visible_step",
+        "message": "Ок. Сегодня не разгоняем мотивацию. Снижаем цену входа.",
+    },
+    "😵 Нет сил": {
+        "skill_id": "body_before_task",
+        "avoidance_trigger": "мало энергии на вход",
+        "avoidance_pattern": "low_energy",
+        "energy_pattern": "low_start_energy",
+        "message": "Ок. Сегодня сначала тело и ресурс, потом задача.",
+    },
+    "🌀 Всё слишком большое": {
+        "skill_id": "task_naming",
+        "avoidance_trigger": "задача кажется слишком большой",
+        "avoidance_pattern": "entry_too_large",
+        "downscale_pattern": "needs_smaller_step",
+        "message": "Ок. Сегодня режем туман до одного маленького входа.",
+    },
+    "😬 Тревога": {
+        "skill_id": "check_the_facts_light",
+        "avoidance_trigger": "тревога перед входом",
+        "avoidance_pattern": "anxiety_avoidance",
+        "emotional_trigger": "anxiety",
+        "message": "Ок. Сегодня не спорим с тревогой. Проверяем факт и делаем малый шаг.",
+    },
+}
+
+LEGACY_MORNING_STATE_ALIASES = {
+    "😐 норм": "🚪 Не могу начать",
+    "😣 тяжело": "🌀 Всё слишком большое",
+    "🔋 нет сил": "😵 Нет сил",
+    "📱 отвлекаюсь": "📱 Залипаю",
+    "🚪 не хочу начинать": "🚪 Не могу начать",
+}
+
+
+def morning_state_config(text: str) -> tuple[str, Dict[str, Any]]:
+    state = LEGACY_MORNING_STATE_ALIASES.get(text, text)
+    return state, MORNING_STATE_SKILL_MAP.get(state, MORNING_STATE_SKILL_MAP["🚪 Не могу начать"])
+
+
+def apply_morning_skill_choice(u: Dict[str, Any], state: str, config: Dict[str, Any]):
+    skill_id = config.get("skill_id") or "open_only"
+    if skill_id not in SKILLS_DB:
+        skill_id = "open_only" if "open_only" in SKILLS_DB else next(iter(SKILLS_DB.keys()))
+    day = int(u.get("day") or 1)
+    if has_stale_day_core_lock(u):
+        clear_day_core_lock(u)
+    if day_core_test_mode_enabled(u) or not (u.get("day_core_skill_id") in SKILLS_DB and u.get("day_core_skill_date") == local_date_for_user(u)):
+        propose_plan_override(u, day, skill_id)
+        u["pending_skill_id"] = skill_id
+        u["pending_skill_day"] = day
+    remember_checkin_state(u, "last_morning_state", state)
+    remember_checkin_state(u, "last_morning_state_date", local_date_for_user(u))
+    return skill_id
+
+
+def detects_body_doubling_signal(text: str) -> bool:
+    low = (text or "").lower()
+    triggers = (
+        "рядом с человеком",
+        "рядом с кем",
+        "рядом кто",
+        "с человеком легче",
+        "когда кто-то рядом",
+        "если кто-то рядом",
+        "в коворкинге",
+        "коворкинг",
+        "на созвоне",
+        "созвон",
+        "в звонке",
+        "в дискорде",
+        "в зуме",
+        "zoom",
+        "body doubling",
+        "боди даблинг",
+        "ощущение присутствия",
+        "присутствие другого",
+    )
+    return any(t in low for t in triggers)
+
+
 async def ask_today_action(m: Message, u: Dict[str, Any]):
+    day = int(u.get("day") or 1)
+    if day > 3 and not is_paid(u) and not day_core_test_mode_enabled(u) and not TEST_MODE:
+        await log_event(u["user_id"], "offer", "paywall_after_trial", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await show_day3_offer(m, u, "paywall_after_trial")
+        return
+
+    today = local_date_for_user(u)
+    analysis_data: Dict[str, Any] = {}
+    try:
+        analysis_data = json.loads(u.get("analysis_json") or "{}")
+        if not isinstance(analysis_data, dict):
+            analysis_data = {}
+    except Exception:
+        analysis_data = {}
+    if analysis_data.get("last_morning_state_date") != today and not day_core_test_mode_enabled(u):
+        u["stage"] = "morning_checkin"
+        u["last_morning_checkin_date"] = today
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "morning_checkin", "morning_checkin_sent", {"source": "before_day_start"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(m, u, morning_checkin_text(u.get("name") or "друг"), kb_morning_checkin, "morning_checkin")
+        return
     u["stage"] = "waiting_next_day"
     await save_user(u, DB_PATH)
     await start_day(m, u, int(u.get("day") or 1), DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1352,7 +1630,16 @@ async def main_flow(m: Message):
         return
     if await handle_user_command(m, u, text):
         return
+    if TEST_CHEAT_CODE and text == TEST_CHEAT_CODE:
+        await activate_test_cheat(m, u, "plain_code")
+        return
 
+    if user_is_in_action_loop(u) and text and detects_body_doubling_signal(text):
+        await record_profile_signal(u["user_id"], "training", {
+            "preferred_activation": "body_doubling",
+            "main_pattern": "needs_social_presence_for_start",
+        }, source="body_doubling_signal")
+        await log_event(u["user_id"], "training", "body_doubling_signal_detected", {"source": "free_text"}, DB_PATH, SHEETS_WEBHOOK_URL)
 
     perfectionism_triggers = ("идеально", "красиво", "могу лучше", "потом доделаю", "боюсь сделать плохо", "не хочу делать плохо", "должно быть качественно")
     if user_is_in_action_loop(u) and text and any(t in low for t in perfectionism_triggers):
@@ -1381,17 +1668,32 @@ async def main_flow(m: Message):
         )
         return
 
-    morning_answers = {"😐 норм", "😣 тяжело", "🔋 нет сил", "📱 отвлекаюсь", "🚪 не хочу начинать"}
+    morning_answers = set(MORNING_STATE_SKILL_MAP) | set(LEGACY_MORNING_STATE_ALIASES)
     if u.get("stage") == "morning_checkin" and text in morning_answers:
-        remember_checkin_state(u, "last_morning_state", text)
+        state, config = morning_state_config(text)
+        skill_id = apply_morning_skill_choice(u, state, config)
         u["last_active"] = time.time()
         was_reactivation = int(u.get("reactivation_count") or 0) > 0
         u["stage"] = "waiting_next_day"
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        signal_patch = {
+            "morning_state": state,
+            "next_skill_hint": skill_id,
+            "avoidance_trigger": config.get("avoidance_trigger"),
+            "avoidance_pattern": config.get("avoidance_pattern"),
+            "attention_pattern": config.get("attention_pattern") or profile.get("attention_pattern"),
+            "energy_pattern": config.get("energy_pattern") or profile.get("energy_pattern"),
+            "downscale_pattern": config.get("downscale_pattern") or profile.get("downscale_pattern"),
+            "emotional_trigger": config.get("emotional_trigger") or profile.get("emotional_trigger"),
+            "preferred_activation": config.get("preferred_activation") or profile.get("preferred_activation"),
+        }
+        await record_profile_signal(u["user_id"], "training", signal_patch, source="morning_state_check")
         await save_user(u, DB_PATH)
-        await log_event(uid, "training", "morning_checkin_done", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "training", "morning_checkin_done", {"state": state, "skill_id": skill_id}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "training", "morning_core_skill_selected", {"state": state, "skill_id": skill_id}, DB_PATH, SHEETS_WEBHOOK_URL)
         if was_reactivation:
-            await log_event(uid, "training", "reactivation_success", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer("Принял. Подберём шаг на сегодня.")
+            await log_event(uid, "training", "reactivation_success", {"state": state}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(f"{config.get('message')}\n\nСегодняшний core skill подберу от этого состояния.")
         await ask_today_action(m, u)
         return
 
@@ -1437,6 +1739,7 @@ async def main_flow(m: Message):
                 "avoidance_pattern": "entry_too_large",
                 "avoidance_trigger": "перегруз перед стартом",
                 "failed_skill": sid,
+                "worst_skill": sid,
                 "needs_downscale": True,
                 "action_failed_count": failed_count,
             }, source="action_failed")
@@ -1714,6 +2017,7 @@ async def main_flow(m: Message):
         except Exception:
             habit = {}
         await log_event(u["user_id"], "training", "micro_habit_why_clicked", {"habit_id": habit.get("id"), "micro_habit_id": habit.get("id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await record_profile_signal(u["user_id"], "training", {"side_skill_interest": habit.get("id") or "details_opened"}, source="micro_habit_why")
         await m.answer(habit.get("why") or "Это снижает трение входа и упрощает возврат.")
         return
     if text == "👍 Попробую":
@@ -1723,6 +2027,7 @@ async def main_flow(m: Message):
         except Exception:
             habit = {}
         await log_event(u["user_id"], "training", "micro_habit_try_clicked", {"habit_id": habit.get("id"), "micro_habit_id": habit.get("id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await record_profile_signal(u["user_id"], "training", {"side_skill_interest": habit.get("id") or "try_clicked"}, source="micro_habit_try")
         await m.answer("Ок. Даже один маленький эксперимент считается.")
         await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
         return
@@ -2298,6 +2603,7 @@ async def main_flow(m: Message):
             profile = await get_user_profile(u["user_id"], DB_PATH)
             await record_profile_signal(u["user_id"], "training", {
                 "return_pattern": return_pattern,
+                "slip_pattern": return_pattern,
                 "return_count": int(u.get("return_count") or 0),
                 **_today_profile_counter_patch(profile, "return_count_today", "return_count_date"),
             }, source="return_after_slip")
@@ -2328,34 +2634,38 @@ async def main_flow(m: Message):
 
         if "не пошло" in low or "не подходит" in low or "не работает" in low or text == "🔁 Заменить навык" or "заменить" in low:
             await log_event(u["user_id"], "training", "skill_replace_requested", {"day": day, "reason": text or "button"}, DB_PATH, SHEETS_WEBHOOK_URL)
-
-            plan = get_current_plan(u)
-            if not plan:
-                await m.answer(trainer_say(u.get("trainer_key") or "marsha", "План пуст — нет что заменить. Сообщи поддержке."))
-                return
-
-            idx = max(0, min(len(plan) - 1, day - 1))
-            current_sid = plan[idx]
-            current_skill = SKILLS_DB.get(current_sid, {})
-            track = current_skill.get("track") or u.get("bucket") or "mixed"
-            new_sid = suggest_alternative_skill(track, current_sid) or current_sid
-            if new_sid == current_sid:
-                # попытка выбрать любой другой по треку
-                alt = [k for k, v in SKILLS_DB.items() if v.get("track") == track and k != current_sid]
-                if alt:
-                    new_sid = alt[0]
-
-            plan[idx] = new_sid
-            u["plan_json"] = json.dumps(plan, ensure_ascii=False)
-            replace_day_core_skill(u, new_sid)
-            await save_user(u, DB_PATH)
-
-            skill_msg = format_skill(new_sid, u.get("trainer_key") or "marsha") if new_sid in SKILLS_DB else "Выбран новый навык."
-            await m.answer(trainer_say(u.get("trainer_key") or "marsha", f"Меняю на {SKILLS_DB[new_sid]['name']}" if new_sid in SKILLS_DB else "Меняю навык."))
-            await answer_with_keyboard(m, u, skill_msg, kb_training_main, "training_main")
+            await replace_skill_or_request_rediagnosis(m, u, text or "button")
             return
 
         await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
+        return
+
+    # crisis stabilization: calm -> skill -> choice
+    if u.get("stage") == "crisis_stabilize":
+        low = (text or "").lower().strip()
+        if text == "✅ Сделал" or low == "сделал":
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_done", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Контроль чуть ближе. Возвращайся только к маленькому шагу.", kb_training_main, "training_main")
+            return
+        if text == "↩️ Вернуться в тренировку" or "вернуться" in low:
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_return_training", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Только маленький шаг. Без героизма.", kb_training_main, "training_main")
+            return
+        if text == "🆘 Мне всё ещё плохо" or "всё ещё плохо" in low or "все еще плохо" in low:
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_still_bad", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
+            return
+        if text == "✍️ Написать, что происходит" or "написать" in low:
+            u["stage"] = "crisis_text"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_write_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Напиши 1–3 предложения: что происходит прямо сейчас?")
+            return
+        await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
         return
 
     # crisis stabilization: calm -> skill -> choice
