@@ -24,7 +24,7 @@
 11. Check one day = one core skill. New core skill appears only after 00:00 user timezone or in admin/test mode.
 12. Check side skill appears max 1 per day and not after crisis/overload/downscale.
 13. Check body-doubling signal is saved to `profile_json` as `preferred_activation = body_doubling` when user mentions coworking / call / another person nearby.
-14. Enter `/test_access <TEST_CHEAT_CODE>` or the plain cheat code. Check `/set_day 3` and `/show_offer` are available for that user without enabling global test mode.
+14. Enter `/test_access <TEST_CHEAT_CODE>` or the plain cheat code. Check `/set_day 3` / `/force_next_day` and `/show_offer` are available for that user without enabling global test mode.
 15. Use `/set_day 3` and `/show_offer`. Check offer shows `€14.98` and sells personal system / action map, not “bot for a month”.
 16. Check Sheets logs events without full personal texts, voice transcripts, crisis content, confessions, or medical details.
 

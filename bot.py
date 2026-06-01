@@ -54,7 +54,7 @@ from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
     send_trainer_photo_if_any, run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
-    format_comprehensive_analysis, normalize_analysis, _extract_json, clamp_str
+    format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str
 )
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
 from core.engine import (
@@ -519,13 +519,24 @@ async def open_misunderstood_flow(m: Message, u: Dict[str, Any], source: str):
 
 
 def stored_analysis_user_text(u: Dict[str, Any]) -> str:
+    """Return a safe non-verbatim analysis prompt from stored categories only."""
     try:
         data = json.loads(u.get("analysis_json") or "{}")
-        if isinstance(data, dict):
-            return clamp_str(data.get("user_text") or "", 1200)
+        if not isinstance(data, dict):
+            return ""
+        summary = data.get("input_signal_summary") if isinstance(data.get("input_signal_summary"), dict) else {}
+        parts = [
+            data.get("specific_pattern") or summary.get("specific_pattern"),
+            data.get("avoidance_behavior") or summary.get("avoidance_behavior"),
+            data.get("useful_signal") or summary.get("useful_signal"),
+        ]
+        skills = data.get("skills_focus") or summary.get("skills_focus") or []
+        if isinstance(skills, list) and skills:
+            parts.append("; ".join(str(x) for x in skills[:4]))
+        safe = ". ".join(str(x).strip() for x in parts if x)
+        return clamp_str(safe, 700)
     except Exception:
         return ""
-    return ""
 
 
 async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text: str, reason: str, *, replace_skill: bool = False):
@@ -533,7 +544,8 @@ async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text
     combined_text = clamp_str(f"{previous_text}\n\nУточнение: {extra_text}" if previous_text else extra_text, 1500)
     comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
     comp = normalize_analysis(comp, combined_text)
-    comp["user_text"] = combined_text
+    comp.pop("user_text", None)
+    comp.update(safe_analysis_memory(combined_text, comp))
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket") or u.get("bucket") or "mixed"
 
@@ -1062,6 +1074,7 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str):
         "Теперь можно прокликивать функции без ожидания календарных дней и paywall.\n\n"
         "Команды для теста:\n"
         "/set_day 3\n"
+        "/force_next_day\n"
         "/show_offer\n"
         "/debug_user\n"
         "/reset_me\n"
@@ -1129,12 +1142,12 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     uid = m.from_user.id
     command = (text.split(maxsplit=1)[0] if text else "").lower()
     admin_commands = {
-        "/testmode_on", "/testmode_off", "/set_day", "/show_offer",
+        "/testmode_on", "/testmode_off", "/set_day", "/force_next_day", "/show_offer",
         "/reset_me", "/debug_user", "/whoami", "/health", "/mark_paid", "/mark_free", "/sync_sheets", "/stats",
     }
     if command not in admin_commands:
         return False
-    test_user_commands = {"/set_day", "/show_offer", "/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health"}
+    test_user_commands = {"/set_day", "/force_next_day", "/show_offer", "/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health"}
     if not is_admin(uid):
         if not (int(u.get("is_test_user") or 0) == 1 and command in test_user_commands):
             await m.answer("Команда недоступна.")
@@ -1150,6 +1163,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
 Команды:
 /set_day 3
+/force_next_day
 /show_offer
 /debug_user
 /reset_me""")
@@ -1178,6 +1192,20 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(f"День установлен: {day}.\nМожно вызвать /show_offer.")
+        return True
+
+    if command == "/force_next_day":
+        current_day = int(u.get("day") or u.get("current_day") or 1)
+        next_day = min(current_day + 1, 28)
+        u["day"] = next_day
+        if "current_day" in u:
+            u["current_day"] = next_day
+        u["pending_skill_day"] = None
+        clear_day_core_lock(u)
+        u["stage"] = "waiting_next_day"
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "admin_force_next_day", {"from_day": current_day, "day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(f"Ок. Следующий день: {next_day}. Core skill можно назначить заново.")
         return True
 
     if command == "/show_offer":
@@ -2203,7 +2231,7 @@ async def main_flow(m: Message):
             user_text = "Прокрастинация/избегание, хочу начать, но откладываю."
         else:
             user_text = text
-        u["analysis_json"] = json.dumps({"user_text": clamp_str(user_text, 1000)}, ensure_ascii=False)
+        u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
         await m.answer("Ок. Делаю подробный разбор…")
@@ -2228,7 +2256,7 @@ async def main_flow(m: Message):
             await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
             return
         await m.answer(f"Распознал: {clamp_str(t, 700)}")
-        u["analysis_json"] = json.dumps({"user_text": clamp_str(t, 1000)}, ensure_ascii=False)
+        u["analysis_json"] = json.dumps(safe_analysis_memory(t, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
         await m.answer("Ок. Делаю подробный разбор…")
@@ -2357,8 +2385,11 @@ async def main_flow(m: Message):
                     comp = {}
             except Exception:
                 comp = {}
-            comp = normalize_analysis(comp, comp.get("user_text") or stored_analysis_user_text(u))
+            safe_prompt = stored_analysis_user_text(u)
+            comp = normalize_analysis(comp, safe_prompt)
+            comp.pop("user_text", None)
             comp["useful_signal"] = "ленивость исключена из модели; смотрим на вход в действие"
+            comp.update(safe_analysis_memory(safe_prompt, comp))
             u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
             source = misunderstood_context(u).get("source") or "analysis"
             u["pending_plan_change"] = None
@@ -2402,11 +2433,11 @@ async def main_flow(m: Message):
             return
         previous_text = ""
         try:
-            previous_text = (json.loads(u.get("analysis_json") or "{}") or {}).get("user_text", "")
+            previous_text = stored_analysis_user_text(u)
         except Exception:
             previous_text = ""
         combined_text = clamp_str(f"{previous_text}\n\nЧаще ломает вход: {text}", 1500)
-        u["analysis_json"] = json.dumps({"user_text": combined_text}, ensure_ascii=False)
+        u["analysis_json"] = json.dumps(safe_analysis_memory(combined_text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
         await log_event(u["user_id"], "analysis", "analysis_extra_signal_added", {"answer": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -2419,7 +2450,7 @@ async def main_flow(m: Message):
         if not text:
             await m.answer("Напиши, пожалуйста, что не совпадает с реальностью. (1–3 предложения)")
             return
-        u["analysis_json"] = json.dumps({"user_text": clamp_str(text, 1000)}, ensure_ascii=False)
+        u["analysis_json"] = json.dumps(safe_analysis_memory(text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
         await m.answer("Ок. Переразбор…")
@@ -2435,8 +2466,7 @@ async def main_flow(m: Message):
         base_user_text = ""
         try:
             if u.get("analysis_json"):
-                prev = json.loads(u.get("analysis_json") or "{}")
-                base_user_text = prev.get("user_text", "") or ""
+                base_user_text = stored_analysis_user_text(u)
         except Exception:
             base_user_text = ""
 
@@ -2446,7 +2476,6 @@ async def main_flow(m: Message):
         else:
             combined_text = text
 
-        u["raw_text"] = combined_text
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
         await m.answer("Ок. Пересобираю вывод…")
@@ -2638,34 +2667,6 @@ async def main_flow(m: Message):
             return
 
         await answer_with_keyboard(m, u, "Выбери действие:", kb_training_main, "training_main")
-        return
-
-    # crisis stabilization: calm -> skill -> choice
-    if u.get("stage") == "crisis_stabilize":
-        low = (text or "").lower().strip()
-        if text == "✅ Сделал" or low == "сделал":
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_done", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, "Ок. Контроль чуть ближе. Возвращайся только к маленькому шагу.", kb_training_main, "training_main")
-            return
-        if text == "↩️ Вернуться в тренировку" or "вернуться" in low:
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await log_event(u["user_id"], "crisis_stabilize", "crisis_return_training", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, "Ок. Только маленький шаг. Без героизма.", kb_training_main, "training_main")
-            return
-        if text == "🆘 Мне всё ещё плохо" or "всё ещё плохо" in low or "все еще плохо" in low:
-            await log_event(u["user_id"], "crisis_stabilize", "crisis_still_bad", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
-            return
-        if text == "✍️ Написать, что происходит" or "написать" in low:
-            u["stage"] = "crisis_text"
-            await save_user(u, DB_PATH)
-            await log_event(u["user_id"], "crisis_stabilize", "crisis_write_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Напиши 1–3 предложения: что происходит прямо сейчас?")
-            return
-        await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
         return
 
     # crisis stabilization: calm -> skill -> choice
@@ -2934,19 +2935,13 @@ async def on_test_answer(c: CallbackQuery):
 
 async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     bucket = u.get("bucket") or "mixed"
-    user_text = ""
-    if u.get("analysis_json"):
-        try:
-            analysis_data = json.loads(u.get("analysis_json") or "{}")
-            user_text = analysis_data.get("user_text", "")
-        except:
-            pass
-    if not user_text:
-        user_text = f"У меня проблемы с {bucket}"
+    user_text = stored_analysis_user_text(u) or f"У меня проблемы с {bucket}"
     comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
     comp = normalize_analysis(comp, user_text)
     if comp.get("analysis_fallback"):
         await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "show_comprehensive_analysis"}, DB_PATH, SHEETS_WEBHOOK_URL)
+    comp.pop("user_text", None)
+    comp.update(safe_analysis_memory(user_text, comp))
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket", bucket)
     plan_ids = build_28_day_plan(u["bucket"])
@@ -2978,7 +2973,6 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await log_event(u["user_id"], "analysis", "recommended_track_shown", {"recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     comp_for_message = dict(comp)
-    comp_for_message["user_text"] = user_text
     msg = f"{format_comprehensive_analysis(comp_for_message)}\n\n{preliminary_hypothesis_note()}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 

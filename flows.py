@@ -436,6 +436,29 @@ def _infer_analysis_fields(user_text: str, bucket: str = "mixed") -> Dict[str, A
     }
 
 
+def safe_analysis_memory(user_text: str, comp: Optional[Dict[str, Any]] = None, *, needs_more: bool = False) -> Dict[str, Any]:
+    """Return non-verbatim analysis memory for persistence.
+
+    Do not store the user's full text/transcript/confession. Keep only short
+    categories and inferred behavioral signals that are safe for profile rebuilds.
+    """
+    comp = comp or {}
+    bucket = str(comp.get("bucket") or "mixed")
+    inferred = _infer_analysis_fields(user_text or "", bucket)
+    memory = {
+        "input_len": len(user_text or ""),
+        "input_signal_summary": {
+            "specific_pattern": clamp_str(comp.get("specific_pattern") or inferred.get("specific_pattern"), 120),
+            "avoidance_behavior": clamp_str(comp.get("avoidance_behavior") or inferred.get("avoidance_behavior"), 120),
+            "useful_signal": clamp_str(comp.get("useful_signal") or inferred.get("useful_signal"), 120),
+            "skills_focus": (comp.get("skills_focus") or inferred.get("skills_focus") or [])[:4],
+        },
+    }
+    if needs_more:
+        memory["needs_more"] = True
+    return memory
+
+
 def normalize_analysis(comp: Dict[str, Any], user_text: str, quick: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     quick = quick or {}
     bucket = comp.get("bucket") or quick.get("bucket") or "mixed"
@@ -616,7 +639,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     from texts import kb_analysis_confirm, kb_analysis_need_more, preliminary_hypothesis_note
 
     if analysis_needs_more_input(user_text):
-        u["analysis_json"] = json.dumps({"user_text": clamp_str(user_text, 1000), "needs_more": True}, ensure_ascii=False)
+        u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True), ensure_ascii=False)
         u["stage"] = "analysis_need_more"
         await save_user(u, db_path)
         await log_event(u["user_id"], "analysis", "analysis_needs_more_input", {"len": len(user_text or "")}, db_path, sheets_webhook)
@@ -644,10 +667,11 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     if comp.get("analysis_fallback") or r.get("analysis_fallback"):
         await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "run_analysis"}, db_path, sheets_webhook)
 
-    # Save full analysis (include user_text for reference)
+    # Save normalized analysis without storing raw user text/transcripts.
     comp = normalize_analysis(comp, user_text, r)
     comp_to_store = dict(comp)
-    comp_to_store["user_text"] = clamp_str(user_text, 1000)
+    comp_to_store.pop("user_text", None)
+    comp_to_store.update(safe_analysis_memory(user_text, comp_to_store))
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
 
     # build plan (28 days)
