@@ -54,6 +54,9 @@ ALLOWED_KEYS = {
     "keyboard",
     "button_count",
     "count",
+    "return_count",
+    "price_month",
+    "amount",
     "reason",
     "choice",
     "day_number",
@@ -68,9 +71,21 @@ ALLOWED_KEYS = {
     "error_source",
     "main_pattern",
     "avoidance_reason",
+    "avoidance_trigger",
+    "avoidance_pattern",
+    "attention_pattern",
     "emotional_trigger",
+    "preferred_activation",
+    "return_pattern",
+    "downscale_pattern",
+    "energy_pattern",
     "best_skill",
     "failed_skill",
+    "worst_skill",
+    "slip_pattern",
+    "side_skill_interest",
+    "done_count",
+    "downscale_count",
     "recommended_track",
     "next_theme",
     "last_successful_skill",
@@ -204,6 +219,7 @@ def _iso_from_timestamp(value: Any) -> str:
 def user_to_sheet_row(user: Dict[str, Any]) -> List[Any]:
     """Format a safe user snapshot for the optional `users` sheet."""
     analysis = _parse_json(user.get("analysis_json"))
+    profile = _parse_json(user.get("profile_json"))
     return [
         _iso_from_timestamp(user.get("created_at")),
         _iso_from_timestamp(user.get("last_active")),
@@ -217,6 +233,22 @@ def user_to_sheet_row(user: Dict[str, Any]) -> List[Any]:
         user.get("payment_status") or "",
         user.get("day") or "",
         user.get("is_test_user") or 0,
+        profile.get("main_pattern") or "",
+        profile.get("avoidance_trigger") or profile.get("avoidance_reason") or "",
+        profile.get("preferred_activation") or "",
+        profile.get("best_skill") or "",
+        profile.get("worst_skill") or profile.get("failed_skill") or "",
+        profile.get("preferred_activation") or "",
+        profile.get("slip_pattern") or profile.get("return_pattern") or "",
+        profile.get("attention_pattern") or "",
+        profile.get("side_skill_interest") or "",
+        profile.get("action_done_count") or profile.get("done_count") or "",
+        profile.get("downscale_count") or "",
+        profile.get("return_count") or "",
+        profile.get("failed_skill") or "",
+        profile.get("return_pattern") or "",
+        profile.get("downscale_pattern") or "",
+        profile.get("energy_pattern") or "",
     ]
 
 
