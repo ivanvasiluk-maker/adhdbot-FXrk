@@ -44,6 +44,7 @@ from skills import (
     propose_plan_override,
     suggest_alternative_skill,
     format_skill,
+    variants_for_core_skill,
 )
 from db import (
     USER_FIELDS, default_user, init_db, migrate_db, get_user, save_user, 
@@ -54,7 +55,8 @@ from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
     send_trainer_photo_if_any, run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
-    format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str
+    format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
+    live_analysis_profile_patch
 )
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
 from core.engine import (
@@ -235,6 +237,9 @@ def clear_day_core_lock(u: Dict[str, Any]):
     u["day_core_skill_id"] = None
     u["day_core_skill_date"] = None
     u["day_core_round_count"] = 0
+    u["current_core_skill_id"] = None
+    u["current_skill_variant_id"] = None
+    u["current_core_skill_date"] = None
 
 
 def _skill_label(skill_id: Optional[str], fallback: str = "маленький вход") -> str:
@@ -351,6 +356,14 @@ def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dic
         "energy_pattern": profile.get("energy_pattern") or ("low_start_energy" if downscale_count else "unknown"),
         "attention_pattern": profile.get("attention_pattern") or "unknown",
         "side_skill_interest": profile.get("side_skill_interest") or "unknown",
+        "failed_reason_count": int(profile.get("failed_reason_count") or profile.get("action_failed_count") or 0),
+        "effect_notes": profile.get("last_effect_note") or profile.get("last_after_action_note") or "",
+        "effect_tags": profile.get("effect_tags") or [],
+        "attention_escape_count": int(profile.get("attention_escape_count") or (1 if profile.get("attention_pattern") == "scroll_autopilot" else 0)),
+        "shame_signal": profile.get("shame_signal") or ("shame_self_attack" if profile.get("main_pattern") == "shame_self_attack" else ""),
+        "body_doubling_signal": profile.get("body_doubling_signal") or ("body_doubling" if profile.get("preferred_activation") == "body_doubling" else ""),
+        "energy_signal": profile.get("energy_signal") or profile.get("energy_pattern") or "",
+        "best_variant": profile.get("best_variant") or profile.get("best_skill") or profile.get("last_successful_skill") or "open_only",
     }
     if "рядом с человеком" in preferred_activation or "коворкинге" in preferred_activation or "созвоне" in preferred_activation:
         summary["preferred_activation_code"] = "body_doubling"
@@ -371,6 +384,61 @@ async def record_profile_signal(user_id: int, stage: str, patch: Dict[str, Any],
     await log_event(user_id, stage, "profile_map_updated", event_meta, DB_PATH, SHEETS_WEBHOOK_URL)
 
 
+
+
+def effect_tags_from_note(note: str) -> List[str]:
+    low = (note or "").lower()
+    tags: List[str] = []
+    if any(x in low for x in ("легче", "отпуст", "выдох", "спокой")):
+        tags.append("relief")
+    if any(x in low for x in ("меньше трев", "не так страш", "страшно меньше", "тревоги меньше")):
+        tags.append("anxiety_down")
+    if any(x in low for x in ("получ", "смог", "могу", "увер")):
+        tags.append("confidence_up")
+    if any(x in low for x in ("ясн", "понял", "видно", "понятнее")):
+        tags.append("clarity_up")
+    return tags or ["effect_noted"]
+
+
+def after_action_note_saved_text(trainer_key: str) -> str:
+    if trainer_key == "skinny":
+        return "Записал. Это данные."
+    if trainer_key == "beck":
+        return "Записал. Это пойдёт в карту: что меняется после микрошагов."
+    if trainer_key == "marsha":
+        return "Записала. Хорошо, что ты это заметил — такие маленькие сдвиги важны."
+    return "Записал.\nЭто важный сигнал для карты."
+
+
+def analysis_loading_text(trainer_key: str) -> str:
+    if trainer_key == "skinny":
+        return "Ок. Смотрю, где ломается вход."
+    if trainer_key == "beck":
+        return "Ок. Смотрю механизм."
+    if trainer_key == "marsha":
+        return "Ок. Давай аккуратно посмотрим, где стало тяжело."
+    return "Ок. Смотрю паттерн…"
+
+
+def should_show_today_progress(u: Dict[str, Any], profile: Dict[str, Any]) -> bool:
+    done_today = int(u.get("day_core_round_count") or 0)
+    if done_today < 2:
+        return False
+    today = local_date_for_user(u)
+    shown = int(profile.get("daily_progress_shown_count") or 0) if profile.get("daily_progress_shown_date") == today else 0
+    return shown < 2 and random.random() < 0.4
+
+
+async def record_today_progress_shown(u: Dict[str, Any], profile: Dict[str, Any]):
+    today = local_date_for_user(u)
+    shown = int(profile.get("daily_progress_shown_count") or 0) if profile.get("daily_progress_shown_date") == today else 0
+    await record_profile_signal(
+        u["user_id"],
+        "training",
+        {"daily_progress_shown_date": today, "daily_progress_shown_count": shown + 1},
+        source="daily_progress",
+    )
+
 def done_flow_text(include_system_line: bool = False) -> str:
     text = "Есть. Один подход засчитан."
     if include_system_line:
@@ -382,12 +450,14 @@ def today_progress_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
     done_today = int(u.get("day_core_round_count") or 0)
     downscale_today = int(profile.get("downscale_count_today") or 0)
     return_today = int(profile.get("return_count_today") or 0)
+    failed_today = int(profile.get("failed_reason_count_today") or profile.get("action_failed_count_today") or 0)
     return (
         "Сегодня уже:\n"
         f"— {done_today} подхода\n"
         f"— {downscale_today} раз уменьшили шаг\n"
-        f"— {return_today} возврата\n\n"
-        "Это уже не “ничего не делал”. Это тренировка."
+        f"— {return_today} возврата\n"
+        f"— {failed_today} сбоя не стали концом\n\n"
+        "Это уже тренировка, а не “ничего не сделал”."
     )
 
 
@@ -416,12 +486,15 @@ def _remember_downscale_pattern(u: Dict[str, Any], skill_id: str):
         data = {}
     data["pattern"] = DOWNSCALE_PATTERN
     data["selected_skill"] = skill_id
+    u["current_skill_variant_id"] = skill_id
     u["analysis_json"] = json.dumps(data, ensure_ascii=False)
 
 
 def _select_downscale_skill(u: Dict[str, Any]) -> str:
     """Выбрать и поставить текущий навык downscale на сегодняшний день."""
-    skill_id = DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL
+    current_core_id = str(u.get("current_core_skill_id") or "") if u.get("current_core_skill_date") == local_date_for_user(u) else ""
+    variants = [sid for sid in variants_for_core_skill(current_core_id) if sid in SKILLS_DB]
+    skill_id = variants[1] if len(variants) > 1 else (DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL)
     # Downscale is an in-day version, not a replacement of today's core skill.
     # Explicit replacement is handled by the "Заменить навык" branch.
     u["pending_skill_id"] = None
@@ -655,6 +728,7 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
         sid = current_skill_id(u) or "open_only"
         skill = dict(SKILLS_DB.get(sid) or SKILLS_DB.get("open_only") or next(iter(SKILLS_DB.values())))
         skill.setdefault("skill_id", sid)
+        u["skill_variant_label"] = "Вариант сейчас"
         await record_profile_signal(u["user_id"], "training", {
             "skill_replacement_blocked_by_day_lock": True,
             "last_replacement_reason": reason,
@@ -967,6 +1041,9 @@ async def maybe_show_micro_habit(m: Message, u: Dict[str, Any], source: str = "d
 
 
 def current_skill_id(u: Dict[str, Any]) -> str:
+    variant = u.get("current_skill_variant_id")
+    if variant in SKILLS_DB and u.get("current_core_skill_date") == local_date_for_user(u):
+        return variant
     locked = u.get("day_core_skill_id")
     if not day_core_test_mode_enabled(u) and locked in SKILLS_DB and u.get("day_core_skill_date") == local_date_for_user(u):
         return locked
@@ -1636,6 +1713,7 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
     skill_id, config = failed_reason_skill(reason)
     skill = dict(SKILLS_DB.get(skill_id) or SKILLS_DB[DOWNSCALE_PRIMARY_SKILL])
     skill.setdefault("skill_id", skill_id)
+    u["skill_variant_label"] = "Если залип" if reason == "failed_stuck_phone" else "Упрощение"
 
     # Keep the current core skill fixed; this is only a smaller in-day response.
     u["pending_skill_id"] = None
@@ -1653,6 +1731,9 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
         "downscale_pattern": config.get("downscale_pattern"),
         "energy_pattern": config.get("energy_pattern") or profile.get("energy_pattern") or "unknown",
         "next_skill_hint": skill_id,
+        "best_variant": skill_id,
+        "attention_escape_count": int(profile.get("attention_escape_count") or 0) + (1 if reason == "failed_stuck_phone" else 0),
+        "energy_signal": config.get("energy_pattern") or profile.get("energy_signal"),
         "downscale_count": downscale_count,
         **_today_profile_counter_patch(profile, "downscale_count_today", "downscale_count_date"),
     }
@@ -1840,6 +1921,8 @@ async def main_flow(m: Message):
                 "worst_skill": sid,
                 "needs_downscale": True,
                 "action_failed_count": failed_count,
+                "failed_reason_count": failed_count,
+                **_today_profile_counter_patch(profile, "failed_reason_count_today", "failed_reason_count_date"),
             }, source="action_failed")
             await log_engine_events(u, screen)
             await answer_with_keyboard(m, u, screen["text"], kb_failed, "failed")
@@ -2031,9 +2114,10 @@ async def main_flow(m: Message):
             return
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
-        await update_user_profile(u["user_id"], {"last_after_action_note": note}, DB_PATH)
-        await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note)}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, "Записал.", kb_done, "done")
+        effect_tags = effect_tags_from_note(note)
+        await update_user_profile(u["user_id"], {"last_after_action_note": note, "last_effect_note": note, "effect_tags": effect_tags}, DB_PATH)
+        await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note), "effect_tags": effect_tags}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(m, u, after_action_note_saved_text(u.get("trainer_key") or "marsha"), kb_done, "done")
         return
 
     # Пост-выполнение: только два варианта, без перегруза кнопками
@@ -2065,8 +2149,9 @@ async def main_flow(m: Message):
                 await log_event(u["user_id"], "training", "daily_progression_stop_suggested", {"rounds": int(u.get("day_core_round_count") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await answer_with_keyboard(m, u, today_progress_text(u, profile), kb_day_core_stop, "day_core_stop")
                 return
-            if random.random() < 0.35:
+            if should_show_today_progress(u, profile):
                 await m.answer(today_progress_text(u, profile))
+                await record_today_progress_shown(u, profile)
             if not day_core_test_mode_enabled(u) and has_stale_day_core_lock(u):
                 previous_day = int(u.get("day") or 1)
                 sync_calendar_day(u)
@@ -2301,7 +2386,7 @@ async def main_flow(m: Message):
         u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
-        await m.answer("Ок. Делаю подробный разбор…")
+        await m.answer(analysis_loading_text(u.get("trainer_key") or "marsha"))
         await run_analysis(m, u, user_text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         return
 
@@ -2326,7 +2411,7 @@ async def main_flow(m: Message):
         u["analysis_json"] = json.dumps(safe_analysis_memory(t, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)
-        await m.answer("Ок. Делаю подробный разбор…")
+        await m.answer(analysis_loading_text(u.get("trainer_key") or "marsha"))
         await run_analysis(m, u, t, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         return
 
@@ -2917,6 +3002,11 @@ async def main_flow(m: Message):
                 summary["avoidance_trigger"],
                 summary["best_skills_text"],
                 summary["preferred_activation"],
+                summary.get("effect_notes", ""),
+                summary.get("failed_reason_count", 0),
+                summary.get("attention_escape_count", 0),
+                summary.get("shame_signal", ""),
+                summary.get("energy_signal", ""),
             ))
             await answer_with_keyboard(m, u, "Что дальше?", kb_pay_choice, "pay_choice")
             return
@@ -3011,6 +3101,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     user_text = stored_analysis_user_text(u) or f"У меня проблемы с {bucket}"
     comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
     comp = normalize_analysis(comp, user_text)
+    comp["trainer_key"] = u.get("trainer_key", "marsha")
     if comp.get("analysis_fallback"):
         await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "show_comprehensive_analysis"}, DB_PATH, SHEETS_WEBHOOK_URL)
     comp.pop("user_text", None)
@@ -3025,7 +3116,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     u["stage"] = "confirm_analysis"
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
-    diagnosis_profile_patch = profile_patch_from_diagnosis(comp)
+    diagnosis_profile_patch = {**profile_patch_from_diagnosis(comp), **live_analysis_profile_patch(str(comp.get("live_pattern") or ""))}
     await update_user_profile(u["user_id"], diagnosis_profile_patch, DB_PATH)
     await log_event(
         u["user_id"],
@@ -3046,7 +3137,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await log_event(u["user_id"], "analysis", "recommended_track_shown", {"recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     comp_for_message = dict(comp)
-    msg = f"{format_comprehensive_analysis(comp_for_message)}\n\n{preliminary_hypothesis_note()}\n\nЭто похоже на тебя?"
+    msg = f"{format_comprehensive_analysis(comp_for_message, trainer_key=u.get('trainer_key', 'marsha'))}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 
 # ============================================================

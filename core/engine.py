@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from skills import SKILLS_DB, get_current_plan
+from skills import SKILLS_DB, get_current_plan, core_skill_id_for_variant, core_skill_title, variants_for_core_skill
 
 
 Screen = Dict[str, Any]
@@ -152,10 +152,15 @@ def core_round_count_today(user_state: UserState) -> int:
 def build_day_core_updates(user_state: UserState, skill_id: str, reset_rounds: bool = False) -> Dict[str, Any]:
     today = _local_date(user_state)
     same_lock = user_state.get("day_core_skill_date") == today and user_state.get("day_core_skill_id") == skill_id
+    same_visible_core = user_state.get("current_core_skill_date") == today and user_state.get("current_core_skill_id")
+    visible_core_id = str(user_state.get("current_core_skill_id") or "") if same_visible_core else core_skill_id_for_variant(skill_id)
     return {
         "day_core_skill_id": skill_id,
         "day_core_skill_date": today,
         "day_core_round_count": 0 if reset_rounds or not same_lock else core_round_count_today(user_state),
+        "current_core_skill_id": visible_core_id,
+        "current_skill_variant_id": skill_id,
+        "current_core_skill_date": today,
     }
 
 def _parse_plan_ids(user_state: UserState) -> List[str]:
@@ -210,6 +215,9 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
     why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
     skill_name = skill.get("name", "Микро-шаг")
+    visible_core_id = user_state.get("current_core_skill_id") or core_skill_id_for_variant(str(skill.get("skill_id") or ""))
+    visible_core_title = core_skill_title(str(visible_core_id))
+    variant_label = user_state.get("skill_variant_label") or "Вариант сейчас"
     trainer_variants = skill.get("trainer_variants") or {}
     trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha") or "Давай бережно: только маленький вход, без давления на результат."
 
@@ -217,7 +225,8 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
         text = (
             f"{_trainer_header(user_state)}\n\n"
             f"📌 Дело: {target}\n\n"
-            f"🧩 Навык: {skill_name}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             f"Почему это работает:\n{why_short}\n\n"
             f"Сделай:\n{steps_text}\n\n"
@@ -227,7 +236,8 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
         text = (
             f"{_trainer_header(user_state)}\n\n"
             f"📌 Дело: {target}\n\n"
-            f"🧩 {skill_name}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             f"Делаешь только это:\n\n{steps_text}\n\n"
             f"Минимум:\n{minimum_action}\n\n"
@@ -237,7 +247,8 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
         text = (
             f"{_trainer_header(user_state)}\n\n"
             f"📌 Дело: {target}\n\n"
-            f"🧩 Навык: {skill_name}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             f"Попробуй:\n{steps_text}\n\n"
             f"Минимум:\n{minimum_action}\n\n"
@@ -314,11 +325,14 @@ def handle_action_result(user_state: UserState, result: str) -> Screen:
 
 def handle_downscale(user_state: UserState, reason: str) -> Screen:
     """Build the downscale skill card and state transition."""
-    skill_id = DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL
+    current_core_id = str(user_state.get("current_core_skill_id") or "") if user_state.get("current_core_skill_date") == _local_date(user_state) else ""
+    variants = [sid for sid in variants_for_core_skill(current_core_id) if sid in SKILLS_DB]
+    skill_id = variants[1] if len(variants) > 1 else (DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL)
     skill = deepcopy(SKILLS_DB[skill_id])
     skill.setdefault("skill_id", skill_id)
     local_state = dict(user_state)
     local_state["today_target"] = local_state.get("today_target") or "Прокрастинация в целом"
+    local_state["skill_variant_label"] = "Упрощение"
     card = build_skill_card(local_state, skill)
     card.update(
         {
@@ -329,6 +343,7 @@ def handle_downscale(user_state: UserState, reason: str) -> Screen:
                 "pending_skill_id": None,
                 "pending_skill_day": None,
                 "selected_skill": skill_id,
+                "current_skill_variant_id": skill_id,
                 "pattern": "initiation_before_tool",
                 "plan_override_day": _safe_int(user_state.get("day"), 1),
             },

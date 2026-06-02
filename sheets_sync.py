@@ -97,6 +97,17 @@ ALLOWED_KEYS = {
     "downscale_count",
     "habit_id",
     "micro_habit_id",
+    "last_effect_note",
+    "effect_tags",
+    "failed_reason_count",
+    "failed_reason_count_today",
+    "attention_escape_count",
+    "shame_signal",
+    "body_doubling_signal",
+    "energy_signal",
+    "best_variant",
+    "daily_progress_shown_count",
+    "daily_progress_shown_date",
 }
 
 log = logging.getLogger("sheets_sync")

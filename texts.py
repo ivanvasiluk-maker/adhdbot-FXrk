@@ -384,6 +384,13 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
     why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
     skill_name = skill.get("name", "Микро-шаг")
+    try:
+        from skills import core_skill_id_for_variant, core_skill_title
+        visible_core_id = user.get("current_core_skill_id") or core_skill_id_for_variant(str(skill.get("skill_id") or ""))
+        visible_core_title = core_skill_title(str(visible_core_id))
+    except Exception:
+        visible_core_title = "Вход через маленький шаг"
+    variant_label = user.get("skill_variant_label") or "Вариант сейчас"
     trainer_variants = skill.get("trainer_variants") or {}
     trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha")
     if not trainer_line:
@@ -397,7 +404,8 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"📌 Дело: {today_target}\n\n"
-            f"🧩 Навык: {skill_name}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             "Почему это работает:\n"
             f"{why_short}\n\n"
@@ -411,7 +419,8 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"📌 Дело: {today_target}\n\n"
-            f"🧩 {skill_name}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             "Делаешь только это:\n\n"
             f"{steps_text}\n\n"
@@ -423,7 +432,8 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     return (
         f"{trainer['emoji']} {trainer['name']}\n\n"
         f"📌 Дело: {today_target}\n\n"
-        f"🧩 Навык: {skill_name}\n\n"
+        f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
         f"{trainer_line}\n\n"
         "Попробуй:\n"
         f"{steps_text}\n\n"
@@ -537,15 +547,8 @@ def day3_offer_text(main_pattern: str = "сложно войти в действ
 
 def preliminary_hypothesis_note() -> str:
     return (
-        "Пока это предварительная гипотеза.\n\n"
-        "Мы ещё не знаем тебя достаточно хорошо.\n\n"
-        "Первые дни система будет смотреть:\n"
-        "— где ломается вход\n"
-        "— какие навыки помогают\n"
-        "— где нужен меньший шаг\n"
-        "— как ты реагируешь на срывы\n"
-        "— что облегчает старт именно тебе\n\n"
-        "Поэтому более точная карта появится через несколько дней практики."
+        "Пока это гипотеза.\n"
+        "Точная карта появится после 2–3 дней практики."
     )
 
 
@@ -617,19 +620,43 @@ def profile_signals_text(
     avoidance_trigger: str,
     best_skills: str,
     preferred_activation: str,
+    effect_note: str = "",
+    failed_reason_count: int = 0,
+    attention_escape_count: int = 0,
+    shame_signal: str = "",
+    energy_signal: str = "",
 ) -> str:
+    visible = ["вход часто становится слишком большим"]
+    if downscale_count:
+        visible.append("после уменьшения шага действие получается легче")
+    if shame_signal:
+        visible.append("самокритика усиливает ступор")
+    if attention_escape_count:
+        visible.append("залипание появляется как способ уйти от напряжения")
+    if energy_signal and energy_signal != "unknown":
+        visible.append("ресурс влияет на стоимость входа")
+    visible_text = "\n".join(f"— {item}" for item in visible[:5])
+    note_block = f"\n\nЧто отметили после шага:\n“{effect_note}”" if effect_note else ""
     return (
-        "📊 Что уже видно:\n\n"
-        f"Возвраты после срыва: {return_count}\n"
-        f"Downscale: {downscale_count}\n"
-        f"Успешные подходы: {done_count}\n\n"
+        "🧭 Твоя предварительная карта\n\n"
+        "Пока это не диагноз, а рабочая гипотеза.\n\n"
+        "Что уже видно:\n"
+        f"{visible_text}\n\n"
+        "Что сработало:\n"
+        f"{best_skills}"
+        f"{note_block}\n\n"
+        "Счётчики дня:\n"
+        f"— успешные подходы: {done_count}\n"
+        f"— downscale: {downscale_count}\n"
+        f"— возвраты после срыва: {return_count}\n"
+        f"— сбои не стали концом: {failed_reason_count}\n\n"
         "Чаще всего мешает:\n"
         f"😬 {avoidance_trigger}\n\n"
-        "Лучше всего помогают:\n"
-        f"{best_skills}\n\n"
+        "Дальше проверим:\n"
+        "— помогает ли тебе внешний контакт / body doubling\n"
+        "— какой формат входа держится лучше\n\n"
         "Похоже, тебе легче начинать:\n"
-        f"{preferred_activation}\n\n"
-        "Это пока предварительная карта."
+        f"{preferred_activation}"
     )
 
 def payment_20_stub_text() -> str:
@@ -972,9 +999,8 @@ kb_yes_no = ReplyKeyboardMarkup(
 
 kb_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="📚 Подробнее")],
-        [KeyboardButton(text="😑 Ты меня не понял"), KeyboardButton(text="💪 Давай действие")],
-        [KeyboardButton(text="🤔 Не совсем")],
+        [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="😑 Ты меня не понял")],
+        [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="💪 Давай действие")],
     ],
     resize_keyboard=True
 )

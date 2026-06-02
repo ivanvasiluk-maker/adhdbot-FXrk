@@ -14,6 +14,52 @@ def propose_plan_override(u: dict, day_number: int, new_skill_id: str):
     overrides = json.loads(u.get("plan_overrides_json") or "{}") if u.get("plan_overrides_json") else {}
     overrides[str(day_number)] = new_skill_id
     u["plan_overrides_json"] = json.dumps(overrides, ensure_ascii=False)
+# Visible day-level core skill groups. The user sees this stable title all day;
+# concrete SKILLS_DB ids below are variants/adaptations inside that core.
+CORE_SKILL_GROUPS = {
+    "entry_small_step": {
+        "title": "Вход через маленький шаг",
+        "variants": ["open_only", "task_naming", "visible_next_step", "ninety_sec_start"],
+    },
+    "attention_container": {
+        "title": "Контейнер внимания",
+        "variants": ["one_tab_focus", "phone_far_3min", "visible_next_step", "urge_surf_60"],
+    },
+    "shame_to_action": {
+        "title": "От самокритики к действию",
+        "variants": ["check_the_facts_light", "self_criticism_to_instruction", "bad_first_step"],
+    },
+    "energy_first": {
+        "title": "Сначала ресурс, потом задача",
+        "variants": ["body_before_task", "minimum_viable_day", "open_only"],
+    },
+    "return_after_slip": {
+        "title": "Возврат после срыва",
+        "variants": ["restart_after_slip", "task_naming", "open_only"],
+    },
+}
+
+VARIANT_TO_CORE_SKILL_ID = {}
+for _core_id, _core_data in CORE_SKILL_GROUPS.items():
+    for _variant_id in _core_data.get("variants", []):
+        VARIANT_TO_CORE_SKILL_ID.setdefault(_variant_id, _core_id)
+
+
+def core_skill_id_for_variant(skill_id: str) -> str:
+    return VARIANT_TO_CORE_SKILL_ID.get(skill_id or "", "entry_small_step")
+
+
+def core_skill_title(core_skill_id: str) -> str:
+    return CORE_SKILL_GROUPS.get(core_skill_id or "", CORE_SKILL_GROUPS["entry_small_step"])["title"]
+
+
+def core_skill_title_for_variant(skill_id: str) -> str:
+    return core_skill_title(core_skill_id_for_variant(skill_id))
+
+
+def variants_for_core_skill(core_skill_id: str) -> list:
+    return list(CORE_SKILL_GROUPS.get(core_skill_id or "", CORE_SKILL_GROUPS["entry_small_step"]).get("variants", []))
+
 # 4-недельные шаблоны по bucket (28 дней)
 PROGRAM_TEMPLATES = {
     "anxiety": {
