@@ -832,8 +832,9 @@ kb_done = ReplyKeyboardMarkup(
 
 kb_day_core_stop = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🌙 На сегодня хватит")],
         [KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="📚 Почему это работает")],
+        [KeyboardButton(text="🌙 До завтра")],
     ],
     resize_keyboard=True
 )
@@ -904,6 +905,23 @@ kb_crisis_stabilize = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+
+
+def day_training_closed_text() -> str:
+    return (
+        "Сегодняшняя тренировка завершена.\n\n"
+        "Главный навык дня сохранён.\n\n"
+        "Новый основной навык откроется завтра."
+    )
+
+
+def day_lock_why_text() -> str:
+    return (
+        "Почему это работает:\n\n"
+        "Навык закрепляется повторением, а не поиском новой техники.\n"
+        "Сегодня задача — сохранить один основной вход и не превращать день в автомат с бесконечными советами.\n\n"
+        "Завтра откроется новый основной навык."
+    )
 
 def crisis_stabilize_text() -> str:
     return (

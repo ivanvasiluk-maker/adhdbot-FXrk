@@ -6,6 +6,7 @@ Core logic should stay UI-independent for future app migration.
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -25,14 +26,13 @@ SKILL_CARD_BUTTONS = [
     "🆘 Кризис",
 ]
 DONE_BUTTONS = ["🔁 Ещё круг", "🌙 На сегодня хватит"]
-DAY_STOP_BUTTONS = ["🌙 На сегодня хватит", "🧭 Моя карта"]
+DAY_STOP_BUTTONS = ["🧭 Моя карта", "📚 Почему это работает", "🌙 До завтра"]
 MAX_CORE_ROUNDS_PER_DAY = 4
 DAY_CORE_STOP_TEXT = (
-    "На сегодня хватит.\n\n"
-    "Ты уже сделал несколько подходов.\n"
-    "Сейчас важнее не добить себя, а закрепить повтор.\n\n"
-    "Следующий core skill появится завтра.\n"
-    "Можно закрыть день или посмотреть карту."
+    "На сегодня достаточно.\n\n"
+    "Сейчас важнее повторение навыка,\n"
+    "а не поиск новой техники.\n\n"
+    "Новый навык откроется завтра."
 )
 FAILED_BUTTONS = ["😣 Слишком сложно", "😵 Нет сил", "📱 Залип", "🤔 Не понял"]
 DOWNSCALE_BUTTONS = ["✅ Сделал", "😣 Даже это сложно", "🤔 Зачем так мало?"]
@@ -121,7 +121,16 @@ def _local_date(user_state: UserState) -> str:
         return datetime.now(timezone.utc).date().isoformat()
 
 
+def _admin_ids() -> set[str]:
+    return {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
+
+
 def _test_mode_enabled(user_state: UserState) -> bool:
+    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}:
+        return True
+    user_id = str(user_state.get("user_id") or "")
+    if user_id not in _admin_ids():
+        return False
     return _safe_int(user_state.get("is_test_user"), 0) == 1 or _safe_int(user_state.get("fast_forward_enabled"), 0) == 1
 
 

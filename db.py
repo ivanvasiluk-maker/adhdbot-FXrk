@@ -37,6 +37,7 @@ USER_FIELDS = [
     "today_target",
     "day",
     "created_at",
+    "first_start_date",
     "points",
     "level",
     "streak",
@@ -173,6 +174,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "pending_plan_change": None,
         "crisis_count": 0,
         "created_at": time.time(),
+        "first_start_date": None,
         "test_answers": [],  # Временное хранилище для ответов теста
         "done_count": 0,
         "return_count": 0,
@@ -208,6 +210,7 @@ async def init_db(db_path: str):
                 today_target TEXT,
                 day INTEGER,
                 created_at REAL,
+                first_start_date TEXT,
                 points INTEGER,
                 level INTEGER,
                 streak INTEGER,
@@ -306,6 +309,7 @@ EXTRA_USER_COLS = {
     "level": "INTEGER",
     "streak": "INTEGER",
     "last_active": "REAL",
+    "first_start_date": "TEXT",
     "plan_overrides_json": "TEXT",   # правки плана после кризиса
     "trial_days": "INTEGER",         # 3 или 7
     "trial_phase": "TEXT",           # "trial3" / "trial7" / "paid" / ...

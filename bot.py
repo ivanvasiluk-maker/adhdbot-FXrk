@@ -651,6 +651,25 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
 async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], reason: str) -> bool:
     profile = await get_user_profile(u["user_id"], DB_PATH)
     today = local_date_for_user(u)
+    if not day_core_test_mode_enabled(u):
+        sid = current_skill_id(u) or "open_only"
+        skill = dict(SKILLS_DB.get(sid) or SKILLS_DB.get("open_only") or next(iter(SKILLS_DB.values())))
+        skill.setdefault("skill_id", sid)
+        await record_profile_signal(u["user_id"], "training", {
+            "skill_replacement_blocked_by_day_lock": True,
+            "last_replacement_reason": reason,
+        }, source="day_lock_skill_replace")
+        await log_event(u["user_id"], "training", "skill_replace_blocked_day_lock", {"skill_id": sid, "reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Сегодня основной навык не меняю.\n\n"
+            "Это и есть тренировка: не искать новую технику, а уменьшить вход в текущую.\n\n"
+            f"Вариация текущего навыка:\n\n{format_skill_card(u, skill, u.get('today_target') or 'текущая задача')}",
+            kb_skill_card,
+            "skill_card",
+        )
+        return True
     count = _skill_replacement_count_today(profile, u)
     if count >= MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS:
         u["stage"] = "await_input_mode"
@@ -826,12 +845,12 @@ def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
 
     Admin fast-forward (testmode/flag) allows testing offer path without waiting 3 days.
     """
-    if int(u.get("fast_forward_enabled") or 0) == 1 or int(u.get("is_test_user") or 0) == 1 or TEST_MODE:
+    if day_core_test_mode_enabled(u):
         if is_paid(u) or int(u.get("free_mode") or 0) == 1:
             return False
         return True
     state = dict(u)
-    state["day"] = day
+    state["day"] = calendar_program_day(state)
     if not engine_should_show_offer(state):
         return False
     has_payment_url = bool(PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)
@@ -854,7 +873,55 @@ def local_date_for_user(u: Dict[str, Any]) -> str:
 
 
 def day_core_test_mode_enabled(u: Dict[str, Any]) -> bool:
-    return int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1
+    if TEST_MODE:
+        return True
+    try:
+        uid = int(u.get("user_id") or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    return is_admin(uid) and (int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1)
+
+
+def _parse_iso_date(value: str):
+    try:
+        return dt.date.fromisoformat(str(value or "")[:10])
+    except Exception:
+        return None
+
+
+def ensure_first_start_date(u: Dict[str, Any]) -> str:
+    start = _parse_iso_date(u.get("first_start_date"))
+    if not start:
+        today = local_date_for_user(u)
+        u["first_start_date"] = today
+        return today
+    return start.isoformat()
+
+
+def calendar_program_day(u: Dict[str, Any]) -> int:
+    start = _parse_iso_date(ensure_first_start_date(u))
+    today = _parse_iso_date(local_date_for_user(u)) or dt.datetime.now(dt.timezone.utc).date()
+    if not start:
+        return 1
+    return max(1, (today - start).days + 1)
+
+
+def sync_calendar_day(u: Dict[str, Any]) -> int:
+    if day_core_test_mode_enabled(u):
+        ensure_first_start_date(u)
+        return max(1, int(u.get("day") or 1))
+    computed_day = calendar_program_day(u)
+    old_day = int(u.get("day") or 1)
+    if old_day != computed_day:
+        u["day"] = computed_day
+        if "current_day" in u:
+            u["current_day"] = computed_day
+        u["today_target"] = None
+        u["pending_skill_id"] = None
+        u["pending_skill_day"] = None
+    if has_stale_day_core_lock(u):
+        clear_day_core_lock(u)
+    return computed_day
 
 
 def has_stale_day_core_lock(u: Dict[str, Any]) -> bool:
@@ -1070,12 +1137,9 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str):
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], u.get("stage", ""), "test_cheat_activated", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
     await m.answer(
-        "Тестовый чит включён.\n\n"
-        "Теперь можно прокликивать функции без ожидания календарных дней и paywall.\n\n"
-        "Команды для теста:\n"
-        "/set_day 3\n"
-        "/force_next_day\n"
-        "/show_offer\n"
+        "Тестовый чит включён для этого пользователя.\n\n"
+        "Календарные переходы, новый день и ручной offer всё равно доступны только ADMIN.\n\n"
+        "Доступно:\n"
         "/debug_user\n"
         "/reset_me\n"
         "/testmode_off"
@@ -1147,7 +1211,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     }
     if command not in admin_commands:
         return False
-    test_user_commands = {"/set_day", "/force_next_day", "/show_offer", "/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health"}
+    test_user_commands = {"/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health"}
     if not is_admin(uid):
         if not (int(u.get("is_test_user") or 0) == 1 and command in test_user_commands):
             await m.answer("Команда недоступна.")
@@ -1209,7 +1273,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
 
     if command == "/show_offer":
-        if not (is_admin(uid) or int(u.get("is_test_user") or 0) == 1):
+        if not is_admin(uid):
             await m.answer("Команда недоступна.")
             return True
         await log_event(uid, u.get("stage", ""), "admin_show_offer", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1227,6 +1291,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["profile_json"] = {}
         u["pending_skill_id"] = None
         u["today_target"] = None
+        u["first_start_date"] = None
         clear_day_core_lock(u)
         u["payment_status"] = "free"
         u["free_mode"] = 0
@@ -1472,7 +1537,8 @@ def detects_body_doubling_signal(text: str) -> bool:
 
 
 async def ask_today_action(m: Message, u: Dict[str, Any]):
-    day = int(u.get("day") or 1)
+    day = sync_calendar_day(u)
+    await save_user(u, DB_PATH)
     if day > 3 and not is_paid(u) and not day_core_test_mode_enabled(u) and not TEST_MODE:
         await log_event(u["user_id"], "offer", "paywall_after_trial", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
         await show_day3_offer(m, u, "paywall_after_trial")
@@ -1661,6 +1727,10 @@ async def main_flow(m: Message):
     if TEST_CHEAT_CODE and text == TEST_CHEAT_CODE:
         await activate_test_cheat(m, u, "plain_code")
         return
+
+    if u.get("first_start_date") or int(u.get("has_started_training") or 0) == 1 or u.get("day_core_skill_date"):
+        sync_calendar_day(u)
+        await save_user(u, DB_PATH)
 
     if user_is_in_action_loop(u) and text and detects_body_doubling_signal(text):
         await record_profile_signal(u["user_id"], "training", {
@@ -1975,6 +2045,14 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "training", "profile_map_requested", {"source": "day_core_stop"}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, txt, kb_done, "done")
             return
+        if text == "📚 Почему это работает" or "почему это работает" in low:
+            await log_event(u["user_id"], "training", "day_lock_why_opened", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, day_lock_why_text(), kb_day_core_stop, "day_core_stop")
+            return
+        if text == "🌙 До завтра" or "до завтра" in low:
+            await log_event(u["user_id"], "training", "day_lock_until_tomorrow", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "До завтра. Новый основной навык откроется после смены календарного дня.", kb_day_core_stop, "day_core_stop")
+            return
         if text == "📌 Что изменилось?" or "что изменилось" in low:
             u["stage"] = "after_action_note"
             await save_user(u, DB_PATH)
@@ -1990,31 +2068,21 @@ async def main_flow(m: Message):
             if random.random() < 0.35:
                 await m.answer(today_progress_text(u, profile))
             if not day_core_test_mode_enabled(u) and has_stale_day_core_lock(u):
-                current_day = int(u.get("day") or 1)
-                plan = get_current_plan(u)
-                max_day = len(plan) if plan else current_day + 1
-                u["day"] = min(current_day + 1, max_day)
-                u["today_target"] = None
-                u["pending_skill_id"] = None
-                u["pending_skill_day"] = None
-                clear_day_core_lock(u)
+                previous_day = int(u.get("day") or 1)
+                sync_calendar_day(u)
                 await save_user(u, DB_PATH)
-                await log_event(u["user_id"], "training", "day_core_date_rollover", {"from_day": current_day, "to_day": u["day"]}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await log_event(u["user_id"], "training", "day_core_date_rollover", {"from_day": previous_day, "to_day": u.get("day")}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await ask_today_action(m, u)
                 return
             screen = engine_get_next_screen(u, {"type": "repeat_skill_card"})
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
             await log_engine_events(u, screen)
-            markup = kb_day_core_stop if screen.get("buttons") == ["🌙 На сегодня хватит", "🧭 Моя карта"] else kb_skill_card
+            markup = kb_day_core_stop if screen.get("buttons") == ["🧭 Моя карта", "📚 Почему это работает", "🌙 До завтра"] else kb_skill_card
             await answer_with_keyboard(m, u, screen["text"], markup, "day_core_stop" if markup is kb_day_core_stop else "skill_card")
             return
         if text in {"🌙 На сегодня хватит", "🌙 Хватит на сегодня"} or "хватит" in low:
-            current_day = int(u.get("day") or 1)
-            plan = get_current_plan(u)
-            max_day = len(plan) if plan else current_day + 1
-            next_day = min(current_day + 1, max_day)
-            u["day"] = next_day
+            current_day = sync_calendar_day(u)
             u["pending_skill_id"] = None
             u["pending_skill_day"] = None
             u["today_target"] = None
@@ -2023,15 +2091,13 @@ async def main_flow(m: Message):
             await log_event(
                 u["user_id"],
                 "training",
-                "day_complete",
-                {"completed_day": current_day, "next_day": next_day},
+                "day_training_closed",
+                {"day": current_day, "day_core_skill_id": u.get("day_core_skill_id")},
                 DB_PATH,
                 SHEETS_WEBHOOK_URL,
             )
-            await log_event(u["user_id"], "training", "done_enough_today", {"completed_day": current_day, "next_day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
-            if await maybe_show_micro_habit(m, u, "day_closed"):
-                return
-            await answer_with_keyboard(m, u, f"Ок. День {current_day} закрыт. В следующий раз начнём день {next_day}.", kb_training_main, "training_main")
+            await log_event(u["user_id"], "training", "done_enough_today", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, day_training_closed_text(), kb_day_core_stop, "day_core_stop")
             return
         await answer_with_keyboard(m, u, "Выбери кнопкой 👇", kb_done, "done")
         return
@@ -2187,8 +2253,9 @@ async def main_flow(m: Message):
     if u.get("stage") == "diagnosis_done":
         u["stage"] = "waiting_next_day"
         u["day"] = 1
+        ensure_first_start_date(u)
         await save_user(u, DB_PATH)
-        await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
+        await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
         return
 
     # choose_input_mode
@@ -2279,11 +2346,12 @@ async def main_flow(m: Message):
         ):
             u["stage"] = "waiting_next_day"
             u["day"] = 1
+            ensure_first_start_date(u)
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "day1_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(guarantee_block(u.get("trainer_key")), reply_markup=kb_yes_no)
-            # Запуск первого дня сразу
-            await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
+            # Запуск первого календарного дня сразу
+            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
             return
 
         if text == "❌ Нет" or "нет" in low:
@@ -2296,10 +2364,11 @@ async def main_flow(m: Message):
         if "принимаю" in low or "принимают" in low:
             u["stage"] = "waiting_next_day"
             u["day"] = 1
+            ensure_first_start_date(u)
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "day1_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            # Явно запускаем первый день
-            await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
+            # Явно запускаем первый календарный день тренировки
+            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
             return
         if "нет" in low:
             await m.answer("Ок. Без гарантии — не стартуем.")
@@ -2312,8 +2381,9 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "analysis", "analysis_action_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["stage"] = "waiting_next_day"
             u["day"] = 1
+            ensure_first_start_date(u)
             await save_user(u, DB_PATH)
-            await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
+            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -2325,9 +2395,10 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "analysis", "analysis_action_started", {"source": "accepted"}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["stage"] = "waiting_next_day"
             u["day"] = 1
+            ensure_first_start_date(u)
             await save_user(u, DB_PATH)
             await m.answer(analysis_next_step_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
-            await start_day(m, u, 1, DB_PATH, SHEETS_WEBHOOK_URL)
+            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
             return
         if "немного" in low or "не так" in low or "не совсем" in low or text in {"🤔 Немного не так", "🤔 Не совсем"}:
             await open_misunderstood_flow(m, u, "confirm_analysis")
@@ -2889,9 +2960,11 @@ async def on_callbacks(c: CallbackQuery):
     if u.get("stage") == "confirm_analysis":
         if c.data == "yes":
             u["stage"] = "waiting_next_day"
+            u["day"] = 1
+            ensure_first_start_date(u)
             await save_user(u, DB_PATH)
-            # Показываем первый навык сразу после онбординга (через callback)
-            await start_day(m=c.message, u=u, day=1, db_path=DB_PATH, sheets_webhook=SHEETS_WEBHOOK_URL)
+            # Показываем первый календарный навык сразу после онбординга (через callback)
+            await start_day(m=c.message, u=u, day=calendar_program_day(u), db_path=DB_PATH, sheets_webhook=SHEETS_WEBHOOK_URL)
         else:
             u["stage"] = "await_problem_text"
             await save_user(u, DB_PATH)

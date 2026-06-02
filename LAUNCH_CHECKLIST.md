@@ -32,11 +32,11 @@
 21. Side skill показывается максимум 1 раз в день.
 22. Side skill не показывается после crisis/overload/downscale.
 23. Body-doubling mention сохраняет `preferred_activation = body_doubling` в `profile_json`.
-24. `/test_access <TEST_CHEAT_CODE>` или plain cheat code включает тестовый режим только для этого пользователя.
+24. `/test_access <TEST_CHEAT_CODE>` или plain cheat code включает ограниченные QA-helper команды только для этого пользователя.
 25. Без cheat code обычный пользователь остаётся в daily/paywall flow.
 26. `/testmode_on` работает для админа.
-27. `/set_day 3` / `/force_next_day` работает для админа или пользователя с cheat code.
-28. `/show_offer` показывает Day3 offer для админа или пользователя с cheat code.
+27. `/set_day 3` / `/force_next_day` работают только для ADMIN.
+28. `/show_offer` показывает Day3 offer только для ADMIN.
 29. Day3 offer показывает `€14.98`.
 30. Day3 offer продаёт персональную систему / рабочую карту действия, не “бота на месяц”.
 31. Payment click logs event.
