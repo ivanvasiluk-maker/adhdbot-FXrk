@@ -442,7 +442,7 @@ def detect_live_analysis_pattern(user_text: str) -> str:
     text = (user_text or "").lower()
     if any(x in text for x in ("ленив", "безволь", "нормальные люди", "со мной что-то не так")):
         return "shame_self_attack"
-    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен")):
+    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен", "выглядеть глупо", "глупо", "стыдно", "критика")) or ("боюсь" in text and any(x in text for x in ("плохо", "ошиб", "глуп", "оцен", "письм", "результ"))):
         return "perfectionism_visibility_fear"
     if any(x in text for x in ("залип", "ютуб", "youtube", "сообщения", "почта", "на минуту", "лента", "скрол")):
         return "attention_escape"
@@ -473,11 +473,11 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
         skinny = "Не лень.\nСамообвинение забирает вход.\nДелаем маленькое действие.\nПроверяем."
         marsha = "Похоже, ты очень жёстко с собой обходишься после срыва.\nИ я не думаю, что проблема в том, что ты мало стараешься.\nДавай вернём действие без стыда.\nБез давления."
     elif pattern == "perfectionism_visibility_fear":
-        mechanic = "проблема начинается раньше самой задачи: в моменте, где результат могут увидеть или оценить"
-        evidence = "если бы задача была лёгкой и безопасной, ты бы не держал её столько дней; в описании есть риск позора, оценки или неидеального результата"
-        check = "не лень, а страх ошибки: черновик, факт вместо приговора и маленькую публикацию без идеальности"
-        skinny = "Страх оценки.\nНе философствуем.\nДелаем черновик, не шедевр.\nЕсли получится — вход станет дешевле."
-        marsha = "Тут много страха быть увиденным неидеальным.\nЭто не значит, что с тобой что-то не так.\nМозг пытается не встретиться с риском сделать плохо.\nНачнём с безопасного черновика."
+        mechanic = "похоже, проблема не в письме или задаче; она начинается в момент, когда результат могут увидеть другие"
+        evidence = "если бы письмо было лёгким и безопасным, ты бы сделал его ещё три дня назад; вместо этого появляются Telegram, почта, новости и подготовка"
+        check = "не лень, а страх ошибки: плохой черновик, факт вместо приговора и один маленький шаг без идеальности"
+        skinny = "Не письмо ломается.\nЛомается момент: показать результат.\nСтрах ошибки гонит в Telegram и подготовку.\nДелаем черновик, не шедевр.\nЕсли получится — вход станет дешевле."
+        marsha = "Похоже, дело не в том, что письмо слишком сложное.\nТяжёлым стал момент, где можно выглядеть глупо или сделать плохо.\nЭто не делает тебя ленивым.\nНачнём с безопасного черновика, без давления."
     elif pattern == "attention_escape":
         mechanic = "мозг выбирает быстрый контур награды: сообщения, лента, YouTube"
         evidence = "внимание уходит туда, где быстрее награда и меньше напряжения"
@@ -518,6 +518,7 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
             "Если после уменьшения шага тебе легче начать,\n"
             "значит проблема не в мотивации,\n"
             "а во входе в задачу.\n\n"
+            "И это хорошая новость: такие вещи обычно тренируются лучше, чем кажется.\n\n"
             "Пока это гипотеза."
         )
     if trainer_key == "skinny":
@@ -777,7 +778,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual precise analysis before asking for confirmation.
-    msg = f"{format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))}\n\nЭто похоже на тебя?"
+    analysis_text = format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))
+    msg = f"{analysis_text}\n\n{preliminary_hypothesis_note()}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(

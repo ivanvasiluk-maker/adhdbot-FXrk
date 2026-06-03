@@ -2473,7 +2473,11 @@ async def main_flow(m: Message):
 
 
 
-    if text in {"📚 Подробнее", "🤔 Зачем это?"}:
+    if (
+        text in {"📚 Подробнее", "🤔 Зачем это?"}
+        and u.get("stage") not in {"confirm_analysis", "analysis_" + "contract", "analysis_next_step", "offer"}
+        and bool(u.get("micro_habit_json"))
+    ):
         habit = {}
         try:
             habit = json.loads(u.get("micro_habit_json") or "{}")
