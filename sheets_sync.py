@@ -108,6 +108,19 @@ ALLOWED_KEYS = {
     "best_variant",
     "daily_progress_shown_count",
     "daily_progress_shown_date",
+    "effect_relief",
+    "effect_confidence",
+    "effect_anxiety_down",
+    "effect_clarity",
+    "crisis_tool_date",
+    "crisis_tool_count_today",
+    "last_crisis_tool_reason",
+    "system_day_id",
+    "last_system_day_id",
+    "system_day_opened",
+    "system_day_useful",
+    "system_day_already",
+    "system_day_signals",
 }
 
 log = logging.getLogger("sheets_sync")
@@ -253,6 +266,8 @@ def user_to_sheet_row(user: Dict[str, Any]) -> List[Any]:
         profile.get("slip_pattern") or profile.get("return_pattern") or "",
         profile.get("attention_pattern") or "",
         profile.get("side_skill_interest") or "",
+        profile.get("system_day_signals") or "",
+        profile.get("last_system_day_id") or "",
         profile.get("action_done_count") or profile.get("done_count") or "",
         profile.get("downscale_count") or "",
         profile.get("return_count") or "",
