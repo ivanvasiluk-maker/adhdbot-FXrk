@@ -1,70 +1,91 @@
 # LAUNCH CHECKLIST — SKILLER BOT
 
+## Режим перед запуском
+
+После текущего патча продукт **не расширяем до живого теста**. Цель QA — не придумать новые функции, а проверить, что текущий bot-flow готов для закрытого платного теста.
+
 ## Обязательная ручная проверка перед запуском
 
 1. `/start` работает.
 2. Имя сохраняется.
-3. Выбор тренера работает.
-4. Язык тренера отличается в skill cards.
-5. Voice diagnosis работает.
-6. Text diagnosis работает.
-7. Quick test работает.
-8. Wow analysis shown.
-9. Details button works.
-10. “Я не понимаю” works.
-11. Skill card clean, no “Как: Почему работает”.
-12. “Сложно даже таймер” triggers downscale, not full analysis.
-13. “Ты меня не понял” does not restart onboarding.
-14. Карта 4 недель не показывается автоматически слишком рано.
-15. Route shown by button.
-16. Action done logs event.
-17. Action failed logs event.
-18. Downscale logs event.
-19. Evening check-in works.
-20. Day3 offer appears.
-21. Payment click logs event.
-22. `/testmode_on` works.
-23. `/set_day 3` works.
-24. `/show_offer` works.
-25. Google Sheets sync works.
-26. Crisis flow works.
-27. Background ping does not spam.
-28. Railway deploy starts.
-29. No `TelegramConflictError`.
-30. `/stats` works for admin.
-31. `/health` works.
+3. Выбор каждого тренера работает.
+4. Тон тренеров отличается:
+   - Скинни — коротко, жёстко, через действие.
+   - Бек — логика и проверка по действиям.
+   - Марша — мягко и безопасно.
+5. Text diagnosis работает на IT/perfectionism/body-doubling кейсе.
+6. Анализ конкретный, без generic GPT-фраз.
+7. `📚 Подробнее` расширяет объяснение, не дублирует тот же блок.
+8. `😑 Ты меня не понял` задаёт вопросы и пересобирает анализ/навык/карту.
+9. Skill card чистая и ведёт к действию.
+10. `✅ Сделал` даёт короткий done-flow без опросника.
+11. `🔁 Ещё круг` показывает накопление редко и коротко.
+12. После 3–4 кругов бот останавливает цикл или предлагает закрыть день.
+13. `❌ Не сделал` открывает разные причины.
+14. `😣 Слишком сложно` даёт smaller-entry response.
+15. `😵 Нет сил` даёт body/energy response.
+16. `📱 Залип` даёт anti-scroll / phone-away / one-tab response.
+17. `🤔 Не понял` даёт простое объяснение + пример + физический шаг.
+18. Crisis flow короткий: успокоение → навык → решение.
+19. Один день = один core skill.
+20. Новый core skill появляется только после 00:00 user timezone или в admin/test mode.
+21. Side skill показывается максимум 1 раз в день.
+22. Side skill не показывается после crisis/overload/downscale.
+23. Body-doubling mention сохраняет `preferred_activation = body_doubling` в `profile_json`.
+24. `/test_access <TEST_CHEAT_CODE>` или plain cheat code включает ограниченные QA-helper команды только для этого пользователя.
+25. Без cheat code обычный пользователь остаётся в daily/paywall flow.
+26. `/testmode_on` работает для админа.
+27. `/set_day 3` / `/force_next_day` работают только для ADMIN.
+28. `/show_offer` показывает Day3 offer только для ADMIN.
+29. Day3 offer показывает `€14.98`.
+30. Day3 offer продаёт персональную систему / рабочую карту действия, не “бота на месяц”.
+31. Payment click logs event.
+32. `/sync_sheets` работает.
+33. Sheets не получает полные личные тексты, voice transcripts, crisis content, исповеди или медицинские детали.
+34. `/stats` работает для админа.
+35. `/health` работает.
+36. Background ping не спамит.
+37. Railway deploy starts.
+38. No `TelegramConflictError`.
 
 ## Быстрый paid-flow smoke test
 
-1. `/start`
+1. `/start`.
 2. Ввести имя.
-3. Выбрать Бека.
+3. Выбрать тренера.
 4. Ответить на согласие уведомлений.
-5. Пройти голосовую диагностику.
-6. Посмотреть разбор.
-7. Нажать «Подробнее».
-8. Нажать «Я не понимаю».
-9. Получить первый навык.
-10. Написать «сложно даже таймер».
-11. Проверить downscale.
-12. Нажать «Сделал».
-13. Проверить вечерний check-in.
-14. `/testmode_on`
-15. `/set_day 3`
-16. `/show_offer`
-17. Кликнуть `7 дней — €20`.
-18. Проверить событие в SQLite.
-19. `/sync_sheets`
-20. Проверить строку в Google Sheets.
-21. `/stats`
+5. Пройти text diagnosis с IT/perfectionism/body-doubling кейсом.
+6. Проверить короткий конкретный анализ.
+7. Нажать `📚 Подробнее`.
+8. Нажать `😑 Ты меня не понял` и проверить rebuild-flow.
+9. Получить первый skill card.
+10. Нажать `❌ Не сделал`.
+11. Проверить все причины fail.
+12. Нажать `✅ Сделал`.
+13. Проверить короткий done-flow.
+14. Нажать `🔁 Ещё круг` 3–4 раза и проверить stop/progression.
+15. `/test_access <TEST_CHEAT_CODE>` или plain cheat code.
+16. `/set_day 3`.
+17. `/show_offer`.
+18. Проверить offer `€14.98`.
+19. Кликнуть `💳 Продолжить за €14.98`.
+20. Проверить событие в SQLite.
+21. `/sync_sheets`.
+22. Проверить строку в Google Sheets.
+23. `/stats`.
 
-## Definition of Done перед тестом
+## Финальное решение
 
-- Бот не ведёт свободный GPT-чат.
-- Бот ведёт пользователя к действию.
-- Sheets не тормозит ответ пользователю.
-- Полный текст проблемы, транскрипты, кризисные сообщения, личные истории и медицинские детали не уходят в Sheets.
-- Оплата появляется на day3 или вручную через `/show_offer` для админа.
-- Есть test mode для прокликивания за один день.
-- Тренеры говорят разным языком.
-- Если сложно — бот уменьшает шаг, а не запускает новый разбор.
+После прохождения QA — запускать на живых людях.
+
+Дальше собирать:
+
+- retention;
+- ошибки;
+- клики на offer;
+- реальные ответы;
+- причины fail;
+- выполнение навыков;
+- точки выхода из flow.
+
+Новые изменения после запуска делать по данным, а не по фантазии.
