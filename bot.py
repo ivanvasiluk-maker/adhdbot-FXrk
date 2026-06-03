@@ -207,6 +207,7 @@ ACTION_RELATED_STAGES = {
     "downscale_action",
     "downscale_name_task",
     "failed_options",
+    "skip_options",
 }
 
 
@@ -1270,12 +1271,10 @@ def _today_iso(u: Optional[Dict[str, Any]] = None):
     return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 def should_show_micro_habit(u: Dict[str, Any], source: str = "done") -> bool:
-    # Side skill is a small optional system habit: max once per user-local day,
-    # and never immediately after crisis/overload/downscale.
-    blocked_sources = {"after_crisis", "failed", "failed_too_hard", "failed_no_energy", "downscale", "downscale_done", "too_hard", "overload"}
-    if source in blocked_sources or "crisis" in source or "downscale" in source or "overload" in source:
-        return False
-    if source != "day_start" and random.random() > 0.38:
+    # System of Day is shown only after the training day is closed.
+    # It is not a second skill, not progress, and not a streak action.
+    allowed_sources = {"day_closed", "day_core_stop", "done_enough_today"}
+    if source not in allowed_sources:
         return False
     if (u.get("last_micro_habit_date") or "") == _today_iso(u):
         return False
@@ -2179,6 +2178,57 @@ async def main_flow(m: Message):
 
     # Action-loop clarification/downscale: не запускаем повторную карту после старта тренировки
     if user_is_in_action_loop(u):
+        if text == "Пропустить" or low == "пропустить":
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            sid = current_skill_id(u)
+            skip_count = int(profile.get("action_skip_count") or 0) + 1
+            await record_profile_signal(u["user_id"], "training", {
+                "action_skip_count": skip_count,
+                "last_skipped_skill": sid,
+                "avoidance_pattern": "step_skipped",
+                "avoidance_trigger": "шаг ощущается большим или не подходит",
+            }, source="action_skipped")
+            await log_event(u["user_id"], "training", "action_skipped", {"skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["stage"] = "skip_options"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(
+                m,
+                u,
+                "Ок.\n\n"
+                "Это тоже информация.\n\n"
+                "Похоже,\n"
+                "сейчас даже этот шаг ощущается большим\n"
+                "или не подходит.\n\n"
+                "Записал.\n\n"
+                "Что делаем дальше?",
+                kb_skip_data,
+                "skip_options",
+            )
+            return
+
+        if u.get("stage") == "skip_options":
+            if text == "🔁 Другой навык" or "другой" in low:
+                await log_event(u["user_id"], "training", "skip_next_selected", {"choice": "other_skill"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await replace_skill_or_request_rediagnosis(m, u, "skip_other_skill")
+                return
+            if text == "😣 Сделать проще" or "проще" in low:
+                await log_event(u["user_id"], "training", "skip_next_selected", {"choice": "downscale"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await send_downscale(m, u, "skip_make_simpler")
+                return
+            if text in {"🌙 На сегодня хватит", "🌙 Хватит на сегодня"} or "хватит" in low:
+                current_day = sync_calendar_day(u)
+                u["pending_skill_id"] = None
+                u["pending_skill_day"] = None
+                u["today_target"] = None
+                u["stage"] = "waiting_next_day"
+                await save_user(u, DB_PATH)
+                await log_event(u["user_id"], "training", "day_training_closed_after_skip", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await answer_with_keyboard(m, u, day_training_closed_text(), kb_day_core_stop, "day_core_stop")
+                await maybe_show_micro_habit(m, u, "day_closed")
+                return
+            await answer_with_keyboard(m, u, "Выбери, что делаем дальше:", kb_skip_data, "skip_options")
+            return
+
         if text == "❌ Не сделал" or "не сделал" in low:
             screen = engine_handle_action_result(u, "failed")
             apply_engine_updates(u, screen)
@@ -2420,6 +2470,7 @@ async def main_flow(m: Message):
         if text == "🌙 До завтра" or "до завтра" in low:
             await log_event(u["user_id"], "training", "day_lock_until_tomorrow", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, "До завтра. Новый основной навык откроется после смены календарного дня.", kb_day_core_stop, "day_core_stop")
+            await maybe_show_micro_habit(m, u, "day_core_stop")
             return
         if text == "📌 Что изменилось?" or "что изменилось" in low:
             u["stage"] = "after_action_note"
@@ -2467,6 +2518,7 @@ async def main_flow(m: Message):
             )
             await log_event(u["user_id"], "training", "done_enough_today", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_keyboard(m, u, day_training_closed_text(), kb_day_core_stop, "day_core_stop")
+            await maybe_show_micro_habit(m, u, "day_closed")
             return
         await answer_with_keyboard(m, u, "Выбери кнопкой 👇", kb_done, "done")
         return
@@ -2505,8 +2557,7 @@ async def main_flow(m: Message):
             "last_system_day_id": habit.get("id") or "",
             "system_day_useful": _profile_append_unique(profile, "system_day_useful", habit.get("id") or ""),
         }, source="system_day_try")
-        await m.answer("Ок. Это не отчёт и не обязательство. Просто заметим как полезный системный принцип.")
-        await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+        await answer_with_keyboard(m, u, "Ок. Это не отчёт и не обязательство. Просто заметим как полезный системный принцип.", kb_day_core_stop, "day_core_stop")
         return
     if text == "🤔 Уже делаю":
         habit = {}
@@ -2521,17 +2572,16 @@ async def main_flow(m: Message):
             "last_system_day_id": habit.get("id") or "",
             "system_day_already": _profile_append_unique(profile, "system_day_already", habit.get("id") or ""),
         }, source="system_day_already")
-        await m.answer("Отлично. Сохраняю это как часть твоей системы, не как задание.")
-        await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+        await answer_with_keyboard(m, u, "Отлично. Сохраняю это как часть твоей системы, не как задание.", kb_day_core_stop, "day_core_stop")
         return
-    if text == "➡️ Дальше":
+    if text in {"➡️ Дальше", "🤷 Не моё"}:
         habit = {}
         try:
             habit = json.loads(u.get("micro_habit_json") or "{}")
         except Exception:
             habit = {}
         await log_event(u["user_id"], "training", "system_day_skipped", {"system_day_id": habit.get("id"), "habit_id": habit.get("id")}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, "Ок. Это не задание. Возвращаемся к core skill дня.", kb_training_main, "training_main")
+        await answer_with_keyboard(m, u, "Ок. Это не задание. Ничего не считаем и не списываем.", kb_day_core_stop, "day_core_stop")
         return
 
     # ask_name
@@ -2800,7 +2850,12 @@ async def main_flow(m: Message):
             u["day"] = 1
             ensure_first_start_date(u)
             await save_user(u, DB_PATH)
-            await m.answer(analysis_next_step_short(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
+            await m.answer(
+                "Ок.\n\n"
+                "Пока это рабочая гипотеза.\n\n"
+                "Дальше посмотрим,\n"
+                "какие навыки реально помогут именно тебе."
+            )
             await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
             return
         if "немного" in low or "не так" in low or "не совсем" in low or text in {"🤔 Немного не так", "🤔 Не совсем"}:

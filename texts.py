@@ -456,7 +456,7 @@ def trainer_failed_response(trainer_key: str) -> str:
     """Trainer-styled response for a failed/too-hard action."""
     return {
         "beck": "Логика такая: мозг блокирует не задачу, а слишком дорогой вход. Снижаем стоимость входа и проверяем эффект по действиям.",
-        "skinny": "Не характер. Не лень. Навык входа разваливается. Чиним через действия. Ты не ленивый. Вход слишком дорогой. Уменьшаем.",
+        "skinny": "Не лень.\nСледующий шаг слишком дорогой.\nРежем.",
         "marsha": "Похоже, шаг был слишком тяжелым. Это не провал. Давай сделаем вход мягче и безопаснее.",
     }.get(trainer_key or "marsha", "Похоже, шаг был слишком тяжелым. Это не провал. Давай сделаем вход мягче и безопаснее.")
 
@@ -509,10 +509,11 @@ def skill_detail_text(skill: dict) -> str:
 def simple_explain_text() -> str:
     """🤔 I don't understand branch: simple explanation without analysis."""
     return (
-        "Простыми словами:\n"
-        "мы не пытаемся заставить тебя работать.\n"
-        "Мы учим мозг входить в задачу без войны.\n"
-        "Поэтому шаг маленький."
+        "Не понял?\n\n"
+        "Ок.\n\n"
+        "Ещё проще.\n"
+        "Одно слово про задачу.\n\n"
+        "Всё."
     )
 
 
@@ -863,7 +864,7 @@ kb_more_actions = ReplyKeyboardMarkup(
 kb_skill_card = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
-        [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="🤔 Не понял")],
+        [KeyboardButton(text="Пропустить"), KeyboardButton(text="🤔 Не понял")],
         [KeyboardButton(text="🆘 Кризис")],
     ],
     resize_keyboard=True
@@ -1307,8 +1308,16 @@ SYSTEM_PHRASES = [
 
 kb_micro_habit = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="👍 Попробую"), KeyboardButton(text="🤔 Уже делаю")],
-        [KeyboardButton(text="📚 Подробнее")],
+        [KeyboardButton(text="👍 Попробую"), KeyboardButton(text="🤷 Не моё")],
+    ],
+    resize_keyboard=True
+)
+
+kb_skip_data = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔁 Другой навык")],
+        [KeyboardButton(text="😣 Сделать проще")],
+        [KeyboardButton(text="🌙 На сегодня хватит")],
     ],
     resize_keyboard=True
 )
@@ -1485,9 +1494,8 @@ def analysis_next_step_short(name: str, trainer_key: str, bucket: str) -> str:
             "Хорошая новость: это тренируется. И я буду рядом."
         ),
         "skinny": (
-            f"{name}, проблема не в характере.\n"
-            "Не хватает натренированных функций.\n\n"
-            "Мы это исправим через действия. Без лишних слов."
+            "Вход ломается.\n"
+            "Чиним вход."
         ),
         "beck": (
             f"{name}, то, что с тобой происходит — распространённый паттерн.\n"
