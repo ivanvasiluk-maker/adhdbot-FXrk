@@ -95,6 +95,7 @@ SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
 TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
 STARTUP_CHECK = os.getenv("BOT_STARTUP_CHECK", "").lower() in {"1", "true", "yes", "on", "check"}
+MAX_CRISIS_MATCHES_PER_DAY = 3
 
 AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
 
@@ -368,8 +369,16 @@ def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dic
         "system_day_useful": _profile_list(profile.get("system_day_useful")),
         "system_day_already": _profile_list(profile.get("system_day_already")),
         "last_system_day_id": profile.get("last_system_day_id") or "",
+        "crisis_pattern": profile.get("last_crisis_pattern") or profile.get("crisis_pattern") or "",
+        "crisis_skill": profile.get("last_crisis_skill") or profile.get("crisis_skill") or "",
+        "crisis_effect": profile.get("last_crisis_effect") or profile.get("crisis_effect") or "",
+        "most_common_crisis_pattern": profile.get("most_common_crisis_pattern") or "",
+        "most_effective_crisis_skill": profile.get("most_effective_crisis_skill") or "",
+        "crisis_count": int(profile.get("crisis_count") or u.get("crisis_count") or 0),
+        "crisis_success_rate": profile.get("crisis_success_rate") or 0,
     }
-    summary["system_day_signals"] = _system_day_signals_text(summary)
+    system_lines = [x for x in (_system_day_signals_text(summary), _crisis_map_signals_text(summary)) if x]
+    summary["system_day_signals"] = "\n".join(system_lines)
     if "рядом с человеком" in preferred_activation or "коворкинге" in preferred_activation or "созвоне" in preferred_activation:
         summary["preferred_activation_code"] = "body_doubling"
     elif "отвлечения" in preferred_activation:
@@ -444,8 +453,19 @@ async def record_today_progress_shown(u: Dict[str, Any], profile: Dict[str, Any]
         source="daily_progress",
     )
 
-def done_flow_text(include_system_line: bool = False) -> str:
-    text = "Есть. Один подход засчитан."
+def done_flow_text(include_system_line: bool = False, u: Optional[Dict[str, Any]] = None, profile: Optional[Dict[str, Any]] = None) -> str:
+    text = "Есть.\n\nПодход засчитан."
+    if u is not None:
+        profile = profile or {}
+        done_today = int(u.get("day_core_round_count") or 0)
+        return_today = int(profile.get("return_count_today") or profile.get("return_count") or 0)
+        failed_today = int(profile.get("failed_reason_count_today") or profile.get("action_failed_count_today") or 0)
+        text += (
+            "\n\nСегодня уже:\n"
+            f"✔ {done_today} запуск\n"
+            f"✔ {failed_today} срывов не стали концом\n"
+            f"✔ {return_today} возврат"
+        )
     if include_system_line:
         text += "\n\nЭто данные."
     return text
@@ -474,27 +494,118 @@ def _today_profile_counter_patch(profile: Dict[str, Any], counter_key: str, date
 
 
 
-def crisis_tool_reason_from_text(text: str) -> str:
+def crisis_pattern_from_text(text: str) -> str:
     low = (text or "").lower().strip()
-    if text.startswith("1") or "не могу начать" in low or "начать" in low:
-        return "cannot_start"
-    if text.startswith("2") or "залип" in low or "ютуб" in low or "лента" in low or "скрол" in low or "телефон" in low:
-        return "stuck"
-    if text.startswith("3") or "ошиб" in low or "боюсь" in low or "позор" in low or "плохо" in low:
-        return "fear_error"
-    if text.startswith("4") or "больш" in low or "огром" in low or "слишком" in low:
-        return "too_big"
-    if text.startswith("5") or "нет сил" in low or "устал" in low or "выгор" in low:
-        return "no_energy"
-    if text.startswith("6") or "сжира" in low or "сам себя" in low or "самокрит" in low or "ленив" in low or "безволь" in low:
+    if text.startswith("1") or "не могу начать" in low or "не могу заставить" in low or "смотрю на задачу" in low or "откладываю старт" in low or "начать" in low:
+        return "task_entry_block"
+    if text.startswith("2") or any(x in low for x in ("залип", "ютуб", "youtube", "tiktok", "тик ток", "telegram", "телеграм", "соцсет", "соцсети", "отвлёк", "отвлек", "вкладк", "видео", "лента", "скрол", "телефон")):
+        return "attention_escape"
+    if text.startswith("3") or any(x in low for x in ("идеаль", "ошиб", "боюсь", "позор", "стыд", "плохо получится", "публикац", "опубли", "оценят", "критик")):
+        return "perfectionism"
+    if text.startswith("4") or any(x in low for x in ("слишком много", "перегруз", "не знаю за что", "всё сразу", "все сразу", "слишком больш", "огром")):
+        return "overwhelm"
+    if text.startswith("5") or any(x in low for x in ("устал", "нет сил", "выгор", "пустой", "не вывожу", "нет ресурса")):
+        return "low_energy"
+    if text.startswith("6") or any(x in low for x in ("я ленив", "я безволь", "опять всё испортил", "опять все испортил", "неудачник", "сам себя", "самокрит", "сжира")):
         return "self_attack"
-    return "other"
+    if text.startswith("7") or any(x in low for x in ("тревог", "вдруг", "а если", "пережива", "накруч")):
+        return "anxiety_loop"
+    return "unknown"
+
+
+crisis_tool_reason_from_text = crisis_pattern_from_text
+
+
+def crisis_skill_for_pattern(pattern: str) -> str:
+    try:
+        return crisis_skill_title(pattern)
+    except Exception:
+        return {
+            "attention_escape": "Возврат из залипания",
+            "task_entry_block": "Аварийный запуск",
+            "perfectionism": "Плохой черновик",
+            "overwhelm": "Резак задачи",
+            "low_energy": "Минимально жизнеспособный день",
+            "self_attack": "Факт вместо приговора",
+            "anxiety_loop": "Только следующий шаг",
+        }.get(pattern, "Один управляемый шаг")
+
+
+def crisis_paid_unlimited(u: Dict[str, Any]) -> bool:
+    return is_paid(u)
 
 
 def _crisis_tool_count_today(profile: Dict[str, Any], u: Dict[str, Any]) -> int:
     if profile.get("crisis_tool_date") != local_date_for_user(u):
         return 0
     return max(0, int(profile.get("crisis_tool_count_today") or 0))
+
+
+def _crisis_pattern_counts(profile: Dict[str, Any]) -> Dict[str, int]:
+    raw = profile.get("crisis_pattern_counts") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    return {str(k): int(v or 0) for k, v in (raw or {}).items()}
+
+
+def _crisis_skill_counts(profile: Dict[str, Any]) -> Dict[str, int]:
+    raw = profile.get("crisis_skill_success_counts") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    return {str(k): int(v or 0) for k, v in (raw or {}).items()}
+
+
+def _top_key(counts: Dict[str, int]) -> str:
+    if not counts:
+        return ""
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
+def crisis_effect_code(text: str) -> str:
+    low = (text or "").lower().strip()
+    if "👍" in text or low in {"да", "yes", "y"} or "легче" in low:
+        return "better"
+    if "👎" in text or low in {"нет", "no", "n"} or "хуже" in low:
+        return "no"
+    return "same"
+
+
+async def classify_crisis_pattern(reason_text: str) -> str:
+    fallback = crisis_pattern_from_text(reason_text)
+    if not AI_ANALYSIS_ENABLED or client is None or not reason_text:
+        return fallback
+    try:
+        prompt = (
+            "Classify this crisis message into exactly one code: "
+            "attention_escape, task_entry_block, perfectionism, overwhelm, low_energy, self_attack, anxiety_loop, unknown. "
+            "Return only the code. Do not quote the user.\n\n"
+            f"Message: {reason_text[:500]}"
+        )
+        resp = client.chat.completions.create(
+            model=OPENAI_CHAT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=12,
+        )
+        code = (resp.choices[0].message.content or "").strip().lower()
+        allowed = {"attention_escape", "task_entry_block", "perfectionism", "overwhelm", "low_energy", "self_attack", "anxiety_loop", "unknown"}
+        return code if code in allowed else fallback
+    except Exception as e:
+        log.warning("crisis_pattern_ai_failed: %s", e)
+        return fallback
+
+
+async def show_crisis_entry(m: Message, u: Dict[str, Any], source: str):
+    u["stage"] = "crisis_choose_mode"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "crisis", "crisis_entry_shown", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, crisis_entry_text(), kb_crisis_mode, "crisis_mode")
 
 
 async def show_crisis_tool_prompt(m: Message, u: Dict[str, Any]):
@@ -507,28 +618,39 @@ async def show_crisis_tool_prompt(m: Message, u: Dict[str, Any]):
 async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
     profile = await get_user_profile(u["user_id"], DB_PATH)
     count = _crisis_tool_count_today(profile, u)
-    if count >= 3:
+    if not crisis_paid_unlimited(u) and count >= MAX_CRISIS_MATCHES_PER_DAY:
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(u["user_id"], "crisis", "crisis_tool_limit_reached", {"count": count}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_keyboard(m, u, crisis_tool_limit_text(), kb_training_main, "training_main")
         return
-    reason = crisis_tool_reason_from_text(reason_text)
+    pattern = await classify_crisis_pattern(reason_text)
+    skill = crisis_skill_for_pattern(pattern)
     today = local_date_for_user(u)
-    await record_profile_signal(
-        u["user_id"],
-        "crisis",
-        {
-            "crisis_tool_date": today,
-            "crisis_tool_count_today": count + 1,
-            "last_crisis_tool_reason": reason,
-        },
-        source="crisis_tool",
-    )
-    await log_event(u["user_id"], "crisis", "crisis_tool_selected", {"reason": reason, "count": count + 1}, DB_PATH, SHEETS_WEBHOOK_URL)
-    u["stage"] = "waiting_next_day"
+    pattern_counts = _crisis_pattern_counts(profile)
+    pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
+    crisis_count = int(profile.get("crisis_count") or u.get("crisis_count") or 0) + 1
+    patch = {
+        "crisis_tool_date": today,
+        "crisis_tool_count_today": count + 1,
+        "last_crisis_tool_reason": pattern,
+        "crisis_pattern": pattern,
+        "crisis_skill": skill,
+        "last_crisis_pattern": pattern,
+        "last_crisis_skill": skill,
+        "most_common_crisis_pattern": _top_key(pattern_counts),
+        "crisis_pattern_counts": pattern_counts,
+        "crisis_count": crisis_count,
+    }
+    await record_profile_signal(u["user_id"], "crisis", patch, source="crisis_tool")
+    await log_event(u["user_id"], "crisis", "crisis_tool_selected", {"crisis_pattern": pattern, "crisis_skill": skill, "count": count + 1}, DB_PATH, SHEETS_WEBHOOK_URL)
+    u["stage"] = "crisis_effect_await"
+    u["crisis_count"] = crisis_count
+    u["pending_crisis_pattern"] = pattern
+    u["pending_crisis_skill"] = skill
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, crisis_tool_text(reason), kb_done, "crisis_tool")
+    await m.answer(crisis_tool_text(pattern))
+    await answer_with_keyboard(m, u, crisis_effect_prompt_text(), kb_crisis_effect, "crisis_effect")
 
 async def send_crisis_stabilize(m: Message, u: Dict[str, Any], source: str):
     u["stage"] = "crisis_stabilize"
@@ -782,6 +904,38 @@ def _system_day_signals_text(summary: Dict[str, Any]) -> str:
             lines.append(f"✔ открывали систему: {_system_day_label(sid)}")
     return "\n".join(lines[:4])
 
+
+def _crisis_pattern_label(pattern: str) -> str:
+    return {
+        "attention_escape": "чаще всего выбивает залипание",
+        "task_entry_block": "чаще всего ломается вход в задачу",
+        "perfectionism": "часто выбивает страх ошибки",
+        "overwhelm": "часто выбивает перегруз масштаба",
+        "low_energy": "часто выбивает нехватка ресурса",
+        "self_attack": "часто выбивает самокритика",
+        "anxiety_loop": "часто выбивает тревожная петля",
+    }.get(pattern or "", "кризисный паттерн ещё уточняется")
+
+
+def _crisis_map_signals_text(summary: Dict[str, Any]) -> str:
+    lines: List[str] = []
+    pattern = summary.get("most_common_crisis_pattern") or summary.get("crisis_pattern") or ""
+    skill = summary.get("most_effective_crisis_skill") or summary.get("crisis_skill") or ""
+    rate = summary.get("crisis_success_rate")
+    if pattern:
+        lines.append(f"✔ {_crisis_pattern_label(pattern)}")
+    if skill:
+        lines.append(f"✔ лучший кризисный навык — {skill}")
+    if rate not in (None, "", 0, "0"):
+        try:
+            pct = int(float(rate) * 100)
+            lines.append(f"✔ после кризисного навыка легче в {pct}% отметок")
+        except Exception:
+            pass
+    return "\n".join(lines[:3])
+
+
+
 def _skill_replacement_count_today(profile: Dict[str, Any], u: Dict[str, Any]) -> int:
     if profile.get("skill_replace_date") != local_date_for_user(u):
         return 0
@@ -962,6 +1116,10 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "system_day_useful": summary["system_day_useful"],
         "system_day_already": summary["system_day_already"],
         "system_day_signals": summary["system_day_signals"],
+        "most_common_crisis_pattern": summary["most_common_crisis_pattern"],
+        "most_effective_crisis_skill": summary["most_effective_crisis_skill"],
+        "crisis_count": summary["crisis_count"],
+        "crisis_success_rate": summary["crisis_success_rate"],
         "done_count": summary["done_count"],
         "downscale_count": summary["downscale_count"],
         "return_count": summary["return_count"],
@@ -988,6 +1146,10 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "system_day_useful": summary["system_day_useful"],
         "system_day_already": summary["system_day_already"],
         "system_day_signals": summary["system_day_signals"],
+        "most_common_crisis_pattern": summary["most_common_crisis_pattern"],
+        "most_effective_crisis_skill": summary["most_effective_crisis_skill"],
+        "crisis_count": summary["crisis_count"],
+        "crisis_success_rate": summary["crisis_success_rate"],
         "done_count": summary["done_count"],
         "downscale_count": summary["downscale_count"],
         "return_count": summary["return_count"],
@@ -1383,7 +1545,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/crisis":
         await log_event(uid, u.get("stage", ""), "crisis_clicked", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await send_crisis_stabilize(m, u, "command")
+        await show_crisis_entry(m, u, "command")
         return True
 
     return False
@@ -2006,8 +2168,8 @@ async def main_flow(m: Message):
         return
 
     # Глобальный хук: кризис доступен из любого состояния, но не перебиваем активный кризис-флоу
-    if (text == "🆘 Кризис" or "кризис" in low) and u.get("stage") not in {"crisis_stabilize", "crisis_choose_mode", "crisis_voice", "crisis_text", "crisis_plan_confirm"}:
-        await send_crisis_stabilize(m, u, "global")
+    if (text == "🆘 Кризис" or "кризис" in low) and u.get("stage") not in {"crisis_stabilize", "crisis_choose_mode", "crisis_voice", "crisis_text", "crisis_plan_confirm", "crisis_tool_select", "crisis_effect_await"}:
+        await show_crisis_entry(m, u, "global")
         return
 
     # "Ты меня не понял" is a rebuild flow, not a dead-end explanation.
@@ -2163,7 +2325,8 @@ async def main_flow(m: Message):
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
                     return
-                await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25), kb_done, "done")
+                progress_profile = {**profile, "action_done_count": int(profile.get("action_done_count") or 0) + 1}
+                await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25, u, progress_profile), kb_done, "done")
                 return
 
         if u.get("stage") == "downscale_name_task":
@@ -2186,7 +2349,8 @@ async def main_flow(m: Message):
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
                     return
-                await answer_with_keyboard(m, u, done_flow_text(False), kb_done, "done")
+                progress_profile = {**profile, "action_done_count": int(profile.get("action_done_count") or 0) + 1}
+                await answer_with_keyboard(m, u, done_flow_text(False, u, progress_profile), kb_done, "done")
                 return
         if text in {"💪 Давай действие", "💪 Сделать микрошаг"}:
             await send_downscale(m, u, "microstep_button")
@@ -2883,7 +3047,7 @@ async def main_flow(m: Message):
             return
 
         if text == "🆘 Кризис" or "кризис" in low:
-            await send_crisis_stabilize(m, u, "training_main")
+            await show_crisis_entry(m, u, "training_main")
             return
 
         if text in {"📊 Мой прогресс", "📊 Прогресс"} or "мой прогресс" in low or "прогресс" in low:
@@ -2912,7 +3076,8 @@ async def main_flow(m: Message):
             if should_show_day3_offer(u, day):
                 await show_day3_offer(m, u, "day3_auto")
                 return
-            await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25), kb_done, "done")
+            progress_profile = {**profile, "action_done_count": done_count}
+            await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25, u, progress_profile), kb_done, "done")
             return
 
         if text == "↩️ Вернулся(лась)" or "вернулся" in low:
@@ -3012,11 +3177,9 @@ async def main_flow(m: Message):
         if m.voice:
             t = await whisper_transcribe(m)
             if t:
-                await handle_crisis(m, u, t, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+                await send_crisis_stabilize(m, u, "voice_entry")
                 return
-            await m.answer("Не смог разобрать голос. Напиши 1–3 предложения.")
-            u["stage"] = "crisis_text"
-            await save_user(u, DB_PATH)
+            await m.answer("Не смог разобрать голос. Выбери голосом/текстом кнопкой.")
             return
 
         if text == "⬅️ Назад" or "назад" in low:
@@ -3024,21 +3187,22 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
             return
-        if text == "🎙 Кризис голосом" or "голос" in low:
-            u["stage"] = "crisis_voice"
+        if text in {"🎙 Голосом", "🎙 Кризис голосом"} or "голос" in low:
+            u["crisis_input_mode"] = "voice"
             await save_user(u, DB_PATH)
-            await m.answer("🎙 Запиши голосом: что происходит и что мешает прямо сейчас?")
+            await send_crisis_stabilize(m, u, "voice_entry")
             return
-        if text == "✍️ Кризис текстом" or "текст" in low:
-            u["stage"] = "crisis_text"
+        if text in {"✍️ Текстом", "✍️ Кризис текстом"} or "текст" in low:
+            u["crisis_input_mode"] = "text"
             await save_user(u, DB_PATH)
-            await m.answer("✍️ Напиши: что происходит и что мешает прямо сейчас? (1–3 предложения)")
+            await send_crisis_stabilize(m, u, "text_entry")
             return
         if text:
-            # Любой текст без выбора — сразу кризис-текст
-            await handle_crisis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+            u["crisis_input_mode"] = "text"
+            await save_user(u, DB_PATH)
+            await send_crisis_stabilize(m, u, "text_entry")
             return
-        await answer_with_keyboard(m, u, "Выбери кнопкой 👇", kb_crisis_mode, "crisis_mode")
+        await answer_with_keyboard(m, u, crisis_entry_text(), kb_crisis_mode, "crisis_mode")
         return
 
     if u.get("stage") == "crisis_text":
@@ -3050,7 +3214,7 @@ async def main_flow(m: Message):
         if not text:
             await m.answer("Напиши 1–3 предложения.")
             return
-        await handle_crisis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        await send_crisis_tool(m, u, text)
         return
 
     if u.get("stage") == "crisis_voice":
@@ -3068,7 +3232,37 @@ async def main_flow(m: Message):
             u["stage"] = "crisis_text"
             await save_user(u, DB_PATH)
             return
-        await handle_crisis(m, u, t, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        await send_crisis_tool(m, u, t)
+        return
+
+    if u.get("stage") == "crisis_effect_await":
+        effect = crisis_effect_code(text)
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        pattern = u.get("pending_crisis_pattern") or profile.get("last_crisis_pattern") or "unknown"
+        skill = u.get("pending_crisis_skill") or profile.get("last_crisis_skill") or crisis_skill_for_pattern(pattern)
+        total = int(profile.get("crisis_effect_count") or 0) + 1
+        success = int(profile.get("crisis_effect_success_count") or 0) + (1 if effect == "better" else 0)
+        skill_success_counts = _crisis_skill_counts(profile)
+        if effect == "better":
+            skill_success_counts[skill] = skill_success_counts.get(skill, 0) + 1
+        patch = {
+            "crisis_pattern": pattern,
+            "crisis_skill": skill,
+            "crisis_effect": effect,
+            "last_crisis_effect": effect,
+            "most_effective_crisis_skill": _top_key(skill_success_counts) or skill,
+            "crisis_skill_success_counts": skill_success_counts,
+            "crisis_effect_count": total,
+            "crisis_effect_success_count": success,
+            "crisis_success_rate": round(success / total, 2) if total else 0,
+        }
+        await record_profile_signal(u["user_id"], "crisis", patch, source="crisis_effect")
+        await log_event(u["user_id"], "crisis", "crisis_effect_recorded", {"crisis_pattern": pattern, "crisis_skill": skill, "crisis_effect": effect}, DB_PATH, SHEETS_WEBHOOK_URL)
+        u["stage"] = "waiting_next_day"
+        u["pending_crisis_pattern"] = None
+        u["pending_crisis_skill"] = None
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Записал. Это данные для карты. Возвращаемся к основному навыку дня.", kb_training_main, "training_main")
         return
 
     if u.get("stage") == "crisis_plan_confirm":
