@@ -37,6 +37,7 @@ USER_FIELDS = [
     "today_target",
     "day",
     "created_at",
+    "first_start_date",
     "points",
     "level",
     "streak",
@@ -67,6 +68,12 @@ USER_FIELDS = [
     "last_micro_habit_id",
     "last_micro_habit_date",
     "micro_habit_json",
+    "day_core_skill_id",
+    "day_core_skill_date",
+    "day_core_round_count",
+    "current_core_skill_id",
+    "current_skill_variant_id",
+    "current_core_skill_date",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -170,6 +177,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "pending_plan_change": None,
         "crisis_count": 0,
         "created_at": time.time(),
+        "first_start_date": None,
         "test_answers": [],  # Временное хранилище для ответов теста
         "done_count": 0,
         "return_count": 0,
@@ -180,6 +188,12 @@ def default_user(uid: int) -> Dict[str, Any]:
         "last_micro_habit_id": None,
         "last_micro_habit_date": None,
         "micro_habit_json": None,
+        "day_core_skill_id": None,
+        "day_core_skill_date": None,
+        "day_core_round_count": 0,
+        "current_core_skill_id": None,
+        "current_skill_variant_id": None,
+        "current_core_skill_date": None,
     }
 
 async def init_db(db_path: str):
@@ -202,6 +216,7 @@ async def init_db(db_path: str):
                 today_target TEXT,
                 day INTEGER,
                 created_at REAL,
+                first_start_date TEXT,
                 points INTEGER,
                 level INTEGER,
                 streak INTEGER,
@@ -231,7 +246,13 @@ async def init_db(db_path: str):
                 profile_json TEXT DEFAULT '{}',
                 last_micro_habit_id TEXT,
                 last_micro_habit_date TEXT,
-                micro_habit_json TEXT
+                micro_habit_json TEXT,
+                day_core_skill_id TEXT,
+                day_core_skill_date TEXT,
+                day_core_round_count INTEGER DEFAULT 0,
+                current_core_skill_id TEXT,
+                current_skill_variant_id TEXT,
+                current_core_skill_date TEXT
             )
             """
         )
@@ -297,6 +318,7 @@ EXTRA_USER_COLS = {
     "level": "INTEGER",
     "streak": "INTEGER",
     "last_active": "REAL",
+    "first_start_date": "TEXT",
     "plan_overrides_json": "TEXT",   # правки плана после кризиса
     "trial_days": "INTEGER",         # 3 или 7
     "trial_phase": "TEXT",           # "trial3" / "trial7" / "paid" / ...
@@ -325,7 +347,13 @@ EXTRA_USER_COLS = {
     "profile_json": "TEXT DEFAULT '{}'",
     "last_micro_habit_id": "TEXT",
     "last_micro_habit_date": "TEXT",
-    "micro_habit_json": "TEXT"
+    "micro_habit_json": "TEXT",
+    "day_core_skill_id": "TEXT",
+    "day_core_skill_date": "TEXT",
+    "day_core_round_count": "INTEGER DEFAULT 0",
+    "current_core_skill_id": "TEXT",
+    "current_skill_variant_id": "TEXT",
+    "current_core_skill_date": "TEXT"
 }
 
 async def migrate_db(db_path: str):
@@ -423,10 +451,21 @@ REASON_LABELS = {
 
 SKILL_LABELS = {
     "open_only": "открыть задачу без требования работать",
-    "task_naming": "назвать задачу одним словом",
     "ninety_sec_start": "90 секунд входа",
     "bad_first_step": "плохой первый шаг",
+    "task_naming": "назвать задачу одним словом",
+    "one_tab_focus": "одно окно для удержания внимания",
+    "visible_next_step": "сделать следующий шаг видимым",
+    "phone_far_3min": "убрать телефон на 3 минуты",
+    "restart_after_slip": "возврат после выпадения",
     "restart_after_break": "возврат после срыва",
+    "self_criticism_to_instruction": "перевести самокритику в инструкцию",
+    "check_the_facts_light": "проверить факт против приговора",
+    "urge_surf_60": "пережить импульс отвлечься 60 секунд",
+    "body_before_task": "сначала тело, потом задача",
+    "minimum_viable_day": "минимально жизнеспособный день",
+    "body_doubling_plan": "запуск рядом с человеком",
+    "if_then_plan": "если–то план для маленького входа",
 }
 
 
@@ -464,28 +503,34 @@ async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db"
 
 
 def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
-    main_pattern = label(PATTERN_LABELS, profile.get("main_pattern"), "застревание перед действием")
-    reason = label(REASON_LABELS, profile.get("avoidance_reason"), "неопределённость / перегруз")
-    trigger = profile.get("emotional_trigger") or "напряжение перед стартом"
-    skill = label(SKILL_LABELS, profile.get("best_skill"), "маленький вход в задачу")
+    main_pattern = label(PATTERN_LABELS, profile.get("main_pattern"), "вход часто становится слишком большим")
+    skill = label(SKILL_LABELS, profile.get("best_variant") or profile.get("best_skill"), "маленький вход в задачу")
+    note = profile.get("last_effect_note") or profile.get("last_after_action_note") or ""
+    visible = [main_pattern]
+    if int(profile.get("downscale_count") or 0):
+        visible.append("после уменьшения шага действие получается легче")
+    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
+        visible.append("самокритика усиливает ступор")
+    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
+        visible.append("залипание появляется как способ уйти от напряжения")
+    if profile.get("preferred_activation") == "body_doubling":
+        visible.append("внешний контакт может снижать порог старта")
+    visible_text = "\n".join(f"— {item}" for item in visible[:5])
+    note_block = f"\n\nЧто отметили после шага:\n“{note}”" if note else ""
 
     return f"""🧭 Твоя предварительная карта
 
-Пока это не диагноз, а рабочая гипотеза по твоим действиям.
+Пока это не диагноз, а рабочая гипотеза.
 
-Главный паттерн:
-{main_pattern}
+Что уже видно:
+{visible_text}
 
-Что часто запускает избегание:
-{reason}
+Что сработало:
+— {skill}{note_block}
 
-Что может сбивать:
-{trigger}
-
-Что уже похоже помогает:
-{skill}
-
-Дальше карта будет уточняться по тому, что ты реально пробуешь."""
+Дальше проверим:
+— помогает ли тебе внешний контакт / body doubling
+— какой формат входа держится лучше"""
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
     """Применить геймификацию"""
