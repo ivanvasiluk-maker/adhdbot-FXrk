@@ -442,7 +442,7 @@ def detect_live_analysis_pattern(user_text: str) -> str:
     text = (user_text or "").lower()
     if any(x in text for x in ("ленив", "безволь", "нормальные люди", "со мной что-то не так")):
         return "shame_self_attack"
-    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен")):
+    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен", "выглядеть глупо", "глупо", "стыдно", "критика")) or ("боюсь" in text and any(x in text for x in ("плохо", "ошиб", "глуп", "оцен", "письм", "результ"))):
         return "perfectionism_visibility_fear"
     if any(x in text for x in ("залип", "ютуб", "youtube", "сообщения", "почта", "на минуту", "лента", "скрол")):
         return "attention_escape"
@@ -463,21 +463,238 @@ def live_analysis_profile_patch(pattern: str) -> Dict[str, Any]:
     }.get(pattern, {"main_pattern": "start_avoidance"})
 
 
+def extract_analysis_signals(user_text: str) -> Dict[str, Any]:
+    """Extract compact user-specific signals for analysis copy.
+
+    Store short labels only: enough for "меня поняли", not the full text.
+    """
+    text = (user_text or "").lower()
+    signals: Dict[str, Any] = {"facts": []}
+
+    def add_fact(label: str):
+        if label and label not in signals["facts"] and len(signals["facts"]) < 8:
+            signals["facts"].append(label)
+
+    if any(x in text for x in ("письмо", "письма", "письм")):
+        signals["task"] = "письмо"
+    if "третий день" in text or "3 день" in text or "три дня" in text:
+        signals["delay"] = "письмо стоит третий день"
+        add_fact("письмо стоит третий день")
+    elif "второй день" in text or "два дня" in text:
+        signals["delay"] = "задача стоит не первый день"
+        add_fact("задача стоит не первый день")
+    if any(x in text for x in ("открываю ноутбук", "открыл ноутбук", "открываю документ", "открываю файл")):
+        signals["starts_environment"] = "ноутбук / место задачи открывается"
+        add_fact("ноутбук открывается")
+
+    escapes: List[str] = []
+    if "telegram" in text or "телеграм" in text:
+        escapes.append("Telegram")
+    if "почт" in text:
+        escapes.append("почта")
+    if "новост" in text:
+        escapes.append("новости")
+    if "youtube" in text or "ютуб" in text:
+        escapes.append("YouTube")
+    if escapes:
+        signals["escapes"] = escapes
+        add_fact("после задачи появляются " + " / ".join(escapes[:3]))
+
+    if "злюсь на себя" in text or "злится на себя" in text or "ругаю себя" in text:
+        signals["self_anger"] = "злость на себя"
+        add_fact("появляется злость на себя")
+    if "не такое уж слож" in text or "не очень слож" in text or "не слож" in text:
+        signals["not_hard"] = "письмо не кажется очень сложным"
+        add_fact("письмо не кажется очень сложным")
+    if "боюсь написать плохо" in text or ("боюсь" in text and "плохо" in text):
+        signals["fear_bad"] = "страх написать плохо"
+        add_fact("страх написать плохо")
+    if "выглядеть глупо" in text or "глупо" in text:
+        signals["fear_visible"] = "страх выглядеть глупо"
+        add_fact("страх выглядеть глупо")
+    if "собраться с мыслями" in text or "сначала надо собраться" in text or "собраться" in text:
+        signals["preparation"] = "сначала надо собраться с мыслями"
+        add_fact("появляется идея сначала «собраться с мыслями»")
+    return signals
+
+
+def _facts_text(signals: Dict[str, Any], limit: int = 6, bullet: str = "—") -> str:
+    facts = [str(x) for x in (signals or {}).get("facts", []) if x]
+    return "\n".join(f"{bullet} {x}" for x in facts[:limit])
+
+
+def _has_signal(signals: Dict[str, Any], key: str) -> bool:
+    return bool((signals or {}).get(key))
+
+
+def _escape_names(signals: Dict[str, Any]) -> str:
+    escapes = signals.get("escapes") if isinstance(signals, dict) else []
+    if isinstance(escapes, list) and escapes:
+        return " / ".join(str(x) for x in escapes[:3])
+    return "Telegram / почта / новости"
+
+
+def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = "marsha") -> str:
+    """Expand only the current analysis: facts -> suspicious link -> hypothesis -> checks."""
+    pattern = str(comp.get("live_pattern") or "default_start_block")
+    signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
+    facts = _facts_text(signals, 8, "✔")
+    if not facts:
+        return (
+            "Почему я пока осторожен?\n\n"
+            "Сигналов мало.\n"
+            "Мне нужны не длинные анкеты, а 2–3 конкретных факта:\n"
+            "что ты открываешь, куда уходишь и чего боишься после действия."
+        )
+
+    if pattern == "perfectionism_visibility_fear":
+        if trainer_key == "skinny":
+            return (
+                "Почему такая гипотеза?\n\n"
+                "Я опираюсь на:\n"
+                f"{facts}\n\n"
+                "Самый сильный сигнал:\n"
+                "страх выглядеть глупо.\n\n"
+                "Значит режем не время.\n"
+                "Режем цену ошибки.\n\n"
+                "Проверка:\n"
+                "□ плохой черновик\n"
+                "□ один абзац без качества\n"
+                "□ отправка не сегодня, сначала вход"
+            )
+        if trainer_key == "beck":
+            return (
+                "Почему я сделал такую гипотезу?\n\n"
+                "Я опираюсь на:\n"
+                f"{facts}\n\n"
+                "Меня особенно насторожило:\n"
+                "задача описана не как невозможная, но рядом с ней звучит страх написать плохо и выглядеть глупо.\n\n"
+                "Поэтому я предполагаю:\n"
+                "Telegram, почта и новости могут быть не причиной.\n"
+                "Они могут быть способом ненадолго уйти от напряжения перед оценкой.\n\n"
+                "Первые дни будем проверять:\n"
+                "□ легче ли начать с плохого черновика\n"
+                "□ падает ли напряжение после маленького шага\n"
+                "□ возвращаешься ли быстрее без самокритики\n\n"
+                "Если гипотеза подтвердится, маршрут будет строиться вокруг страха оценки и возврата после срыва."
+            )
+        return (
+            "Почему я сделала такую гипотезу?\n\n"
+            "Я опираюсь на:\n"
+            f"{facts}\n\n"
+            "Меня особенно зацепило:\n"
+            "ты пишешь не только про письмо, а ещё про злость на себя и страх выглядеть глупо.\n\n"
+            "Поэтому моя гипотеза такая:\n"
+            "сейчас тяжело не просто написать письмо.\n"
+            "Тяжело приблизиться к моменту, где его могут оценить.\n\n"
+            "Первые дни будем проверять:\n"
+            "□ станет ли легче, если разрешить плохой черновик\n"
+            "□ помогает ли маленький вход без требования качества\n"
+            "□ уменьшается ли злость на себя после возврата\n\n"
+            "Если гипотеза подтвердится, карту будем строить вокруг мягкого входа и снижения давления ошибки."
+        )
+
+    return (
+        "Почему я сделал такую гипотезу?\n\n"
+        "Я опираюсь на:\n"
+        f"{facts}\n\n"
+        "Первые дни будем проверять:\n"
+        "□ что реально помогает начать\n"
+        "□ что сильнее всего выбивает\n"
+        "□ какой навык даёт возврат быстрее\n\n"
+        "Если гипотеза подтвердится, маршрут будет строиться вокруг этих повторяющихся сигналов."
+    )
+
+
 def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Dict[str, Any]] = None) -> str:
     trainer_key = trainer_key if trainer_key in {"skinny", "beck", "marsha"} else "marsha"
     data = data or {}
+    signals = data.get("analysis_signals") if isinstance(data.get("analysis_signals"), dict) else {}
+    facts = _facts_text(signals, 7, "—")
+
+    if pattern == "perfectionism_visibility_fear" and facts:
+        escapes = _escape_names(signals)
+        if trainer_key == "skinny":
+            return (
+                "Что вижу.\n\n"
+                f"{facts}\n\n"
+                "Удар:\n"
+                "письмо стоит, но мелкие входы открываются.\n"
+                f"{escapes} открываются.\n\n"
+                "Значит проблема не просто в энергии.\n"
+                "И не просто в сложности письма.\n\n"
+                "Самый сильный сигнал:\n"
+                "страх выглядеть глупо.\n\n"
+                "Сейчас ты избегаешь не письмо.\n"
+                "Ты избегаешь риск ошибки.\n\n"
+                "Что делаем:\n"
+                "не пишем хорошее письмо.\n"
+                "Пишем плохой черновик.\n"
+                "Проверяем."
+            )
+        if trainer_key == "beck":
+            return (
+                "Коротко, что вижу.\n\n"
+                f"{facts}\n\n"
+                "Механизм:\n"
+                "интересно, что письмо ты описываешь как не очень сложное, но оно стоит уже несколько дней.\n\n"
+                f"При этом после входа появляются {escapes}.\n"
+                "И отдельно звучит страх написать плохо.\n\n"
+                "Моя текущая гипотеза:\n"
+                "проблема не в самой задаче.\n"
+                "Проблема может быть в том, что цена ошибки ощущается слишком высокой.\n\n"
+                "Эксперимент:\n"
+                "проверим, поможет ли не уменьшение мотивации, а разрешение сделать плохой черновик.\n\n"
+                "Если гипотеза верна, навык должен помочь.\n"
+                "Если нет — будем искать дальше."
+            )
+        return (
+            "Коротко, что вижу.\n\n"
+            "Мне кажется, сейчас тебя выматывает не только задача.\n"
+            "Тебя выматывает всё, что вокруг неё накопилось.\n\n"
+            f"{facts}\n\n"
+            "Каждый перенос делает письмо тяжелее.\n"
+            "И злость на себя добавляет ещё один слой давления.\n\n"
+            "Особенно зацепила фраза про страх выглядеть глупо.\n\n"
+            "Моя текущая гипотеза:\n"
+            "проблема не в сложности письма.\n"
+            "Похоже, тяжело именно столкнуться с риском ошибки и оценки.\n\n"
+            "Если она верна, навык должен помочь: сначала плохой черновик, не хорошее письмо.\n"
+            "Если нет — будем искать дальше."
+        )
+
+    if facts:
+        if trainer_key == "skinny":
+            return (
+                "Что вижу.\n\n"
+                f"{facts}\n\n"
+                "Вывод пока один:\n"
+                "сначала проверяем самый маленький шаг.\n"
+                "Не рассуждаем. Проверяем."
+            )
+        if trainer_key == "beck":
+            return (
+                "Коротко, что вижу.\n\n"
+                f"{facts}\n\n"
+                "Моя текущая гипотеза:\n"
+                "повторяется один и тот же сбой перед действием.\n\n"
+                "Эксперимент:\n"
+                "дадим маленький шаг и посмотрим, станет ли легче вернуться."
+            )
+        return (
+            "Коротко, что вижу.\n\n"
+            f"{facts}\n\n"
+            "Пока это не вывод о тебе.\n"
+            "Это рабочая гипотеза по тому, что повторяется.\n\n"
+            "Сейчас проверим её маленьким действием."
+        )
+
     if pattern == "shame_self_attack":
         mechanic = "самокритика должна подтолкнуть, но часто повышает угрозу и блокирует старт"
         evidence = "ты описываешь себя через “ленивый / безвольный”, а не через конкретный сбой входа"
         check = "возврат без самонаказания и маленький вход"
         skinny = "Не лень.\nСамообвинение забирает вход.\nДелаем маленькое действие.\nПроверяем."
         marsha = "Похоже, ты очень жёстко с собой обходишься после срыва.\nИ я не думаю, что проблема в том, что ты мало стараешься.\nДавай вернём действие без стыда.\nБез давления."
-    elif pattern == "perfectionism_visibility_fear":
-        mechanic = "проблема начинается раньше самой задачи: в моменте, где результат могут увидеть или оценить"
-        evidence = "если бы задача была лёгкой и безопасной, ты бы не держал её столько дней; в описании есть риск позора, оценки или неидеального результата"
-        check = "не лень, а страх ошибки: черновик, факт вместо приговора и маленькую публикацию без идеальности"
-        skinny = "Страх оценки.\nНе философствуем.\nДелаем черновик, не шедевр.\nЕсли получится — вход станет дешевле."
-        marsha = "Тут много страха быть увиденным неидеальным.\nЭто не значит, что с тобой что-то не так.\nМозг пытается не встретиться с риском сделать плохо.\nНачнём с безопасного черновика."
     elif pattern == "attention_escape":
         mechanic = "мозг выбирает быстрый контур награды: сообщения, лента, YouTube"
         evidence = "внимание уходит туда, где быстрее награда и меньше напряжения"
@@ -497,32 +714,27 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
         skinny = "Рядом легче начать.\nСохраняем в карту.\nПроверяем созвон / коворкинг.\nБез драмы."
         marsha = "Важный сигнал: тебе легче начинать рядом с другим человеком.\nЭто не слабость.\nМы сохраним это в карте.\nБез давления."
     else:
-        mechanic = "проблема, похоже, начинается не в самой задаче, а раньше — в дорогом первом входе"
-        evidence = "старт описан как мутный, большой или тяжёлый; мозг ищет Telegram, подготовку или мелкие дела, где меньше риска и быстрее награда"
-        check = "снизить вход, зафиксировать первый запуск и посмотреть, станет ли легче возвращаться"
-        skinny = "Большая задача стоит.\nМелкие дела делаются.\nЗначит проблема не в энергии.\nПроблема во входе.\nЧиним вход."
-        marsha = "Похоже, тебе сейчас очень тяжело начинать.\nИ я не думаю, что проблема в том, что ты мало стараешься.\nСкорее, вход стал слишком дорогим.\nДавай найдём место, где становится трудно, без давления."
+        mechanic = "пока не хватает конкретных сигналов; нужен один наблюдаемый сбой перед действием"
+        evidence = "в тексте мало фактов: что открылось, куда ушло внимание, чего стало страшно"
+        check = "один маленький шаг и короткое наблюдение после него"
+        skinny = "Мало данных.\nБерём один шаг.\nСмотрим, где ломается."
+        marsha = "Пока я не хочу притворяться, что всё поняла.\nДавай проверим один маленький шаг и соберём больше фактов."
 
     if trainer_key == "beck":
         return (
             "Коротко, что вижу\n\n"
+            "Фактов пока мало.\n\n"
             "Механика такая:\n"
             f"{mechanic}.\n\n"
             "Почему я думаю именно так:\n"
             f"{evidence}.\n\n"
             "Что хочу проверить:\n"
             f"{check}.\n\n"
-            "Почему этот навык:\n"
-            "он даёт действие прямо сейчас и данные для карты, а не ещё один совет.\n\n"
-            "Что подтвердит гипотезу?\n"
-            "Если после уменьшения шага тебе легче начать,\n"
-            "значит проблема не в мотивации,\n"
-            "а во входе в задачу.\n\n"
             "Пока это гипотеза."
         )
     if trainer_key == "skinny":
         return f"Что вижу:\n\n{skinny}\n\nЧто будет если получится:\nполучим запуск и данные для карты."
-    return f"Коротко, что вижу:\n\n{marsha}\n\nПочему это тяжело:\nмозг пытается снизить угрозу, а не испортить тебе жизнь.\n\nПока это гипотеза."
+    return f"Коротко, что вижу:\n\n{marsha}\n\nПока это гипотеза."
 
 def safe_analysis_memory(user_text: str, comp: Optional[Dict[str, Any]] = None, *, needs_more: bool = False) -> Dict[str, Any]:
     """Return non-verbatim analysis memory for persistence.
@@ -537,6 +749,7 @@ def safe_analysis_memory(user_text: str, comp: Optional[Dict[str, Any]] = None, 
     memory = {
         "input_len": len(user_text or ""),
         "live_pattern": live_pattern,
+        "analysis_signals": extract_analysis_signals(user_text or ""),
         "input_signal_summary": {
             "specific_pattern": clamp_str(comp.get("specific_pattern") or inferred.get("specific_pattern"), 120),
             "avoidance_behavior": clamp_str(comp.get("avoidance_behavior") or inferred.get("avoidance_behavior"), 120),
@@ -777,7 +990,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual precise analysis before asking for confirmation.
-    msg = f"{format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))}\n\nЭто похоже на тебя?"
+    analysis_text = format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))
+    msg = f"{analysis_text}\n\n{preliminary_hypothesis_note()}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(

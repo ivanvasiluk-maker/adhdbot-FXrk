@@ -56,7 +56,7 @@ from flows import (
     send_trainer_photo_if_any, run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
-    live_analysis_profile_patch
+    live_analysis_profile_patch, render_analysis_details_by_trainer
 )
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
 from core.engine import (
@@ -2473,7 +2473,11 @@ async def main_flow(m: Message):
 
 
 
-    if text in {"📚 Подробнее", "🤔 Зачем это?"}:
+    if (
+        text in {"📚 Подробнее", "🤔 Зачем это?"}
+        and u.get("stage") not in {"confirm_analysis", "analysis_" + "contract", "analysis_next_step", "offer"}
+        and bool(u.get("micro_habit_json"))
+    ):
         habit = {}
         try:
             habit = json.loads(u.get("micro_habit_json") or "{}")
@@ -2782,8 +2786,12 @@ async def main_flow(m: Message):
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(analysis_next_step_long(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")))
-            await answer_with_keyboard(m, u, "Что дальше?", kb_analysis_confirm, "analysis")
+            try:
+                comp = json.loads(u.get("analysis_json") or "{}")
+            except Exception:
+                comp = {}
+            details = render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, u.get("trainer_key") or "marsha")
+            await answer_with_keyboard(m, u, details, kb_analysis_confirm, "analysis_details")
             return
         if "в точку" in low or (text == "✅ Да, в точку"):
             await log_event(u["user_id"], "analysis", "analysis_accepted", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -2802,13 +2810,17 @@ async def main_flow(m: Message):
         return
 
     # Подробное объяснение после анализа без курса/карты до первого действия.
-    if u.get("stage") in {"analysis_" + "contract", "analysis_next_step"} and (text == "📚 Подробнее" or "подробнее" in text.lower()):
+    if u.get("stage") in {"analysis_" + "contract", "analysis_next_step", "analysis_details"} and (text == "📚 Подробнее" or "подробнее" in text.lower()):
+        try:
+            comp = json.loads(u.get("analysis_json") or "{}")
+        except Exception:
+            comp = {}
         await answer_with_keyboard(
             m,
             u,
-            analysis_next_step_long(u.get("name") or "друг", u.get("trainer_key"), u.get("bucket")),
+            render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, u.get("trainer_key") or "marsha"),
             kb_analysis_confirm,
-            "analysis",
+            "analysis_details",
         )
         return
 
