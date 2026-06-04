@@ -576,8 +576,10 @@ def day3_primary_map_text(
     preferred_activation: str,
     return_pattern: str,
     system_day_signals: str = "",
+    behavior_records: str = "",
 ) -> str:
     system_block = f"Что ещё заметили:\n{system_day_signals}\n\n" if system_day_signals else ""
+    behavior_block = f"{behavior_records}\n\n" if behavior_records else ""
     return (
         "🧭 Первичная карта действий\n\n"
         "За эти дни уже видно,\n"
@@ -590,6 +592,7 @@ def day3_primary_map_text(
         f"— похоже, тебе легче действовать:\n{preferred_activation}\n\n"
         f"— после срывов ты чаще:\n{return_pattern}\n\n"
         f"{system_block}"
+        f"{behavior_block}"
         "Что будем тренировать дальше:\n\n"
         "1. более дешёвый вход в задачу\n"
         "2. удержание внимания без добивания себя\n"
@@ -1194,6 +1197,23 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+kb_analysis_need_more = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
+        [KeyboardButton(text="📱 Отвлечения"), KeyboardButton(text="🌀 Слишком много вариантов")],
+        [KeyboardButton(text="😶 Не вижу смысла")],
+    ],
+    resize_keyboard=True
+)
+
+kb_working_map = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➡️ Переходим к первому навыку")],
+        [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="😑 Ты меня не понял")],
+    ],
+    resize_keyboard=True
+)
+
 kb_misunderstood_reasons = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
@@ -1212,14 +1232,6 @@ kb_analysis_need_more = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-kb_analysis_need_more = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
-        [KeyboardButton(text="📱 Отвлечения"), KeyboardButton(text="🌀 Слишком много вариантов")],
-        [KeyboardButton(text="😶 Не вижу смысла")],
-    ],
-    resize_keyboard=True
-)
 
 
 SYSTEMS_DAY = [

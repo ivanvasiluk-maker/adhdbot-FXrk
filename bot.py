@@ -56,7 +56,7 @@ from flows import (
     send_trainer_photo_if_any, run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
-    live_analysis_profile_patch, render_analysis_details_by_trainer
+    live_analysis_profile_patch, render_analysis_details_by_trainer, build_analysis_result
 )
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
 from core.engine import (
@@ -335,6 +335,27 @@ def _best_skills_text(profile: Dict[str, Any]) -> str:
     return "🧩 Маленький вход\n🧩 Видимый первый шаг"
 
 
+def _profile_skill_list_text(profile: Dict[str, Any], key: str, fallback: str = "пока собираем") -> str:
+    items = _profile_list(profile.get(key))
+    if not items:
+        return fallback
+    return "\n".join(f"— {_skill_label(str(item))}" for item in items[:4])
+
+
+def _working_map_behavior_records_text(profile: Dict[str, Any]) -> str:
+    success = _profile_skill_list_text(profile, "successful_skills", "пока проверяем первые навыки")
+    failed = _profile_skill_list_text(profile, "failed_skills", "пока явных провалов навыков нет")
+    main = profile.get("main_hypothesis") or "рабочая гипотеза уточняется"
+    return (
+        "Что проверяли действиями:\n"
+        f"— исходная гипотеза: {main}\n\n"
+        "Что уже сработало:\n"
+        f"{success}\n\n"
+        "Что не подошло или потребовало упрощения:\n"
+        f"{failed}"
+    )
+
+
 def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
     done_count = int(profile.get("action_done_count") or u.get("done_count") or 0)
     downscale_count = int(profile.get("downscale_count") or 0)
@@ -368,6 +389,12 @@ def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dic
         "body_doubling_signal": profile.get("body_doubling_signal") or ("body_doubling" if profile.get("preferred_activation") == "body_doubling" else ""),
         "energy_signal": profile.get("energy_signal") or profile.get("energy_pattern") or "",
         "best_variant": profile.get("best_variant") or profile.get("best_skill") or profile.get("last_successful_skill") or "open_only",
+        "main_hypothesis": profile.get("main_hypothesis") or "",
+        "secondary_hypotheses": _profile_list(profile.get("secondary_hypotheses")),
+        "confirmed_signals": _profile_list(profile.get("confirmed_signals")),
+        "successful_skills": _profile_list(profile.get("successful_skills")),
+        "failed_skills": _profile_list(profile.get("failed_skills")),
+        "behavior_records_text": _working_map_behavior_records_text(profile),
         "system_day_opened": _profile_list(profile.get("system_day_opened")),
         "system_day_useful": _profile_list(profile.get("system_day_useful")),
         "system_day_already": _profile_list(profile.get("system_day_already")),
@@ -425,6 +452,140 @@ def after_action_note_saved_text(trainer_key: str) -> str:
     if trainer_key == "marsha":
         return "Записала. Хорошо, что ты это заметил — такие маленькие сдвиги важны."
     return "Записал.\nЭто важный сигнал для карты."
+
+
+def _analysis_main_hypothesis(comp: Dict[str, Any]) -> str:
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    if analysis_result.get("core_hypothesis"):
+        return str(analysis_result.get("core_hypothesis"))
+    pattern = str(comp.get("live_pattern") or comp.get("main_pattern") or comp.get("specific_pattern") or "")
+    if pattern == "perfectionism_visibility_fear" or "оцен" in pattern or "ошиб" in pattern:
+        return "страх ошибки или оценки"
+    if pattern == "attention_escape":
+        return "уход внимания в быстрые награды"
+    if pattern == "shame_self_attack":
+        return "самокритика после срыва"
+    if pattern == "low_energy_overload":
+        return "низкий ресурс и перегруз"
+    if pattern == "body_doubling_helpful":
+        return "внешний контакт помогает запуску"
+    return "вход в задачу становится слишком большим"
+
+
+def _analysis_secondary_hypotheses(comp: Dict[str, Any]) -> List[str]:
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    if isinstance(analysis_result.get("secondary_hypotheses"), list) and analysis_result.get("secondary_hypotheses"):
+        return [str(x) for x in analysis_result.get("secondary_hypotheses") if x][:6]
+    main = _analysis_main_hypothesis(comp)
+    checks = [
+        "насколько помогает уменьшение шага",
+        "есть ли проблемы с удержанием внимания после старта",
+        "помогает ли присутствие других людей",
+        "насколько сильно мешает самокритика после откладывания",
+    ]
+    if main != "страх ошибки или оценки":
+        checks.insert(0, "есть ли страх ошибки или оценки")
+    return checks[:5]
+
+
+def working_map_profile_patch(comp: Dict[str, Any]) -> Dict[str, Any]:
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
+    facts = [str(x) for x in (analysis_result.get("evidence_signals") or signals.get("facts", [])) if x][:8]
+    return {
+        "main_hypothesis": _analysis_main_hypothesis(comp),
+        "secondary_hypotheses": _analysis_secondary_hypotheses(comp),
+        "confirmed_signals": facts,
+        "recommended_core_skill": analysis_result.get("recommended_core_skill") or "",
+        "recommended_variant": analysis_result.get("recommended_variant") or "",
+        "failed_skills": [],
+        "successful_skills": [],
+    }
+
+
+def working_map_text(comp: Dict[str, Any], trainer_key: str) -> str:
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    maps = analysis_result.get("working_map_by_trainer") if isinstance(analysis_result.get("working_map_by_trainer"), dict) else {}
+    scripted = maps.get(trainer_key) or maps.get("marsha")
+    if scripted:
+        return str(scripted)
+    main = _analysis_main_hypothesis(comp)
+    secondary = _analysis_secondary_hypotheses(comp)
+    secondary_text = "\n".join(f"🔹 {item}" for item in secondary)
+    if trainer_key == "skinny":
+        checks = "\n".join(f"✔ {item}" for item in secondary[:4])
+        return (
+            "🗺 Что проверяем\n\n"
+            f"Пока вижу:\n\n✔ {main}\n\n"
+            f"Хочу проверить:\n\n{checks}\n\n"
+            "Пока это гипотезы.\n\n"
+            "Несколько дней собираем данные.\n\n"
+            "Буду спрашивать:\n\n"
+            "— что сработало\n"
+            "— что не сработало\n"
+            "— где развалилось\n\n"
+            "Потом соберём нормальную карту."
+        )
+    if trainer_key == "beck":
+        return (
+            "🗺 Рабочая карта\n\n"
+            "Пока я вижу несколько возможных узлов.\n\n"
+            "Основная гипотеза:\n\n"
+            f"🔹 {main}\n\n"
+            "Дополнительно хочу проверить:\n\n"
+            f"{secondary_text}\n\n"
+            "Пока это не выводы.\n\n"
+            "Это рабочая карта.\n\n"
+            "Ближайшие дни мы будем смотреть:\n\n"
+            "— какие навыки реально помогают\n"
+            "— где становится легче\n"
+            "— где всё ещё ломается вход\n"
+            "— что работает именно у тебя\n\n"
+            "Поэтому я буду иногда спрашивать:\n\n"
+            "✔ что получилось\n"
+            "✔ что не получилось\n"
+            "✔ что было самым трудным\n"
+            "✔ что неожиданно помогло\n\n"
+            "Через несколько дней карта станет точнее."
+        )
+    return (
+        "🗺 Предварительная карта\n\n"
+        "Пока я вижу несколько мест,\n"
+        "где тебе может быть особенно тяжело.\n\n"
+        "Сейчас больше всего внимания привлекает:\n\n"
+        f"🌱 {main}\n\n"
+        "Но я пока не уверена,\n"
+        "что это единственная причина.\n\n"
+        "Поэтому ближайшие дни\n"
+        "мы будем аккуратно смотреть:\n\n"
+        "— какие шаги даются легче\n"
+        "— где становится тяжело\n"
+        "— что помогает возвращаться\n"
+        "— как ты реагируешь на срывы\n\n"
+        "Я буду иногда спрашивать:\n\n"
+        "что получилось,\n"
+        "что не получилось,\n"
+        "что помогло,\n"
+        "а что нет.\n\n"
+        "Не для отчёта.\n\n"
+        "А чтобы постепенно собрать карту,\n"
+        "которая будет подходить именно тебе."
+    )
+
+
+def _append_unique_profile_value(current: Any, value: str, limit: int = 8) -> List[str]:
+    items = current if isinstance(current, list) else []
+    normalized = [str(x) for x in items if x]
+    if value and value not in normalized:
+        normalized.append(value)
+    return normalized[-limit:]
+
+
+async def record_working_map_skill_result(user_id: int, key: str, skill_id: Optional[str]):
+    if not skill_id:
+        return
+    profile = await get_user_profile(user_id, DB_PATH)
+    await update_user_profile(user_id, {key: _append_unique_profile_value(profile.get(key), str(skill_id))}, DB_PATH)
 
 
 def analysis_loading_text(trainer_key: str) -> str:
@@ -1152,6 +1313,9 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "downscale_count": summary["downscale_count"],
         "return_count": summary["return_count"],
         "downscale_pattern": summary["downscale_pattern"],
+        "main_hypothesis": summary.get("main_hypothesis", ""),
+        "successful_skills": summary.get("successful_skills", []),
+        "failed_skills": summary.get("failed_skills", []),
     }
     await update_user_profile(u["user_id"], profile_patch, DB_PATH)
 
@@ -1182,6 +1346,9 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "downscale_count": summary["downscale_count"],
         "return_count": summary["return_count"],
         "downscale_pattern": summary["downscale_pattern"],
+        "main_hypothesis": summary.get("main_hypothesis", ""),
+        "successful_skills": summary.get("successful_skills", []),
+        "failed_skills": summary.get("failed_skills", []),
     }
     await log_event(u["user_id"], "offer", "offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "offer", "profile_map_updated", {"source": source, **profile_patch}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1199,6 +1366,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
             summary["preferred_activation"],
             summary["return_pattern"],
             summary.get("system_day_signals", ""),
+            summary.get("behavior_records_text", ""),
         ),
         kb_pay_choice,
         "pay_choice",
@@ -2219,6 +2387,8 @@ async def main_flow(m: Message):
 
     # "Ты меня не понял" is a rebuild flow, not a dead-end explanation.
     if is_misunderstood_button(text) and u.get("stage") not in {"misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await"}:
+        if user_is_in_action_loop(u):
+            await record_working_map_skill_result(u["user_id"], "failed_skills", current_skill_id(u))
         await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
         return
 
@@ -2294,6 +2464,7 @@ async def main_flow(m: Message):
                 "failed_reason_count": failed_count,
                 **_today_profile_counter_patch(profile, "failed_reason_count_today", "failed_reason_count_date"),
             }, source="action_failed")
+            await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
             await log_engine_events(u, screen)
             await answer_with_keyboard(m, u, screen["text"], kb_failed, "failed")
             return
@@ -2419,6 +2590,7 @@ async def main_flow(m: Message):
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                 }, source="downscale_done")
+                await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
                     return
@@ -2443,6 +2615,7 @@ async def main_flow(m: Message):
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                 }, source="downscale_done")
+                await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
                     return
@@ -2497,6 +2670,7 @@ async def main_flow(m: Message):
         if "clarity_up" in effect_tags:
             effect_patch["effect_clarity"] = True
         await update_user_profile(u["user_id"], effect_patch, DB_PATH)
+        await record_working_map_skill_result(u["user_id"], "successful_skills", current_skill_id(u))
         await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note), "effect_tags": effect_tags}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_keyboard(m, u, after_action_note_saved_text(u.get("trainer_key") or "marsha"), kb_done, "done")
         return
@@ -2871,6 +3045,31 @@ async def main_flow(m: Message):
             await m.answer("Ок. Без гарантии — не стартуем.")
             return
 
+    if u.get("stage") == "working_map":
+        if text == "➡️ Переходим к первому навыку" or "первому навыку" in low or "давай действие" in low:
+            await log_event(u["user_id"], "analysis", "analysis_action_started", {"source": "working_map"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            u["stage"] = "waiting_next_day"
+            ensure_first_start_date(u)
+            await save_user(u, DB_PATH)
+            await m.answer(
+                "Ок.\n\n"
+                "Теперь посмотрим,\n"
+                "какие навыки реально помогают именно тебе."
+            )
+            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
+            return
+        if "подробнее" in low or text == "📚 Подробнее":
+            await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "working_map"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            try:
+                comp = json.loads(u.get("analysis_json") or "{}")
+            except Exception:
+                comp = {}
+            details = render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, u.get("trainer_key") or "marsha")
+            await answer_with_keyboard(m, u, details, kb_working_map, "analysis_details")
+            return
+        await answer_with_keyboard(m, u, "Выбери кнопку 👇", kb_working_map, "working_map")
+        return
+
     # confirm_analysis
     if u["stage"] == "confirm_analysis":
         low = text.lower()
@@ -2893,18 +3092,23 @@ async def main_flow(m: Message):
             return
         if "в точку" in low or (text == "✅ Да, в точку"):
             await log_event(u["user_id"], "analysis", "analysis_accepted", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await log_event(u["user_id"], "analysis", "analysis_action_started", {"source": "accepted"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            u["stage"] = "waiting_next_day"
+            try:
+                comp = json.loads(u.get("analysis_json") or "{}")
+            except Exception:
+                comp = {}
+            comp = comp if isinstance(comp, dict) else {}
+            await update_user_profile(u["user_id"], working_map_profile_patch(comp), DB_PATH)
+            u["stage"] = "working_map"
             u["day"] = 1
             ensure_first_start_date(u)
             await save_user(u, DB_PATH)
-            await m.answer(
-                "Ок.\n\n"
-                "Пока это рабочая гипотеза.\n\n"
-                "Дальше посмотрим,\n"
-                "какие навыки реально помогут именно тебе."
+            await answer_with_keyboard(
+                m,
+                u,
+                working_map_text(comp, u.get("trainer_key") or "marsha"),
+                kb_working_map,
+                "working_map",
             )
-            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
             return
         if "немного" in low or "не так" in low or "не совсем" in low or text in {"🤔 Немного не так", "🤔 Не совсем"}:
             await open_misunderstood_flow(m, u, "confirm_analysis")
@@ -3187,6 +3391,7 @@ async def main_flow(m: Message):
                 "preferred_activation": preferred_activation,
                 "action_done_count": done_count,
             }, source="action_done")
+            await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
             await log_engine_events(u, screen)
             if should_show_day3_offer(u, day):
                 await show_day3_offer(m, u, "day3_auto")
@@ -3485,6 +3690,7 @@ async def main_flow(m: Message):
                     summary["preferred_activation"],
                     summary["return_pattern"],
                     summary.get("system_day_signals", ""),
+                    summary.get("behavior_records_text", ""),
                 ),
                 kb_pay_choice,
                 "pay_choice",
@@ -3568,10 +3774,15 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
         await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "show_comprehensive_analysis"}, DB_PATH, SHEETS_WEBHOOK_URL)
     comp.pop("user_text", None)
     comp.update(safe_analysis_memory(user_text, comp))
+    analysis_result = build_analysis_result(comp, user_text)
+    comp["analysis_result"] = analysis_result
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket", bucket)
     plan_ids = build_28_day_plan(u["bucket"])
-    if comp.get("analysis_fallback") and "open_only" in SKILLS_DB:
+    recommended_variant = analysis_result.get("recommended_variant")
+    if recommended_variant in SKILLS_DB:
+        plan_ids[0] = recommended_variant
+    if comp.get("analysis_fallback") and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
     u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
     u["day"] = 1

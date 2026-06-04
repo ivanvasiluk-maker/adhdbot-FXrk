@@ -534,8 +534,376 @@ def _escape_names(signals: Dict[str, Any]) -> str:
     return "Telegram / почта / новости"
 
 
+def _analysis_result_core_hypothesis(pattern: str) -> str:
+    if pattern == "perfectionism_visibility_fear":
+        return "страх ошибки или оценки"
+    if pattern == "attention_escape":
+        return "уход внимания в быстрые награды"
+    if pattern == "shame_self_attack":
+        return "самокритика после срыва"
+    if pattern == "low_energy_overload":
+        return "низкий ресурс и перегруз"
+    if pattern == "body_doubling_helpful":
+        return "внешний контакт снижает порог старта"
+    return "вход в задачу становится слишком большим"
+
+
+def _recommended_skill_for_pattern(pattern: str) -> Dict[str, str]:
+    if pattern == "perfectionism_visibility_fear":
+        return {"recommended_core_skill": "bad_draft_entry", "recommended_variant": "bad_first_step"}
+    if pattern == "attention_escape":
+        return {"recommended_core_skill": "attention_container", "recommended_variant": "phone_far_3min"}
+    if pattern == "shame_self_attack":
+        return {"recommended_core_skill": "shame_to_action", "recommended_variant": "check_the_facts_light"}
+    if pattern == "low_energy_overload":
+        return {"recommended_core_skill": "energy_first", "recommended_variant": "minimum_viable_day"}
+    return {"recommended_core_skill": "entry_small_step", "recommended_variant": "open_only"}
+
+
+def _primary_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str) -> Dict[str, str]:
+    if pattern == "perfectionism_visibility_fear":
+        return {
+            "skinny": (
+                "Ок. Смотрю, где ломается вход.\n\n"
+                "Что вижу.\n\n"
+                "Письмо стоит третий день.\n\n"
+                "Но ноутбук открывается.\n"
+                "Telegram открывается.\n"
+                "Почта открывается.\n"
+                "Новости открываются.\n\n"
+                "Значит проблема не просто в энергии.\n\n"
+                "Письмо ты сам называешь не таким уж сложным.\n\n"
+                "Значит проблема не просто в сложности.\n\n"
+                "Главный сигнал:\n"
+                "ты боишься написать плохо\n"
+                "и выглядеть глупо.\n\n"
+                "Удар:\n"
+                "ты избегаешь не письмо.\n\n"
+                "Ты избегаешь момент,\n"
+                "где результат можно оценить.\n\n"
+                "Telegram, почта и новости тут не причина.\n\n"
+                "Это способ уйти от риска ошибки.\n\n"
+                "Что делаем:\n"
+                "не пишем хорошее письмо.\n\n"
+                "Делаем плохой черновик.\n\n"
+                "Без отправки.\n"
+                "Без красоты.\n"
+                "Без героизма.\n\n"
+                "Проверяем:\n"
+                "если после плохого черновика станет легче,\n"
+                "значит проблема была не в лени,\n"
+                "а в страхе оценки."
+            ),
+            "beck": (
+                "Ок. Смотрю механизм.\n\n"
+                "Коротко, что вижу.\n\n"
+                "Письмо стоит уже третий день.\n\n"
+                "При этом вход в ноутбук происходит:\n"
+                "ты открываешь его.\n\n"
+                "Но после этого появляются:\n"
+                "Telegram,\n"
+                "почта,\n"
+                "новости,\n"
+                "мысль “надо собраться с мыслями”.\n\n"
+                "Интересно другое:\n"
+                "письмо ты не описываешь как технически сложное.\n\n"
+                "Главное напряжение звучит в другом месте:\n"
+                "“боюсь написать плохо”\n"
+                "и “выглядеть глупо”.\n\n"
+                "Моя гипотеза:\n"
+                "проблема не в самом письме.\n\n"
+                "Проблема в цене ошибки.\n\n"
+                "Если письмо получится “не так”,\n"
+                "это будет восприниматься не просто как черновик,\n"
+                "а как риск оценки.\n\n"
+                "Поэтому мозг выбирает обходные действия:\n"
+                "они дают ощущение занятости,\n"
+                "но не приближают к отправке письма.\n\n"
+                "Что будем проверять:\n"
+                "поможет ли снизить цену ошибки.\n\n"
+                "Не “написать хорошо”.\n\n"
+                "А сделать плохой черновик,\n"
+                "который никто не увидит.\n\n"
+                "Если после этого вход станет легче,\n"
+                "значит мы нашли главный узел.\n\n"
+                "Пока это гипотеза.\n"
+                "Через 2–3 дня станет понятнее,\n"
+                "какой способ входа работает именно у тебя."
+            ),
+            "marsha": (
+                "Ок. Давай аккуратно посмотрим, где стало тяжело.\n\n"
+                "Коротко, что вижу.\n\n"
+                "Мне кажется,\n"
+                "письмо уже стало тяжелее самого письма.\n\n"
+                "Сначала это была просто задача.\n\n"
+                "Потом появился первый день откладывания.\n"
+                "Потом второй.\n"
+                "Потом третий.\n\n"
+                "И теперь ты борешься не только с письмом.\n\n"
+                "Ты борешься ещё и с раздражением на себя:\n"
+                "“я опять не сделал”.\n\n"
+                "Плюс есть страх:\n"
+                "написать плохо\n"
+                "и выглядеть глупо.\n\n"
+                "Это важное место.\n\n"
+                "Похоже,\n"
+                "тебя останавливает не лень\n"
+                "и не отсутствие старания.\n\n"
+                "Похоже,\n"
+                "задача стала связана с риском оценки.\n\n"
+                "А когда есть риск оценки,\n"
+                "мозг часто ищет безопасный выход:\n"
+                "Telegram,\n"
+                "почта,\n"
+                "новости,\n"
+                "“сначала собраться с мыслями”.\n\n"
+                "Мы не будем давить сильнее.\n\n"
+                "Сначала попробуем снизить давление:\n"
+                "не хорошее письмо,\n"
+                "а безопасный черновик.\n\n"
+                "Без отправки.\n"
+                "Без идеальности.\n"
+                "Без самонаказания.\n\n"
+                "Пока это гипотеза.\n"
+                "Через 2–3 дня мы посмотрим,\n"
+                "что реально помогает тебе возвращаться."
+            ),
+        }
+    facts = "\n".join(f"— {x}" for x in evidence[:5])
+    return {
+        "skinny": f"Что вижу.\n\n{facts}\n\nГипотеза: {core_hypothesis}.\n\nПроверяем действием.",
+        "beck": f"Коротко, что вижу.\n\n{facts}\n\nМоя гипотеза: {core_hypothesis}.\n\nПока это гипотеза. Проверим навыком.",
+        "marsha": f"Коротко, что вижу.\n\n{facts}\n\nПохоже, сейчас важный узел — {core_hypothesis}.\n\nПроверим мягко, без давления.",
+    }
+
+
+def _detailed_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str) -> Dict[str, str]:
+    if pattern == "perfectionism_visibility_fear":
+        return {
+            "skinny": (
+                "Разбор по фактам.\n\n"
+                "1. Письмо стоит третий день.\n"
+                "   Обычное “просто сделай” уже не работает.\n\n"
+                "2. Но Telegram, почта и новости открываются.\n"
+                "   Значит энергия на действия есть.\n\n"
+                "3. Письмо не выглядит очень сложным.\n"
+                "   Ты сам это сказал.\n\n"
+                "4. Самый сильный сигнал:\n"
+                "   “боюсь написать плохо и выглядеть глупо”.\n\n"
+                "Вывод:\n"
+                "стопор не в письме.\n\n"
+                "Стопор в риске оценки.\n\n"
+                "Механизм простой.\n\n"
+                "Пока письмо не написано,\n"
+                "его нельзя оценить.\n\n"
+                "Пока оно не отправлено,\n"
+                "ты не можешь выглядеть глупо.\n\n"
+                "Поэтому мозг выбирает безопасные действия:\n"
+                "Telegram,\nпочта,\nновости,\n“собраться с мыслями”.\n\n"
+                "Они выглядят полезно.\n\n"
+                "Но письмо не двигают.\n\n"
+                "Что проверяем:\n"
+                "плохой черновик.\n\n"
+                "Почему:\n"
+                "плохой черновик убирает требование “сделать нормально”.\n\n"
+                "Задача не написать хорошее письмо.\n\n"
+                "Задача — создать первый кусок текста.\n\n"
+                "Навык:\n“Плохой черновик”.\n\n"
+                "Минимум:\nодно плохое предложение."
+            ),
+            "beck": (
+                "Почему я думаю именно про страх оценки?\n\n"
+                "Я опираюсь на несколько сигналов.\n\n"
+                "Первый:\nписьмо стоит третий день.\n\n"
+                "Второй:\nноутбук открывается.\n\n"
+                "То есть проблема не в полном отсутствии старта.\n\n"
+                "Третий:\nпосле входа появляются Telegram, почта и новости.\n\n"
+                "Это похоже на переключение от напряжения\n"
+                "к быстрым, понятным действиям.\n\n"
+                "Четвёртый:\nты пишешь, что письмо не такое уж сложное.\n\n"
+                "Пятый:\nты отдельно говоришь:\n"
+                "“боюсь написать плохо”\n"
+                "и “выглядеть глупо”.\n\n"
+                "Вот тут ключ.\n\n"
+                "Если задача простая,\n"
+                "но откладывается несколько дней,\n"
+                "часто проблема не в объёме.\n\n"
+                "Проблема в том,\n"
+                "что будет после выполнения.\n\n"
+                "Механизм такой:\n"
+                "результат могут оценить,\n"
+                "а значит старт воспринимается как риск.\n\n"
+                "Мозг пытается снизить риск:\n"
+                "готовится,\nпроверяет,\nоткладывает,\nищет более безопасные действия.\n\n"
+                "Поэтому навык должен идти не в сторону “больше мотивации”,\n"
+                "а в сторону “меньше цена ошибки”.\n\n"
+                "Что будем проверять:\n"
+                "— плохой черновик;\n"
+                "— первый абзац без отправки;\n"
+                "— факт вместо приговора;\n"
+                "— маленький вход без оценки результата.\n\n"
+                "Это опирается на логику CBT:\n"
+                "мы не спорим с мыслью абстрактно,\n"
+                "а проверяем её действием.\n\n"
+                "И на ADHD skills training:\n"
+                "мы уменьшаем вход,\n"
+                "делаем шаг видимым\n"
+                "и снижаем нагрузку на самоконтроль.\n\n"
+                "Если черновик снизит напряжение,\n"
+                "маршрут будет строиться вокруг страха оценки,\n"
+                "самокритики и возврата после откладывания."
+            ),
+            "marsha": (
+                "Раскрою подробнее.\n\n"
+                "Ты описываешь не просто “я не написал письмо”.\n\n"
+                "Ты описываешь целый цикл:\n\n"
+                "сначала появляется важная задача;\n\n"
+                "потом хочется “собраться с мыслями”;\n\n"
+                "потом Telegram, почта, новости;\n\n"
+                "потом проходит час;\n\n"
+                "потом усталость;\n\n"
+                "потом злость на себя;\n\n"
+                "потом перенос на завтра.\n\n"
+                "И каждый перенос делает письмо тяжелее.\n\n"
+                "Письмо становится не просто письмом.\n\n"
+                "Оно начинает напоминать:\n"
+                "“я снова не справился”.\n\n"
+                "Поэтому давление “соберись” может не помочь.\n\n"
+                "Оно может добавить ещё больше стыда.\n\n"
+                "Здесь лучше начинать мягче.\n\n"
+                "Не с требования написать хорошо.\n\n"
+                "А с контакта с задачей,\n"
+                "где ты не обязан быть идеальным.\n\n"
+                "Что будем пробовать:\n"
+                "— плохой черновик;\n"
+                "— один первый абзац без отправки;\n"
+                "— факт вместо приговора;\n"
+                "— маленький шаг без оценки себя.\n\n"
+                "Это близко к DBT-логике:\n"
+                "сначала признать, что сейчас действительно тяжело,\n"
+                "а потом выбрать маленькое эффективное действие.\n\n"
+                "И к CBT-логике:\n"
+                "мы проверяем не мысль “я справлюсь”,\n"
+                "а действие, которое даёт новый опыт.\n\n"
+                "Если после маленького черновика станет легче,\n"
+                "мы запишем это в карту.\n\n"
+                "Если не станет —\n"
+                "не будем обвинять тебя,\n"
+                "а подберём другой вход."
+            ),
+        }
+    facts = "\n".join(f"— {x}" for x in evidence[:6])
+    text = f"Почему такая гипотеза?\n\nЯ опираюсь на:\n{facts}\n\nПроверяем: {core_hypothesis}."
+    return {"skinny": text, "beck": text, "marsha": text}
+
+
+def _working_map_scripts(pattern: str, core_hypothesis: str) -> Dict[str, str]:
+    if pattern == "perfectionism_visibility_fear":
+        return {
+            "skinny": (
+                "🗺 Что проверяем\n\n"
+                "Пока вижу главный узел:\n\n"
+                "✔ страх ошибки / оценки\n\n"
+                "Дополнительно проверим:\n\n"
+                "✔ ломается ли вход или удержание\n"
+                "✔ помогает ли плохой черновик\n"
+                "✔ помогает ли уменьшение шага\n"
+                "✔ мешает ли самокритика после откладывания\n"
+                "✔ помогает ли внешний контроль или люди рядом\n\n"
+                "Пока это не финальный вывод.\n\n"
+                "Несколько дней собираем данные.\n\n"
+                "Я буду спрашивать:\n\n"
+                "— что сработало\n"
+                "— что не сработало\n"
+                "— где развалилось\n"
+                "— после чего стало легче\n\n"
+                "Потом соберём нормальную карту.\n\n"
+                "Дальше — первый навык."
+            ),
+            "beck": (
+                "🗺 Рабочая карта\n\n"
+                "Пока я вижу главную гипотезу:\n\n"
+                "🔹 страх ошибки или оценки\n\n"
+                "Но этого мало для точного маршрута.\n\n"
+                "Дополнительно хочу проверить:\n\n"
+                "🔹 помогает ли плохой черновик\n"
+                "🔹 снижает ли напряжение маленький шаг\n"
+                "🔹 где внимание уходит в Telegram / почту / новости\n"
+                "🔹 как быстро получается вернуться после срыва\n"
+                "🔹 усиливает ли самокритика откладывание\n"
+                "🔹 помогает ли внешний контакт / body doubling\n\n"
+                "Пока это не диагноз и не окончательный вывод.\n\n"
+                "Это рабочая модель.\n\n"
+                "Ближайшие дни я буду смотреть:\n\n"
+                "— какие навыки реально помогают\n"
+                "— какие не подходят\n"
+                "— где становится легче\n"
+                "— где вход всё ещё ломается\n\n"
+                "Через 2–3 дня карта станет точнее.\n\n"
+                "Дальше — первый навык."
+            ),
+            "marsha": (
+                "🗺 Предварительная карта\n\n"
+                "Пока я вижу место,\n"
+                "где тебе может быть особенно тяжело:\n\n"
+                "🌱 страх ошибки и оценки\n\n"
+                "Но я пока не хочу делать вид,\n"
+                "что всё уже понятно.\n\n"
+                "Мы будем аккуратно проверять:\n\n"
+                "— какой шаг даётся легче\n"
+                "— где становится слишком трудно\n"
+                "— что помогает вернуться\n"
+                "— что усиливает самокритику\n"
+                "— становится ли легче после маленького черновика\n\n"
+                "Я буду иногда спрашивать:\n\n"
+                "что получилось,\n"
+                "что не получилось,\n"
+                "что помогло,\n"
+                "а что нет.\n\n"
+                "Не для отчёта.\n\n"
+                "А чтобы постепенно собрать карту,\n"
+                "которая будет подходить именно тебе.\n\n"
+                "Через несколько дней вывод будет точнее.\n\n"
+                "Дальше — первый навык."
+            ),
+        }
+    base = f"🗺 Рабочая карта\n\nГлавная гипотеза:\n\n🔹 {core_hypothesis}\n\nПока это не вывод. Несколько дней проверяем действиями."
+    return {"skinny": base, "beck": base, "marsha": base}
+
+
+def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str, Any]:
+    data = dict(comp or {})
+    signals = data.get("analysis_signals") if isinstance(data.get("analysis_signals"), dict) else extract_analysis_signals(user_text)
+    evidence = [str(x) for x in signals.get("facts", []) if x]
+    pattern = str(data.get("live_pattern") or detect_live_analysis_pattern(user_text) or "default_start_block")
+    core_hypothesis = _analysis_result_core_hypothesis(pattern)
+    secondary = [
+        "помогает ли плохой черновик" if pattern == "perfectionism_visibility_fear" else "какой минимальный шаг помогает начать",
+        "снижает ли напряжение маленький шаг",
+        "как быстро получается вернуться после срыва",
+        "усиливает ли самокритика откладывание",
+        "помогает ли внешний контакт / body doubling",
+    ]
+    rec = _recommended_skill_for_pattern(pattern)
+    return {
+        "pattern": pattern,
+        "evidence_signals": evidence,
+        "core_hypothesis": core_hypothesis,
+        "secondary_hypotheses": secondary,
+        **rec,
+        "primary_analysis_by_trainer": _primary_analysis_scripts(pattern, evidence, core_hypothesis),
+        "detailed_analysis_by_trainer": _detailed_analysis_scripts(pattern, evidence, core_hypothesis),
+        "working_map_by_trainer": _working_map_scripts(pattern, core_hypothesis),
+    }
+
+
 def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = "marsha") -> str:
     """Expand only the current analysis: facts -> suspicious link -> hypothesis -> checks."""
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    details_by_trainer = analysis_result.get("detailed_analysis_by_trainer") if isinstance(analysis_result.get("detailed_analysis_by_trainer"), dict) else {}
+    scripted = details_by_trainer.get(trainer_key) or details_by_trainer.get("marsha")
+    if scripted:
+        return str(scripted)
     pattern = str(comp.get("live_pattern") or "default_start_block")
     signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
     facts = _facts_text(signals, 8, "✔")
@@ -912,10 +1280,15 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
 def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str, Any]] = None, trainer_key: Optional[str] = None) -> str:
     """Собрать короткий живой разбор без generic GPT-фраз."""
     quick = quick or {}
+    key = trainer_key or comp.get("trainer_key") or quick.get("trainer_key") or "marsha"
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    primary_by_trainer = analysis_result.get("primary_analysis_by_trainer") if isinstance(analysis_result.get("primary_analysis_by_trainer"), dict) else {}
+    scripted = primary_by_trainer.get(str(key)) or primary_by_trainer.get("marsha")
+    if scripted:
+        return str(scripted)
     raw_hint = comp.get("user_text") or quick.get("user_text") or ""
     normalized = normalize_analysis(comp, raw_hint, quick)
     pattern = normalized.get("live_pattern") or comp.get("live_pattern") or detect_live_analysis_pattern(raw_hint)
-    key = trainer_key or comp.get("trainer_key") or quick.get("trainer_key") or "marsha"
     return render_analysis_by_trainer(str(pattern), str(key), normalized)
 
 async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
@@ -957,11 +1330,23 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     comp_to_store = dict(comp)
     comp_to_store.pop("user_text", None)
     comp_to_store.update(safe_analysis_memory(user_text, comp_to_store))
+    analysis_result = build_analysis_result(comp_to_store, user_text)
+    if len(analysis_result.get("evidence_signals") or []) < 3:
+        u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
+        u["stage"] = "analysis_need_more"
+        await save_user(u, db_path)
+        await log_event(u["user_id"], "analysis", "analysis_evidence_too_low", {"signals": len(analysis_result.get("evidence_signals") or [])}, db_path, sheets_webhook)
+        await m.answer(analysis_need_more_text(), reply_markup=kb_analysis_need_more)
+        return
+    comp_to_store["analysis_result"] = analysis_result
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
 
     # build plan (28 days)
     plan_ids = build_28_day_plan(bucket)
-    if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB:
+    recommended_variant = analysis_result.get("recommended_variant")
+    if recommended_variant in SKILLS_DB:
+        plan_ids[0] = recommended_variant
+    if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
     u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
     u["day"] = 1
