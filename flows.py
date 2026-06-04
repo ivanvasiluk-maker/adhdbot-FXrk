@@ -629,22 +629,24 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
                 "Проверяем."
             )
         if trainer_key == "beck":
+            _escapes_beck = escapes.replace(' / ', '\n— ')
             return (
                 "Коротко, что вижу.\n\n"
                 "Письмо стоит третий день.\n\n"
                 "При этом рядом постоянно появляются:\n"
-                f"— {escapes.replace(' / ', '\n— ')}\n\n"
+                f"— {_escapes_beck}\n\n"
                 "И отдельно звучит:\n"
                 "«боюсь написать плохо».\n\n"
                 "Поэтому я бы проверял не мотивацию.\n"
                 "Я бы проверял страх ошибки.\n\n"
                 "Пока это гипотеза."
             )
+        _escapes_default = escapes.replace(' / ', '\n— ')
         return (
             "Коротко, что вижу.\n\n"
             "Письмо стоит третий день.\n\n"
             "При этом рядом постоянно появляются:\n"
-            f"— {escapes.replace(' / ', '\n— ')}\n\n"
+            f"— {_escapes_default}\n\n"
             "И отдельно звучит:\n"
             "«боюсь написать плохо».\n\n"
             "Похоже, проблема не в сложности письма.\n"
