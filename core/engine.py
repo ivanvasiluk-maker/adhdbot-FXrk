@@ -207,6 +207,13 @@ def select_skill(user_state: UserState) -> Dict[str, Any]:
     return {"skill_id": skill_id, "skill": skill, "day": day}
 
 
+
+def _target_header(target: str) -> str:
+    target = (target or "").strip()
+    if target == "__target_not_selected__":
+        return "📌 Дело пока не выбрано\n\nБудем тренироваться\nна типичных ситуациях прокрастинации."
+    return f"📌 Дело: {target}"
+
 def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     """Build a UI-neutral skill card from live skill fields."""
     trainer_key = _trainer_key(user_state)
@@ -224,7 +231,7 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     if trainer_key == "beck":
         text = (
             f"{_trainer_header(user_state)}\n\n"
-            f"📌 Дело: {target}\n\n"
+            f"{_target_header(target)}\n\n"
             f"🧩 Навык дня: {visible_core_title}\n\n"
             f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
@@ -235,7 +242,7 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     elif trainer_key == "skinny":
         text = (
             f"{_trainer_header(user_state)}\n\n"
-            f"📌 Дело: {target}\n\n"
+            f"{_target_header(target)}\n\n"
             f"🧩 Навык дня: {visible_core_title}\n\n"
             f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
@@ -246,7 +253,7 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     else:
         text = (
             f"{_trainer_header(user_state)}\n\n"
-            f"📌 Дело: {target}\n\n"
+            f"{_target_header(target)}\n\n"
             f"🧩 Навык дня: {visible_core_title}\n\n"
             f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
@@ -398,7 +405,7 @@ def get_next_screen(user_state: UserState, event: Dict[str, Any]) -> Screen:
     if event_type == "target_submitted":
         target = _clamp_text(event.get("text"), 200, "Прокрастинация в целом")
         if target.lower() == "пропустить":
-            target = "Прокрастинация в целом"
+            target = "__target_not_selected__"
         selection = select_skill(user_state)
         local_state = dict(user_state)
         local_state["today_target"] = target

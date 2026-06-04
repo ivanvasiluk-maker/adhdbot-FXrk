@@ -199,6 +199,8 @@ DOWNSCALE_PATTERN = "initiation_before_tool"
 DOWNSCALE_PRIMARY_SKILL = "open_only"
 DOWNSCALE_FALLBACK_SKILL = "task_naming"
 MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS = 3
+SUCCESS_ACTIONS = {"DONE", "RETURNED", "CRISIS_COMPLETED"}
+NO_SUCCESS_ACTIONS = {"SKIP", "CHANGE_SKILL", "EASIER", "MORE_INFO", "NOT_UNDERSTAND"}
 
 ACTION_RELATED_STAGES = {
     "training",
@@ -484,6 +486,31 @@ def today_progress_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
         f"— {return_today} возврата\n"
         f"— {failed_today} сбоя не стали концом\n\n"
         "Это уже тренировка, а не “ничего не сделал”."
+    )
+
+
+def day_finish_summary_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    launches = int(u.get("day_core_round_count") or profile.get("action_done_count_today") or 0)
+    returns = int(profile.get("return_count_today") or 0)
+    downscales = int(profile.get("downscale_count_today") or profile.get("downscale_count") or 0)
+    visible = []
+    if downscales:
+        visible.append("шаг иногда нужно уменьшать")
+    if returns:
+        visible.append("возврат после срыва уже тренируется")
+    if int(profile.get("action_skip_count") or 0):
+        visible.append("пропуск тоже показывает, где шаг не подходит")
+    if not visible:
+        visible.append("главный навык дня сохранён")
+    return (
+        "Сегодняшняя тренировка завершена.\n\n"
+        "Сегодня уже:\n"
+        f"✔ запусков: {launches}\n"
+        f"✔ возвратов: {returns}\n"
+        f"✔ уменьшений шага: {downscales}\n\n"
+        "Что уже видно:\n"
+        + "\n".join(f"— {x}" for x in visible[:3])
+        + "\n\nЗавтра продолжим."
     )
 
 
@@ -2195,12 +2222,12 @@ async def main_flow(m: Message):
                 m,
                 u,
                 "Ок.\n\n"
-                "Это тоже информация.\n\n"
+                "Это тоже данные.\n\n"
                 "Похоже,\n"
-                "сейчас даже этот шаг ощущается большим\n"
-                "или не подходит.\n\n"
+                "сейчас этот шаг не подходит\n"
+                "или ощущается слишком большим.\n\n"
                 "Записал.\n\n"
-                "Что делаем дальше?",
+                "Что дальше?",
                 kb_skip_data,
                 "skip_options",
             )
@@ -2223,7 +2250,8 @@ async def main_flow(m: Message):
                 u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 await log_event(u["user_id"], "training", "day_training_closed_after_skip", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await answer_with_keyboard(m, u, day_training_closed_text(), kb_day_core_stop, "day_core_stop")
+                close_profile = await get_user_profile(u["user_id"], DB_PATH)
+                await answer_with_keyboard(m, u, day_finish_summary_text(u, close_profile), kb_day_core_stop, "day_core_stop")
                 await maybe_show_micro_habit(m, u, "day_closed")
                 return
             await answer_with_keyboard(m, u, "Выбери, что делаем дальше:", kb_skip_data, "skip_options")
@@ -2517,7 +2545,8 @@ async def main_flow(m: Message):
                 SHEETS_WEBHOOK_URL,
             )
             await log_event(u["user_id"], "training", "done_enough_today", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, day_training_closed_text(), kb_day_core_stop, "day_core_stop")
+            close_profile = await get_user_profile(u["user_id"], DB_PATH)
+            await answer_with_keyboard(m, u, day_finish_summary_text(u, close_profile), kb_day_core_stop, "day_core_stop")
             await maybe_show_micro_habit(m, u, "day_closed")
             return
         await answer_with_keyboard(m, u, "Выбери кнопкой 👇", kb_done, "done")

@@ -375,6 +375,13 @@ def _skill_steps(skill: dict) -> List[str]:
     return steps or ["Открой место, где лежит задача."]
 
 
+
+def _target_header_text(today_target: str) -> str:
+    target = (today_target or "").strip()
+    if target == "__target_not_selected__":
+        return "📌 Дело пока не выбрано\n\nБудем тренироваться\nна типичных ситуациях прокрастинации."
+    return f"📌 Дело: {target}"
+
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     """Clean skill card with trainer-specific wording over live skill fields."""
     trainer_key = (user or {}).get("trainer_key") or "marsha"
@@ -403,7 +410,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     if trainer_key == "beck":
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
-            f"📌 Дело: {today_target}\n\n"
+            f"{_target_header_text(today_target)}\n\n"
             f"🧩 Навык дня: {visible_core_title}\n\n"
             f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
@@ -418,7 +425,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     if trainer_key == "skinny":
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
-            f"📌 Дело: {today_target}\n\n"
+            f"{_target_header_text(today_target)}\n\n"
             f"🧩 Навык дня: {visible_core_title}\n\n"
             f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
@@ -431,7 +438,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
 
     return (
         f"{trainer['emoji']} {trainer['name']}\n\n"
-        f"📌 Дело: {today_target}\n\n"
+        f"{_target_header_text(today_target)}\n\n"
         f"🧩 Навык дня: {visible_core_title}\n\n"
             f"{variant_label}:\n{skill_name}\n\n"
         f"{trainer_line}\n\n"
@@ -1205,6 +1212,14 @@ kb_analysis_need_more = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+kb_analysis_need_more = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
+        [KeyboardButton(text="📱 Отвлечения"), KeyboardButton(text="🌀 Слишком много вариантов")],
+        [KeyboardButton(text="😶 Не вижу смысла")],
+    ],
+    resize_keyboard=True
+)
 
 
 SYSTEMS_DAY = [
