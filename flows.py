@@ -8,6 +8,7 @@ import asyncio
 import random
 import logging
 import os
+import re
 from typing import Dict, Any, Optional, List
 import aiosqlite
 from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup
@@ -20,7 +21,7 @@ from texts import (
     CRISIS_LIMIT,
 )
 from skills import SKILLS_DB, get_current_plan, build_28_day_plan, build_plan
-from db import get_user, save_user, log_event, USER_FIELDS, is_paid
+from db import get_user, save_user, log_event, USER_FIELDS, is_paid, update_user_profile
 
 # Logging
 log = logging.getLogger("bot")
@@ -234,15 +235,10 @@ async def advance_day(m: Message, u: Dict[str, Any], next_day: int, db_path: str
 # ============================================================
 
 async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheets_webhook: str, client=None, model: str = "gpt-4o-mini"):
-    """Обработка кризиса пользователя"""
+    """Short crisis flow: stabilize first, do not explain at length."""
     from db import gamify_apply
-    fallback_sid = "return_no_punish"  # безопасный навык по умолчанию
-    
-    name = u.get("name") or "друг"
-    trainer_key = u.get("trainer_key") or "marsha"
-    bucket = u.get("bucket") or "mixed"
+    from texts import kb_crisis_stabilize, crisis_stabilize_text
 
-    # increment first; limit free crisis uses
     u["crisis_count"] = int(u.get("crisis_count") or 0) + 1
     await save_user(u, db_path)
 
@@ -250,64 +246,12 @@ async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheet
         await m.answer("🆘 Кризис — доступен без ограничений в полной версии.")
         return
 
-    await log_event(u["user_id"], u.get("stage",""), "crisis_message", {"len": len(user_text)}, db_path, sheets_webhook)
+    await log_event(u["user_id"], u.get("stage", ""), "crisis_message", {"len": len(user_text or "")}, db_path, sheets_webhook)
     gamify_apply(u, 1, "crisis_used")
-
-    await m.answer(trainer_say(trainer_key, "Ок. Сейчас быстро стабилизируем и вернём контроль."))
-    
-    # AI crisis help (если доступно)
-    try:
-        r = await ai_crisis_help(trainer_key, bucket, user_text, client, model)
-    except Exception as e:
-        log.error(f"ai_crisis_help failed: {e}")
-        # жёсткий фолбэк, чтобы не было тишины
-        r = {
-            "support": "Ок. Берём один шаг, чтобы вернуть контроль.",
-            "skill_id": "return_no_punish",
-            "why_this": "Возврат без самонаказания снимает ступор и даёт действие.",
-            "micro_step": "Скажи «Возвращаюсь» и сделай 60–120 сек самого первого шага.",
-            "plan_change": None,
-        }
-
-    sid = r.get("skill_id") or fallback_sid
-    if sid not in SKILLS_DB:
-        log.warning(f"[CRISIS] skill_id {sid} not in SKILLS_DB, fallback to {fallback_sid}")
-        sid = fallback_sid
-    from skills import format_skill, suggest_alternative_skill
-    trainer_key = u.get("trainer_key") or "marsha"
-    # Use format_skill for modern skill presentation
-    skill_msg = format_skill(sid, trainer_key)
-    micro_step = r.get("micro_step") or SKILLS_DB[sid].get("minimum", SKILLS_DB[sid].get("how"))
-    msg = (
-        f"🆘 {name}, коротко:\n"
-        f"{r['support']}\n\n"
-        f"{skill_msg}\n"
-        f"✅ Микро-шаг: {micro_step}\n\n"
-        f"Почему это сейчас: {r['why_this']}"
-    )
-    await m.answer(msg)
-
-    pc = r.get("plan_change")
-    if pc:
-        day_num = int(u.get("day") or 1) + int(pc.get("day_offset") or 1)
-        new_sid = pc.get("replace_with")
-        if new_sid in SKILLS_DB:
-            u["pending_plan_change"] = json.dumps({"day_num": day_num, "skill_id": new_sid}, ensure_ascii=False)
-            u["stage"] = "crisis_plan_confirm"
-            await save_user(u, db_path)
-            await m.answer(
-                f"Хочешь, я на завтра (день {day_num}) заменю навык на:\n"
-                f"➡️ {SKILLS_DB[new_sid]['name']} ?",
-                reply_markup=kb_yes_no
-            )
-            return
-
-    u["stage"] = "training"
+    u["stage"] = "crisis_stabilize"
     await save_user(u, db_path)
-    button_count = keyboard_button_count(kb_training_main)
-    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
-    await log_event(u["user_id"], "training", "crisis_completed", {"skill_id": sid}, db_path, sheets_webhook)
-    await m.answer("Возвращаемся в тренировку 👇", reply_markup=kb_training_main if button_count <= 5 else None)
+    await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_shown", {}, db_path, sheets_webhook)
+    await m.answer(crisis_stabilize_text(), reply_markup=kb_crisis_stabilize)
 
 # ============================================================
 # AI CRISIS HELP
@@ -402,6 +346,429 @@ def _extract_json(text: str) -> Optional[dict]:
     except Exception:
         return None
 
+ANALYSIS_FORBIDDEN_REPLACEMENTS = {
+    "управление временем": "вход в задачу",
+    "концентрация": "удержание внимания",
+    "постановка целей": "прояснение первого шага",
+    "навыки саморегуляции не выдерживают нагрузку": "вход в задачу становится слишком дорогим",
+    "тренируется как мышцы": "закрепляется короткими повторами",
+    "многие сталкиваются, это нормально": "это рабочий паттерн, его можно разобрать по шагам",
+}
+
+
+def _clean_analysis_phrase(value: Any, fallback: str, limit: int = 120) -> str:
+    text = clamp_str(str(value or "").strip(), limit)
+    if not text:
+        text = fallback
+    lowered = text.lower()
+    for forbidden, replacement in ANALYSIS_FORBIDDEN_REPLACEMENTS.items():
+        if forbidden in lowered:
+            text = text.replace(forbidden, replacement).replace(forbidden.capitalize(), replacement.capitalize())
+            lowered = text.lower()
+    return text
+
+
+def analysis_needs_more_input(user_text: str) -> bool:
+    text = (user_text or "").strip().lower()
+    if len(text) < 24:
+        return True
+    words = re.findall(r"[\wёа-яА-Я-]+", text, flags=re.IGNORECASE)
+    if len(words) < 5:
+        return True
+    vague = {"прокрастинация", "прокрастинирую", "лень", "не могу", "сложно", "тяжело", "ничего", "всё", "все"}
+    return len(words) <= 7 and any(item in text for item in vague)
+
+
+def analysis_need_more_text() -> str:
+    return (
+        "Пока сигналов мало.\n"
+        "Чтобы собрать режим точнее, мне нужно еще 1-2 ответа.\n\n"
+        "Что чаще ломает вход?\n"
+        "😵 Перегруз\n"
+        "😬 Страх ошибки\n"
+        "📱 Отвлечения\n"
+        "🌀 Слишком много вариантов\n"
+        "😶 Не вижу смысла"
+    )
+
+
+def _infer_analysis_fields(user_text: str, bucket: str = "mixed") -> Dict[str, Any]:
+    text = (user_text or "").lower()
+    if any(x in text for x in ("идеал", "идеаль", "ошиб", "плохо", "стыд", "оцен")):
+        pattern = "риск сделать неидеально делает старт слишком дорогим"
+        behavior = "подготовку, перепроверку или откладывание первого шага"
+        skills = ["плохой первый шаг", "вход без идеального плана", "возврат после выпадения"]
+    elif any(x in text for x in ("устал", "нет сил", "выгор", "сон", "апат")) or bucket == "low_energy":
+        pattern = "перегруз появляется раньше первого действия"
+        behavior = "сон, зависание или самый лёгкий короткий стимул"
+        skills = ["минимальный вход", "снижение шага", "возврат без самонаказания"]
+    elif any(x in text for x in ("телефон", "соц", "ютуб", "скрол", "отвлек", "увод")) or bucket == "distractibility":
+        pattern = "первый шаг теряется среди быстрых стимулов"
+        behavior = "телефон, вкладки и мелкие срочные дела"
+        skills = ["одна вкладка", "короткое удержание внимания", "возврат после выпадения"]
+    elif any(x in text for x in ("непонят", "не ясно", "не знаю", "вариант", "слишком много", "больш")):
+        pattern = "задача слишком расплывчатая для первого шага"
+        behavior = "планирование, выбор вариантов и подготовку вместо старта"
+        skills = ["назвать задачу", "первый физический шаг", "вход без полного плана"]
+    elif any(x in text for x in ("код", "it", "айти", "проект", "задач", "документ", "тикет")):
+        pattern = "задачи без чёткого конца и быстрого завершения"
+        behavior = "организацию, мелкие дела и поиск идеального состояния"
+        skills = ["плохой первый шаг", "вход без идеального плана", "короткое удержание внимания"]
+    else:
+        pattern = "первый шаг ощущается слишком большим и мутным"
+        behavior = "откладывание, подготовку или быстрые отвлечения"
+        skills = ["микро-старт", "прояснение первого шага", "возврат после выпадения"]
+
+    if any(x in text for x in ("рядом", "вместе", "друг", "созвон", "коворк")):
+        signal = "легче начинать рядом с другим человеком"
+    elif any(x in text for x in ("дедлайн", "срок", "горит")):
+        signal = "срок включает действие, но слишком поздно"
+    elif any(x in text for x in ("помог", "получ", "легче", "лучше")):
+        signal = "уже есть условия, где вход становится легче"
+    else:
+        signal = "ты уже замечаешь момент ухода от старта"
+
+    return {
+        "specific_pattern": pattern,
+        "avoidance_behavior": behavior,
+        "useful_signal": signal,
+        "skills_focus": skills,
+    }
+
+
+
+
+def detect_live_analysis_pattern(user_text: str) -> str:
+    text = (user_text or "").lower()
+    if any(x in text for x in ("ленив", "безволь", "нормальные люди", "со мной что-то не так")):
+        return "shame_self_attack"
+    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен", "выглядеть глупо", "глупо", "стыдно", "критика")) or ("боюсь" in text and any(x in text for x in ("плохо", "ошиб", "глуп", "оцен", "письм", "результ"))):
+        return "perfectionism_visibility_fear"
+    if any(x in text for x in ("залип", "ютуб", "youtube", "сообщения", "почта", "на минуту", "лента", "скрол")):
+        return "attention_escape"
+    if any(x in text for x in ("нет сил", "устал", "выгор", "не в форме", "не могу думать")):
+        return "low_energy_overload"
+    if any(x in text for x in ("рядом кто", "рядом с", "коворкинг", "созвон", "с коллегой легче", "кто-то рядом")):
+        return "body_doubling_helpful"
+    return "default_start_block"
+
+
+def live_analysis_profile_patch(pattern: str) -> Dict[str, Any]:
+    return {
+        "shame_self_attack": {"main_pattern": "shame_self_attack", "shame_signal": "self_attack_after_slip"},
+        "perfectionism_visibility_fear": {"main_pattern": "perfectionism_visibility_fear", "avoidance_trigger": "страх оценки или неидеального результата"},
+        "attention_escape": {"main_pattern": "attention_escape", "attention_pattern": "scroll_autopilot"},
+        "low_energy_overload": {"main_pattern": "low_energy_overload", "energy_pattern": "low_start_energy"},
+        "body_doubling_helpful": {"main_pattern": "body_doubling_helpful", "preferred_activation": "body_doubling", "body_doubling_signal": "body_doubling"},
+    }.get(pattern, {"main_pattern": "start_avoidance"})
+
+
+def extract_analysis_signals(user_text: str) -> Dict[str, Any]:
+    """Extract compact user-specific signals for analysis copy.
+
+    Store short labels only: enough for "меня поняли", not the full text.
+    """
+    text = (user_text or "").lower()
+    signals: Dict[str, Any] = {"facts": []}
+
+    def add_fact(label: str):
+        if label and label not in signals["facts"] and len(signals["facts"]) < 8:
+            signals["facts"].append(label)
+
+    if any(x in text for x in ("письмо", "письма", "письм")):
+        signals["task"] = "письмо"
+    if "третий день" in text or "3 день" in text or "три дня" in text:
+        signals["delay"] = "письмо стоит третий день"
+        add_fact("письмо стоит третий день")
+    elif "второй день" in text or "два дня" in text:
+        signals["delay"] = "задача стоит не первый день"
+        add_fact("задача стоит не первый день")
+    if any(x in text for x in ("открываю ноутбук", "открыл ноутбук", "открываю документ", "открываю файл")):
+        signals["starts_environment"] = "ноутбук / место задачи открывается"
+        add_fact("ноутбук открывается")
+
+    escapes: List[str] = []
+    if "telegram" in text or "телеграм" in text:
+        escapes.append("Telegram")
+    if "почт" in text:
+        escapes.append("почта")
+    if "новост" in text:
+        escapes.append("новости")
+    if "youtube" in text or "ютуб" in text:
+        escapes.append("YouTube")
+    if escapes:
+        signals["escapes"] = escapes
+        add_fact("после задачи появляются " + " / ".join(escapes[:3]))
+
+    if "злюсь на себя" in text or "злится на себя" in text or "ругаю себя" in text:
+        signals["self_anger"] = "злость на себя"
+        add_fact("появляется злость на себя")
+    if "не такое уж слож" in text or "не очень слож" in text or "не слож" in text:
+        signals["not_hard"] = "письмо не кажется очень сложным"
+        add_fact("письмо не кажется очень сложным")
+    if "боюсь написать плохо" in text or ("боюсь" in text and "плохо" in text):
+        signals["fear_bad"] = "страх написать плохо"
+        add_fact("страх написать плохо")
+    if "выглядеть глупо" in text or "глупо" in text:
+        signals["fear_visible"] = "страх выглядеть глупо"
+        add_fact("страх выглядеть глупо")
+    if "собраться с мыслями" in text or "сначала надо собраться" in text or "собраться" in text:
+        signals["preparation"] = "сначала надо собраться с мыслями"
+        add_fact("появляется идея сначала «собраться с мыслями»")
+    return signals
+
+
+def _facts_text(signals: Dict[str, Any], limit: int = 6, bullet: str = "—") -> str:
+    facts = [str(x) for x in (signals or {}).get("facts", []) if x]
+    return "\n".join(f"{bullet} {x}" for x in facts[:limit])
+
+
+def _has_signal(signals: Dict[str, Any], key: str) -> bool:
+    return bool((signals or {}).get(key))
+
+
+def _escape_names(signals: Dict[str, Any]) -> str:
+    escapes = signals.get("escapes") if isinstance(signals, dict) else []
+    if isinstance(escapes, list) and escapes:
+        return " / ".join(str(x) for x in escapes[:3])
+    return "Telegram / почта / новости"
+
+
+def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = "marsha") -> str:
+    """Expand only the current analysis: facts -> suspicious link -> hypothesis -> checks."""
+    pattern = str(comp.get("live_pattern") or "default_start_block")
+    signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
+    facts = _facts_text(signals, 8, "✔")
+    if not facts:
+        return (
+            "Почему я пока осторожен?\n\n"
+            "Сигналов мало.\n"
+            "Мне нужны не длинные анкеты, а 2–3 конкретных факта:\n"
+            "что ты открываешь, куда уходишь и чего боишься после действия."
+        )
+
+    if pattern == "perfectionism_visibility_fear":
+        if trainer_key == "skinny":
+            return (
+                "Почему такая гипотеза?\n\n"
+                "Я опираюсь на:\n"
+                f"{facts}\n\n"
+                "Самый сильный сигнал:\n"
+                "страх выглядеть глупо.\n\n"
+                "Значит режем не время.\n"
+                "Режем цену ошибки.\n\n"
+                "Проверка:\n"
+                "□ плохой черновик\n"
+                "□ один абзац без качества\n"
+                "□ отправка не сегодня, сначала вход"
+            )
+        if trainer_key == "beck":
+            return (
+                "Почему я сделал такую гипотезу?\n\n"
+                "Я опираюсь на:\n"
+                f"{facts}\n\n"
+                "Меня особенно насторожило:\n"
+                "задача описана не как невозможная, но рядом с ней звучит страх написать плохо и выглядеть глупо.\n\n"
+                "Поэтому я предполагаю:\n"
+                "Telegram, почта и новости могут быть не причиной.\n"
+                "Они могут быть способом ненадолго уйти от напряжения перед оценкой.\n\n"
+                "Первые дни будем проверять:\n"
+                "□ легче ли начать с плохого черновика\n"
+                "□ падает ли напряжение после маленького шага\n"
+                "□ возвращаешься ли быстрее без самокритики\n\n"
+                "Если гипотеза подтвердится, маршрут будет строиться вокруг страха оценки и возврата после срыва."
+            )
+        return (
+            "Почему я сделала такую гипотезу?\n\n"
+            "Я опираюсь на:\n"
+            f"{facts}\n\n"
+            "Меня особенно зацепило:\n"
+            "ты пишешь не только про письмо, а ещё про злость на себя и страх выглядеть глупо.\n\n"
+            "Поэтому моя гипотеза такая:\n"
+            "сейчас тяжело не просто написать письмо.\n"
+            "Тяжело приблизиться к моменту, где его могут оценить.\n\n"
+            "Первые дни будем проверять:\n"
+            "□ станет ли легче, если разрешить плохой черновик\n"
+            "□ помогает ли маленький вход без требования качества\n"
+            "□ уменьшается ли злость на себя после возврата\n\n"
+            "Если гипотеза подтвердится, карту будем строить вокруг мягкого входа и снижения давления ошибки."
+        )
+
+    return (
+        "Почему я сделал такую гипотезу?\n\n"
+        "Я опираюсь на:\n"
+        f"{facts}\n\n"
+        "Первые дни будем проверять:\n"
+        "□ что реально помогает начать\n"
+        "□ что сильнее всего выбивает\n"
+        "□ какой навык даёт возврат быстрее\n\n"
+        "Если гипотеза подтвердится, маршрут будет строиться вокруг этих повторяющихся сигналов."
+    )
+
+
+def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Dict[str, Any]] = None) -> str:
+    trainer_key = trainer_key if trainer_key in {"skinny", "beck", "marsha"} else "marsha"
+    data = data or {}
+    signals = data.get("analysis_signals") if isinstance(data.get("analysis_signals"), dict) else {}
+    facts = _facts_text(signals, 7, "—")
+
+    if pattern == "perfectionism_visibility_fear" and facts:
+        escapes = _escape_names(signals)
+        if trainer_key == "skinny":
+            return (
+                "Что вижу.\n\n"
+                "Письмо стоит третий день.\n"
+                f"{escapes} открываются.\n"
+                "Письмо не выглядит сложным.\n"
+                "Главный сигнал: страх выглядеть глупо.\n\n"
+                "Удар:\n"
+                "избегаешь не письмо.\n"
+                "Избегаешь риск ошибки.\n\n"
+                "Что делаем:\n"
+                "плохой черновик.\n"
+                "Проверяем."
+            )
+        if trainer_key == "beck":
+            return (
+                "Коротко, что вижу.\n\n"
+                "Письмо стоит третий день.\n\n"
+                "При этом рядом постоянно появляются:\n"
+                f"— {escapes.replace(' / ', '\n— ')}\n\n"
+                "И отдельно звучит:\n"
+                "«боюсь написать плохо».\n\n"
+                "Поэтому я бы проверял не мотивацию.\n"
+                "Я бы проверял страх ошибки.\n\n"
+                "Пока это гипотеза."
+            )
+        return (
+            "Коротко, что вижу.\n\n"
+            "Письмо стоит третий день.\n\n"
+            "При этом рядом постоянно появляются:\n"
+            f"— {escapes.replace(' / ', '\n— ')}\n\n"
+            "И отдельно звучит:\n"
+            "«боюсь написать плохо».\n\n"
+            "Похоже, проблема не в сложности письма.\n"
+            "Я бы сейчас проверяла страх ошибки и оценки.\n\n"
+            "Пока это гипотеза."
+        )
+
+    if facts:
+        if trainer_key == "skinny":
+            return (
+                "Что вижу.\n\n"
+                f"{facts}\n\n"
+                "Вывод пока один:\n"
+                "сначала проверяем самый маленький шаг.\n"
+                "Не рассуждаем. Проверяем."
+            )
+        if trainer_key == "beck":
+            return (
+                "Коротко, что вижу.\n\n"
+                f"{facts}\n\n"
+                "Моя текущая гипотеза:\n"
+                "повторяется один и тот же сбой перед действием.\n\n"
+                "Эксперимент:\n"
+                "дадим маленький шаг и посмотрим, станет ли легче вернуться."
+            )
+        return (
+            "Коротко, что вижу.\n\n"
+            f"{facts}\n\n"
+            "Пока это не вывод о тебе.\n"
+            "Это рабочая гипотеза по тому, что повторяется.\n\n"
+            "Сейчас проверим её маленьким действием."
+        )
+
+    if pattern == "shame_self_attack":
+        mechanic = "самокритика должна подтолкнуть, но часто повышает угрозу и блокирует старт"
+        evidence = "ты описываешь себя через “ленивый / безвольный”, а не через конкретный сбой входа"
+        check = "возврат без самонаказания и маленький вход"
+        skinny = "Не лень.\nСамообвинение забирает вход.\nДелаем маленькое действие.\nПроверяем."
+        marsha = "Похоже, ты очень жёстко с собой обходишься после срыва.\nИ я не думаю, что проблема в том, что ты мало стараешься.\nДавай вернём действие без стыда.\nБез давления."
+    elif pattern == "attention_escape":
+        mechanic = "мозг выбирает быстрый контур награды: сообщения, лента, YouTube"
+        evidence = "внимание уходит туда, где быстрее награда и меньше напряжения"
+        check = "контейнер внимания, паузу перед уходом и возврат после залипания"
+        skinny = "Это залипание.\nНе ругаем.\nСтавим барьер.\nВозвращаемся."
+        marsha = "Ты не сломался.\nВнимание уходит туда, где меньше напряжения.\nВернёмся мягко и коротко.\nБез давления."
+    elif pattern == "low_energy_overload":
+        mechanic = "при низкой энергии обычный план начинает выглядеть как гора"
+        evidence = "сейчас звучит усталость, перегруз или невозможность думать"
+        check = "минимальный день, телесный сброс и действие после восстановления"
+        skinny = "Нет ресурса.\nНе давим.\nСначала тело.\nПотом минимальный шаг."
+        marsha = "Похоже, сейчас мало ресурса.\nЭто не провал и не слабость.\nСначала сделаем вход мягче и безопаснее.\nБез давления."
+    elif pattern == "body_doubling_helpful":
+        mechanic = "внешнее присутствие снижает порог входа"
+        evidence = "ты описываешь, что рядом / созвон / коворкинг помогают начать"
+        check = "формат рядом, короткий созвон или коворкинг"
+        skinny = "Рядом легче начать.\nСохраняем в карту.\nПроверяем созвон / коворкинг.\nБез драмы."
+        marsha = "Важный сигнал: тебе легче начинать рядом с другим человеком.\nЭто не слабость.\nМы сохраним это в карте.\nБез давления."
+    else:
+        mechanic = "пока не хватает конкретных сигналов; нужен один наблюдаемый сбой перед действием"
+        evidence = "в тексте мало фактов: что открылось, куда ушло внимание, чего стало страшно"
+        check = "один маленький шаг и короткое наблюдение после него"
+        skinny = "Мало данных.\nБерём один шаг.\nСмотрим, где ломается."
+        marsha = "Пока я не хочу притворяться, что всё поняла.\nДавай проверим один маленький шаг и соберём больше фактов."
+
+    if trainer_key == "beck":
+        return (
+            "Коротко, что вижу\n\n"
+            "Фактов пока мало.\n\n"
+            "Механика такая:\n"
+            f"{mechanic}.\n\n"
+            "Почему я думаю именно так:\n"
+            f"{evidence}.\n\n"
+            "Что хочу проверить:\n"
+            f"{check}.\n\n"
+            "Пока это гипотеза."
+        )
+    if trainer_key == "skinny":
+        return f"Что вижу:\n\n{skinny}\n\nЧто будет если получится:\nполучим запуск и данные для карты."
+    return f"Коротко, что вижу:\n\n{marsha}\n\nПока это гипотеза."
+
+def safe_analysis_memory(user_text: str, comp: Optional[Dict[str, Any]] = None, *, needs_more: bool = False) -> Dict[str, Any]:
+    """Return non-verbatim analysis memory for persistence.
+
+    Do not store the user's full text/transcript/confession. Keep only short
+    categories and inferred behavioral signals that are safe for profile rebuilds.
+    """
+    comp = comp or {}
+    bucket = str(comp.get("bucket") or "mixed")
+    inferred = _infer_analysis_fields(user_text or "", bucket)
+    live_pattern = detect_live_analysis_pattern(user_text or "")
+    memory = {
+        "input_len": len(user_text or ""),
+        "live_pattern": live_pattern,
+        "analysis_signals": extract_analysis_signals(user_text or ""),
+        "input_signal_summary": {
+            "specific_pattern": clamp_str(comp.get("specific_pattern") or inferred.get("specific_pattern"), 120),
+            "avoidance_behavior": clamp_str(comp.get("avoidance_behavior") or inferred.get("avoidance_behavior"), 120),
+            "useful_signal": clamp_str(comp.get("useful_signal") or inferred.get("useful_signal"), 120),
+            "skills_focus": (comp.get("skills_focus") or inferred.get("skills_focus") or [])[:4],
+        },
+    }
+    if needs_more:
+        memory["needs_more"] = True
+    return memory
+
+
+def normalize_analysis(comp: Dict[str, Any], user_text: str, quick: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    quick = quick or {}
+    bucket = comp.get("bucket") or quick.get("bucket") or "mixed"
+    inferred = _infer_analysis_fields(user_text, bucket)
+    skills = comp.get("skills_focus") or inferred["skills_focus"]
+    if not isinstance(skills, list):
+        skills = inferred["skills_focus"]
+    normalized = dict(comp)
+    normalized["bucket"] = bucket if bucket in ("anxiety", "low_energy", "distractibility", "mixed") else "mixed"
+    normalized["live_pattern"] = comp.get("live_pattern") or detect_live_analysis_pattern(user_text)
+    normalized["specific_pattern"] = _clean_analysis_phrase(comp.get("specific_pattern"), inferred["specific_pattern"], 140)
+    normalized["avoidance_behavior"] = _clean_analysis_phrase(comp.get("avoidance_behavior"), inferred["avoidance_behavior"], 140)
+    normalized["useful_signal"] = _clean_analysis_phrase(comp.get("useful_signal"), inferred["useful_signal"], 140)
+    normalized["skills_focus"] = [_clean_analysis_phrase(skill, fallback, 80) for skill, fallback in zip((skills + inferred["skills_focus"])[:3], inferred["skills_focus"])]
+    if len(normalized["skills_focus"]) < 3:
+        normalized["skills_focus"] = (normalized["skills_focus"] + inferred["skills_focus"])[:3]
+    return normalized
+
 async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") -> dict:
     """Быстрый AI анализ"""
     fallback = {
@@ -488,21 +855,11 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
     """Подробный AI анализ"""
     from texts import AI_ANALYSIS_SYSTEM_PROMPT
     
-    fallback = {
+    fallback = normalize_analysis({
         "bucket": "mixed",
-        "short_summary": "Похоже, ты сталкиваешься с несколькими вызовами сразу: тревога мешает начать, внимание сложно удержать.",
-        "what_is_happening": "Тебе сложно начать важное дело и удержать на нём внимание. Сначала переживаешь или откладываешь, потом отвлекаешься.",
-        "why_it_happens": "Мозг ищет более лёгкую стимуляцию и избегает дискомфорта начала. Это не лень — это автоматический защитный паттерн.",
-        "not_your_fault_or_control_zone": "Это не твоя вина и не слабость. Это навык, который пока не натренирован. Ты можешь это изменить.",
-        "why_change_is_possible": "Навыки саморегуляции, начала и удержания внимания поддаются тренировке. В течение 4–8 недель увидишь реальные сдвиги.",
-        "training_path": "Мы будем двигаться маленькими шагами, без перегруза. Сначала натренируем одно, потом подключим другое.",
-        "skills_focus": ["начало без давления", "удержание внимания", "возврат без самокритики"],
-        "timeline": "Первые сдвиги - 2–3 недели. Устойчивость - 4–8 недель.",
-        "support_guarantee": "Если метод не подойдёт - мы его заменим. Ты не один(а).",
-        "closing_reassurance": "Ок, начнём с базового паттерна: сложно войти в задачу. Дадим самый маленький шаг.",
         "analysis_fallback": True,
         "selected_skill": "open_only",
-    }
+    }, user_text)
     if not (client and model):
         log.warning("[AI] Comprehensive analysis fallback: OpenAI client or model is not configured")
         return fallback
@@ -516,16 +873,11 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
                 {"role": "user", "content": f"""Проанализируй следующее описание и верни JSON с этой структурой:
 {{
   "bucket": "anxiety|low_energy|distractibility|mixed",
-  "short_summary": "краткое резюме",
-  "what_is_happening": "что происходит с человеком",
-  "why_it_happens": "почему это происходит",
-  "not_your_fault_or_control_zone": "это не твоя вина",
-  "why_change_is_possible": "почему это можно изменить",
-  "training_path": "путь тренировки",
+  "specific_pattern": "главный конкретный стопор",
+  "avoidance_behavior": "куда мозг уходит вместо действия",
+  "useful_signal": "полезный сигнал из описания",
   "skills_focus": ["навык1", "навык2", "навык3"],
-  "timeline": "сроки улучшений",
-  "support_guarantee": "гарантия поддержки",
-  "closing_reassurance": "финальное перехватывание"
+  "selected_skill": "skill_id если очевидно или open_only"
 }}
 
 Описание человека:
@@ -538,75 +890,54 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
         log.exception("[AI] Comprehensive analysis failed, using fallback: %s", e)
         return fallback
     if not data:
-        return {
+        return normalize_analysis({
             "bucket": "mixed",
-            "short_summary": "Похоже на смешанный профиль: несколько вызовов одновременно.",
-            "what_is_happening": "Тебе сложно с несколькими аспектами одновременно.",
-            "why_it_happens": "Разные функции мозга перегружены одновременно.",
-            "not_your_fault_or_control_zone": "Это не твоя вина. Это паттерн, который тренируется.",
-            "why_change_is_possible": "С правильной тренировкой все эти навыки развиваются.",
-            "training_path": "Шаг за шагом, с мягкой поддержкой.",
-            "skills_focus": ["начало", "удержание", "возврат"],
-            "timeline": "Первые сдвиги - 2–3 недели.",
-            "support_guarantee": "Мы найдём подходящий метод для тебя.",
-            "closing_reassurance": "Ок, начнём с базового паттерна: сложно войти в задачу. Дадим самый маленький шаг.",
             "analysis_fallback": True,
             "selected_skill": "open_only",
-        }
+        }, user_text)
 
-    # Ensure all required fields exist
-    result = {
+    result = normalize_analysis({
         "bucket": data.get("bucket") or "mixed",
-        "short_summary": clamp_str(data.get("short_summary") or "", 200),
-        "what_is_happening": clamp_str(data.get("what_is_happening") or "", 400),
-        "why_it_happens": clamp_str(data.get("why_it_happens") or "", 400),
-        "not_your_fault_or_control_zone": clamp_str(data.get("not_your_fault_or_control_zone") or "", 400),
-        "why_change_is_possible": clamp_str(data.get("why_change_is_possible") or "", 400),
-        "training_path": clamp_str(data.get("training_path") or "", 400),
-        "skills_focus": data.get("skills_focus") or ["внимание", "начало", "поддержание"],
-        "timeline": clamp_str(data.get("timeline") or "", 200),
-        "support_guarantee": clamp_str(data.get("support_guarantee") or "", 200),
-        "closing_reassurance": clamp_str(data.get("closing_reassurance") or "", 200),
-    }
-
-    bucket = result.get("bucket") or "mixed"
-    if bucket not in ("anxiety", "low_energy", "distractibility", "mixed"):
-        result["bucket"] = "mixed"
+        "specific_pattern": data.get("specific_pattern"),
+        "avoidance_behavior": data.get("avoidance_behavior"),
+        "useful_signal": data.get("useful_signal"),
+        "skills_focus": data.get("skills_focus"),
+        "selected_skill": data.get("selected_skill") or "open_only",
+    }, user_text)
 
     return result
 
 
-def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str, Any]] = None) -> str:
-    """Собрать подробный, пользовательский разбор из результата AI."""
+def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str, Any]] = None, trainer_key: Optional[str] = None) -> str:
+    """Собрать короткий живой разбор без generic GPT-фраз."""
     quick = quick or {}
-    summary = comp.get("short_summary") or quick.get("summary") or "Похоже, тут есть повторяющийся паттерн саморегуляции."
-    what = comp.get("what_is_happening") or "Важная задача запускается тяжело, а напряжение усиливает откладывание."
-    why = comp.get("why_it_happens") or "Мозг пытается снизить дискомфорт прямо сейчас, поэтому выбирает избегание или переключение."
-    control = comp.get("not_your_fault_or_control_zone") or "Это не лень и не слабость. Это навык, который можно тренировать маленькими шагами."
-    possible = comp.get("why_change_is_possible") or "Запуск, удержание внимания и возврат к задаче тренируются через короткие повторения."
-    path = comp.get("training_path") or "Начнём с микро-старта, затем добавим удержание внимания и мягкий возврат без самокритики."
-    skills = comp.get("skills_focus") or quick.get("top_signals") or []
-    if not isinstance(skills, list):
-        skills = []
-    skills_text = "\n".join(f"• {clamp_str(str(skill), 80)}" for skill in skills[:4])
-    if not skills_text:
-        skills_text = "• запуск задачи\n• удержание внимания\n• возврат без самокритики"
-
-    return (
-        f"🔎 Подробный разбор:\n\n"
-        f"Коротко: {clamp_str(summary, 260)}\n\n"
-        f"Что происходит:\n{clamp_str(what, 500)}\n\n"
-        f"Почему так:\n{clamp_str(why, 500)}\n\n"
-        f"Важно:\n{clamp_str(control, 500)}\n\n"
-        f"Почему это можно изменить:\n{clamp_str(possible, 500)}\n\n"
-        f"На чём будем тренироваться:\n{skills_text}\n\n"
-        f"Путь тренировки:\n{clamp_str(path, 500)}"
-    )
+    raw_hint = comp.get("user_text") or quick.get("user_text") or ""
+    normalized = normalize_analysis(comp, raw_hint, quick)
+    pattern = normalized.get("live_pattern") or comp.get("live_pattern") or detect_live_analysis_pattern(raw_hint)
+    key = trainer_key or comp.get("trainer_key") or quick.get("trainer_key") or "marsha"
+    return render_analysis_by_trainer(str(pattern), str(key), normalized)
 
 async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
     """Запустить анализ"""
-    from texts import kb_analysis_confirm
-    
+    from texts import kb_analysis_confirm, kb_analysis_need_more, preliminary_hypothesis_note
+
+    if analysis_needs_more_input(user_text):
+        u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True), ensure_ascii=False)
+        u["stage"] = "analysis_need_more"
+        await save_user(u, db_path)
+        await log_event(u["user_id"], "analysis", "analysis_needs_more_input", {"len": len(user_text or "")}, db_path, sheets_webhook)
+        button_count = keyboard_button_count(kb_analysis_need_more)
+        await log_event(
+            u["user_id"],
+            "analysis",
+            "keyboard_shown" if button_count <= 5 else "keyboard_warning",
+            {"keyboard": "analysis_need_more", "button_count": button_count},
+            db_path,
+            sheets_webhook,
+        )
+        await m.answer(analysis_need_more_text(), reply_markup=kb_analysis_need_more if button_count <= 5 else None)
+        return
+
     # Try quick analysis first (keeps fallback behavior)
     r = await ai_analyze(user_text, client, model)
 
@@ -619,9 +950,12 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     if comp.get("analysis_fallback") or r.get("analysis_fallback"):
         await log_event(u["user_id"], "analysis", "openai_error", {"error_type": "analysis_fallback", "error_source": "run_analysis"}, db_path, sheets_webhook)
 
-    # Save full analysis (include user_text for reference)
+    # Save normalized analysis without storing raw user text/transcripts.
+    comp = normalize_analysis(comp, user_text, r)
+    comp["trainer_key"] = u.get("trainer_key", "marsha")
     comp_to_store = dict(comp)
-    comp_to_store["user_text"] = clamp_str(user_text, 1000)
+    comp_to_store.pop("user_text", None)
+    comp_to_store.update(safe_analysis_memory(user_text, comp_to_store))
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
 
     # build plan (28 days)
@@ -637,13 +971,16 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 
     # Log that analysis was shown
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
+    live_patch = live_analysis_profile_patch(str(comp_to_store.get("live_pattern") or ""))
+    if live_patch:
+        await update_user_profile(u["user_id"], live_patch, db_path)
+        await log_event(u["user_id"], "analysis", "profile_signal_detected", {"source": "live_analysis", **live_patch}, db_path, sheets_webhook)
+        await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "live_analysis", **live_patch}, db_path, sheets_webhook)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
-    # Show the actual AI-powered detailed analysis before asking for confirmation.
-    fallback_notice = ""
-    if comp.get("analysis_fallback") or r.get("analysis_fallback"):
-        fallback_notice = "Ок, начнём с базового паттерна: сложно войти в задачу.\nДадим самый маленький шаг.\n\n"
-    msg = f"{fallback_notice}{format_comprehensive_analysis(comp, r)}\n\nЭто похоже на тебя?"
+    # Show the actual precise analysis before asking for confirmation.
+    analysis_text = format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))
+    msg = f"{analysis_text}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(
