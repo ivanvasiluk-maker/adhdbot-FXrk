@@ -3079,6 +3079,7 @@ async def main_flow(m: Message):
         await save_user(u, DB_PATH)
         await log_engine_events(u, screen)
         await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+        await maybe_show_micro_habit(m, u, "day_start")
         await m.answer(gamify_status_line(u))
         return
 
