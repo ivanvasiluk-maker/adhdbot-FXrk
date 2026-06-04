@@ -1793,6 +1793,22 @@ def local_now_for_user(u: Dict[str, Any]) -> dt.datetime:
     return dt.datetime.now(user_timezone(u))
 
 
+def time_of_day_greeting(u: Dict[str, Any]) -> str:
+    hour = local_now_for_user(u).hour
+    if 5 <= hour < 12:
+        return "Доброе утро"
+    if 12 <= hour < 18:
+        return "Добрый день"
+    return "Добрый вечер"
+
+
+def time_of_day_greeting_with_name(u: Dict[str, Any]) -> str:
+    name = str(u.get("name") or "").strip()
+    if name and name.lower() != "пропустить":
+        return f"{time_of_day_greeting(u)}, {name}."
+    return f"{time_of_day_greeting(u)}."
+
+
 def in_time_window(now: dt.datetime, start_hour: int, start_minute: int, end_hour: int, end_minute: int) -> bool:
     current = now.time()
     return dt.time(start_hour, start_minute) <= current <= dt.time(end_hour, end_minute)
@@ -2083,7 +2099,10 @@ async def cmd_start(m: Message):
     u["stage"] = "ask_name"
     await save_user(u, DB_PATH)
     await log_event(uid, "onboarding_started", {"stage": u.get("stage")}, db_path=DB_PATH)
-    for screen in ONBOARDING_SCREENS:
+    onboarding_screens = list(ONBOARDING_SCREENS)
+    if onboarding_screens:
+        onboarding_screens[0] = f"{time_of_day_greeting(u)}.\n\n{onboarding_screens[0]}"
+    for screen in onboarding_screens:
         await m.answer(screen)
         await asyncio.sleep(0.3)
 
@@ -2686,7 +2705,7 @@ async def main_flow(m: Message):
             u["stage"] = "await_input_mode"
             await save_user(u, DB_PATH)
             await m.answer(
-                f"{u['name']}, как удобнее собрать первую рабочую карту?",
+                f"{time_of_day_greeting_with_name(u)}\n\nКак удобнее собрать первую рабочую карту?",
                 reply_markup=kb_input_mode
             )
             return

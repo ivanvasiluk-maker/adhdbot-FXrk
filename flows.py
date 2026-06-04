@@ -614,6 +614,7 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
 
     if pattern == "perfectionism_visibility_fear" and facts:
         escapes = _escape_names(signals)
+        escapes_bullets = escapes.replace(" / ", "\n— ")
         if trainer_key == "skinny":
             return (
                 "Что вижу.\n\n"
@@ -633,7 +634,7 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
                 "Коротко, что вижу.\n\n"
                 "Письмо стоит третий день.\n\n"
                 "При этом рядом постоянно появляются:\n"
-                f"— {escapes.replace(' / ', '\n— ')}\n\n"
+                f"— {escapes_bullets}\n\n"
                 "И отдельно звучит:\n"
                 "«боюсь написать плохо».\n\n"
                 "Поэтому я бы проверял не мотивацию.\n"
@@ -644,7 +645,7 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
             "Коротко, что вижу.\n\n"
             "Письмо стоит третий день.\n\n"
             "При этом рядом постоянно появляются:\n"
-            f"— {escapes.replace(' / ', '\n— ')}\n\n"
+            f"— {escapes_bullets}\n\n"
             "И отдельно звучит:\n"
             "«боюсь написать плохо».\n\n"
             "Похоже, проблема не в сложности письма.\n"
