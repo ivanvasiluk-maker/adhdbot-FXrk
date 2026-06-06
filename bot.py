@@ -342,10 +342,37 @@ def _profile_skill_list_text(profile: Dict[str, Any], key: str, fallback: str = 
     return "\n".join(f"— {_skill_label(str(item))}" for item in items[:4])
 
 
+def _trainer_mode_label(key: str) -> str:
+    trainer = TRAINERS.get(str(key), {})
+    return str(trainer.get("name") or key or "режим")
+
+
+def _trainer_history_label(item: str) -> str:
+    raw = str(item or "")
+    path = raw.split("@", 1)[0]
+    if "->" not in path:
+        return raw
+    left, right = path.split("->", 1)
+    return f"{_trainer_mode_label(left)} → {_trainer_mode_label(right)}"
+
+
+def _trainer_mode_map_text(profile: Dict[str, Any]) -> str:
+    current = profile.get("trainer_current_mode") or profile.get("preferred_trainer_mode") or ""
+    count = int(profile.get("trainer_switch_count") or 0)
+    if not current and not count:
+        return ""
+    name = _trainer_mode_label(str(current))
+    history = _profile_list(profile.get("trainer_switch_history"))
+    history_text = f"; пробовали: {', '.join(_trainer_history_label(x) for x in history[:2])}" if history else ""
+    return f"— режим поддержки: сейчас {name}, смен было {count}/{TRAINER_SWITCH_LIMIT}{history_text}"
+
+
 def _working_map_behavior_records_text(profile: Dict[str, Any]) -> str:
     success = _profile_skill_list_text(profile, "successful_skills", "пока проверяем первые навыки")
     failed = _profile_skill_list_text(profile, "failed_skills", "пока явных провалов навыков нет")
     main = profile.get("main_hypothesis") or "рабочая гипотеза уточняется"
+    trainer_line = _trainer_mode_map_text(profile)
+    trainer_block = f"\n\nЧто видно по режиму тренера:\n{trainer_line}" if trainer_line else ""
     return (
         "Что проверяли действиями:\n"
         f"— исходная гипотеза: {main}\n\n"
@@ -353,6 +380,7 @@ def _working_map_behavior_records_text(profile: Dict[str, Any]) -> str:
         f"{success}\n\n"
         "Что не подошло или потребовало упрощения:\n"
         f"{failed}"
+        f"{trainer_block}"
     )
 
 
@@ -406,6 +434,9 @@ def build_profile_map_summary(u: Dict[str, Any], profile: Dict[str, Any]) -> Dic
         "most_effective_crisis_skill": profile.get("most_effective_crisis_skill") or "",
         "crisis_count": int(profile.get("crisis_count") or u.get("crisis_count") or 0),
         "crisis_success_rate": profile.get("crisis_success_rate") or 0,
+        "trainer_current_mode": profile.get("trainer_current_mode") or u.get("trainer_key") or "",
+        "trainer_switch_count": int(profile.get("trainer_switch_count") or 0),
+        "trainer_fit_signal": profile.get("trainer_fit_signal") or "",
     }
     system_lines = [x for x in (_system_day_signals_text(summary), _crisis_map_signals_text(summary)) if x]
     summary["system_day_signals"] = "\n".join(system_lines)
@@ -452,6 +483,48 @@ def after_action_note_saved_text(trainer_key: str) -> str:
     if trainer_key == "marsha":
         return "Записала. Хорошо, что ты это заметил — такие маленькие сдвиги важны."
     return "Записал.\nЭто важный сигнал для карты."
+
+
+def analysis_need_more_expanded_text(previous_text: str, answer: str) -> str:
+    base = (previous_text or "").strip()
+    low = (answer or "").lower()
+    if "страх" in low or "ошиб" in low:
+        story = (
+            "Пользователь уточнил, что вход чаще ломает страх ошибки. "
+            "Значит перед действием появляется риск сделать неправильно, написать плохо или выглядеть глупо. "
+            "Гипотеза: проблема не в лени, а в цене ошибки. Проверить нужно плохой черновик без отправки."
+        )
+    elif "перегруз" in low:
+        story = (
+            "Пользователь уточнил, что вход чаще ломает перегруз. "
+            "Задача ощущается слишком большой, поэтому старт превращается в гору. "
+            "Гипотеза: нужен резак задачи и первый физический шаг, а не полный план."
+        )
+    elif "отвлеч" in low or "📱" in answer:
+        story = (
+            "Пользователь уточнил, что вход чаще ломают отвлечения. "
+            "Внимание уходит в быстрые награды: телефон, сообщения, лента или вкладки. "
+            "Гипотеза: нужен контейнер внимания и барьер перед уходом."
+        )
+    elif "вариант" in low or "🌀" in answer:
+        story = (
+            "Пользователь уточнил, что вход чаще ломает слишком много вариантов. "
+            "Мозгу приходится выбирать перед действием, и старт зависает. "
+            "Гипотеза: нужен один видимый следующий шаг и уменьшение выбора."
+        )
+    elif "смысл" in low:
+        story = (
+            "Пользователь уточнил, что вход чаще ломает отсутствие смысла. "
+            "Задача не цепляется за понятную причину, поэтому действие теряет вес. "
+            "Гипотеза: нужно связать задачу с ближайшим полезным результатом и сделать маленький вход."
+        )
+    else:
+        story = (
+            f"Пользователь уточнил, что вход чаще ломает: {answer}. "
+            "Это уже рабочий сигнал: сбой появляется до действия, а не после него. "
+            "Гипотеза: нужно проверить маленький безопасный вход и записать эффект."
+        )
+    return clamp_str(f"{base}\n\n{story}" if base else story, 1500)
 
 
 def _analysis_main_hypothesis(comp: Dict[str, Any]) -> str:
@@ -586,6 +659,215 @@ async def record_working_map_skill_result(user_id: int, key: str, skill_id: Opti
         return
     profile = await get_user_profile(user_id, DB_PATH)
     await update_user_profile(user_id, {key: _append_unique_profile_value(profile.get(key), str(skill_id))}, DB_PATH)
+
+
+TRAINER_SWITCH_LIMIT = 2
+TRAINER_SWITCH_STAGES = {
+    "confirm_analysis",
+    "analysis_details",
+    "working_map",
+    "analysis_rebuilt",
+    "training",
+    "waiting_next_day",
+    "skill_card",
+    "done",
+    "profile_map",
+}
+
+
+def trainer_key_from_text(text: str) -> Optional[str]:
+    low = (text or "").lower()
+    if "скин" in low or "skinny" in low or "🐈‍⬛" in text:
+        return "skinny"
+    if "бек" in low or "beck" in low or "🐈‍🦁" in text or "🧠" in text:
+        return "beck"
+    if "марш" in low or "marsha" in low or "🐈" in text:
+        return "marsha"
+    return None
+
+
+def trainer_mode_preview_text(current_key: str, switch_count: int, comp: Optional[Dict[str, Any]] = None) -> str:
+    left = max(0, TRAINER_SWITCH_LIMIT - switch_count)
+    current = TRAINERS.get(current_key, TRAINERS["marsha"])
+    mode_lines = (
+        "🐈‍⬛ Скинни — коротко, прямо, через действие.\n"
+        "🐈 Марша — мягко, снижает стыд и давление.\n"
+        "🐈‍🦁 Бек — объясняет механизм и эксперимент."
+    )
+    snippets = ""
+    if isinstance(comp, dict) and comp.get("analysis_result"):
+        parts = []
+        for key in ("skinny", "marsha", "beck"):
+            trainer = TRAINERS.get(key, TRAINERS["marsha"])
+            sample = format_comprehensive_analysis(comp, trainer_key=key)
+            sample = clamp_str(" ".join(sample.split()), 170)
+            parts.append(f"{trainer['emoji']} {trainer['name']}: {sample}")
+        snippets = "\n\nКак будет звучать этот же разбор:\n" + "\n\n".join(parts)
+    return (
+        "Можно посмотреть все режимы и выбрать, каким голосом продолжать.\n\n"
+        f"Сейчас: {current['emoji']} {current['name']}.\n"
+        f"Смен осталось: {left}/{TRAINER_SWITCH_LIMIT}.\n\n"
+        f"{mode_lines}"
+        f"{snippets}\n\n"
+        "Выбери режим. Просмотр не считается заменой; считаются только реальные смены. Смена попадёт в карту — это сигнал, какой формат поддержки тебе подходит."
+    )
+
+
+def _trainer_switch_pending(u: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        data = json.loads(u.get("pending_plan_change") or "{}") if u.get("pending_plan_change") else {}
+        return data if isinstance(data, dict) and data.get("type") == "trainer_switch" else {}
+    except Exception:
+        return {}
+
+
+def trainer_switch_return_stage(u: Dict[str, Any]) -> str:
+    pending = _trainer_switch_pending(u)
+    stage = str(pending.get("return_stage") or "training")
+    return stage if stage in TRAINER_SWITCH_STAGES else "training"
+
+
+def trainer_switch_count(profile: Dict[str, Any]) -> int:
+    try:
+        return max(0, int(profile.get("trainer_switch_count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def open_trainer_switch(m: Message, u: Dict[str, Any], source: str):
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    pending = {"type": "trainer_switch", "return_stage": u.get("stage") or "training", "source": source}
+    u["pending_plan_change"] = json.dumps(pending, ensure_ascii=False)
+    u["stage"] = "trainer_switch"
+    await save_user(u, DB_PATH)
+    await update_user_profile(u["user_id"], {
+        "trainer_modes_viewed": True,
+        "trainer_modes_view_count": int(profile.get("trainer_modes_view_count") or 0) + 1,
+        "trainer_current_mode": u.get("trainer_key") or "marsha",
+    }, DB_PATH)
+    await log_event(
+        u["user_id"],
+        "trainer",
+        "trainer_switch_opened",
+        {"source": source, "trainer_key": u.get("trainer_key") or "marsha", "switch_count": trainer_switch_count(profile)},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+    try:
+        comp = json.loads(u.get("analysis_json") or "{}")
+        if not isinstance(comp, dict):
+            comp = {}
+    except Exception:
+        comp = {}
+    await answer_with_keyboard(
+        m,
+        u,
+        trainer_mode_preview_text(u.get("trainer_key") or "marsha", trainer_switch_count(profile), comp),
+        kb_trainer_switch,
+        "trainer_switch",
+    )
+
+
+def trainer_mode_changed_text(new_key: str, switch_count: int) -> str:
+    trainer = TRAINERS.get(new_key, TRAINERS["marsha"])
+    left = max(0, TRAINER_SWITCH_LIMIT - switch_count)
+    return (
+        f"Ок. Теперь режим: {trainer['emoji']} {trainer['name']}.\n\n"
+        f"{trainer['short']}\n\n"
+        f"Смен осталось: {left}/{TRAINER_SWITCH_LIMIT}.\n"
+        "Записал в карту: какой формат поддержки тебе подходит."
+    )
+
+
+async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stage: str, switched: bool = False):
+    u["stage"] = return_stage
+    u["pending_plan_change"] = None
+    await save_user(u, DB_PATH)
+    trainer_key = u.get("trainer_key") or "marsha"
+    if return_stage in {"confirm_analysis", "analysis_rebuilt"}:
+        try:
+            comp = json.loads(u.get("analysis_json") or "{}")
+        except Exception:
+            comp = {}
+        msg = format_comprehensive_analysis(comp if isinstance(comp, dict) else {}, trainer_key=trainer_key)
+        await answer_with_keyboard(m, u, msg + "\n\nЭто похоже на тебя?", kb_analysis_confirm, "analysis")
+        return
+    if return_stage == "analysis_details":
+        try:
+            comp = json.loads(u.get("analysis_json") or "{}")
+        except Exception:
+            comp = {}
+        await answer_with_keyboard(m, u, render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, trainer_key), kb_analysis_confirm, "analysis_details")
+        return
+    if return_stage == "working_map":
+        try:
+            comp = json.loads(u.get("analysis_json") or "{}")
+        except Exception:
+            comp = {}
+        await answer_with_keyboard(m, u, working_map_text(comp if isinstance(comp, dict) else {}, trainer_key), kb_working_map, "working_map")
+        return
+    if return_stage == "skill_card":
+        sid = current_skill_id(u) or "open_only"
+        skill = dict(SKILLS_DB.get(sid) or SKILLS_DB.get("open_only") or next(iter(SKILLS_DB.values())))
+        skill.setdefault("skill_id", sid)
+        await answer_with_keyboard(m, u, format_skill_card(u, skill, u.get("today_target") or "текущая задача"), kb_skill_card, "skill_card")
+        return
+    if return_stage == "done":
+        await answer_with_keyboard(m, u, "Ок. Режим обновлён. Что дальше?", kb_done, "done")
+        return
+    await answer_with_keyboard(m, u, "Ок. Режим обновлён. Возвращаемся к дню.", kb_training_main, "training_main")
+
+
+async def handle_trainer_switch_choice(m: Message, u: Dict[str, Any], text: str):
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    return_stage = trainer_switch_return_stage(u)
+    low = (text or "").lower().strip()
+    if text == "⬅️ Назад" or low == "назад":
+        await log_event(u["user_id"], "trainer", "trainer_switch_cancelled", {"return_stage": return_stage}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await return_after_trainer_switch(m, u, return_stage)
+        return
+    new_key = trainer_key_from_text(text)
+    if not new_key:
+        await answer_with_keyboard(m, u, trainer_mode_preview_text(u.get("trainer_key") or "marsha", trainer_switch_count(profile)), kb_trainer_switch, "trainer_switch")
+        return
+    old_key = u.get("trainer_key") or "marsha"
+    if new_key == old_key:
+        await m.answer("Этот режим уже активен. Можно выбрать другой или нажать Назад.")
+        await answer_with_keyboard(m, u, trainer_mode_preview_text(old_key, trainer_switch_count(profile)), kb_trainer_switch, "trainer_switch")
+        return
+    count = trainer_switch_count(profile)
+    if count >= TRAINER_SWITCH_LIMIT:
+        await log_event(u["user_id"], "trainer", "trainer_switch_limit_reached", {"requested": new_key, "count": count}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Лимит смен тренера на тест — 2.\n\nПосмотреть режимы можно, но дальше голос не меняю, чтобы не размазать данные для финальной карты.",
+            kb_trainer_switch,
+            "trainer_switch",
+        )
+        return
+    history = _profile_list(profile.get("trainer_switch_history"))
+    history.append(f"{old_key}->{new_key}@day{u.get('day') or 1}:{return_stage}")
+    count += 1
+    u["trainer_key"] = new_key
+    await save_user(u, DB_PATH)
+    await update_user_profile(u["user_id"], {
+        "trainer_switch_count": count,
+        "trainer_switch_history": history[-TRAINER_SWITCH_LIMIT:],
+        "trainer_previous_mode": old_key,
+        "trainer_current_mode": new_key,
+        "trainer_fit_signal": f"selected_{new_key}",
+    }, DB_PATH)
+    await log_event(
+        u["user_id"],
+        "trainer",
+        "trainer_switched",
+        {"from_trainer": old_key, "to_trainer": new_key, "count": count, "return_stage": return_stage},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+    await m.answer(trainer_mode_changed_text(new_key, count))
+    await return_after_trainer_switch(m, u, return_stage, switched=True)
 
 
 def analysis_loading_text(trainer_key: str) -> str:
@@ -1316,6 +1598,9 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "main_hypothesis": summary.get("main_hypothesis", ""),
         "successful_skills": summary.get("successful_skills", []),
         "failed_skills": summary.get("failed_skills", []),
+        "trainer_current_mode": summary.get("trainer_current_mode", ""),
+        "trainer_switch_count": summary.get("trainer_switch_count", 0),
+        "trainer_fit_signal": summary.get("trainer_fit_signal", ""),
     }
     await update_user_profile(u["user_id"], profile_patch, DB_PATH)
 
@@ -1349,6 +1634,9 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "main_hypothesis": summary.get("main_hypothesis", ""),
         "successful_skills": summary.get("successful_skills", []),
         "failed_skills": summary.get("failed_skills", []),
+        "trainer_current_mode": summary.get("trainer_current_mode", ""),
+        "trainer_switch_count": summary.get("trainer_switch_count", 0),
+        "trainer_fit_signal": summary.get("trainer_fit_signal", ""),
     }
     await log_event(u["user_id"], "offer", "offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "offer", "profile_map_updated", {"source": source, **profile_patch}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -2299,6 +2587,15 @@ async def main_flow(m: Message):
         sync_calendar_day(u)
         await save_user(u, DB_PATH)
 
+    if u.get("stage") == "trainer_switch":
+        await handle_trainer_switch_choice(m, u, text)
+        return
+
+    if text == "🔄 Сменить тренера" or "сменить тренера" in low or "другой тренер" in low or "режим" in low and "трен" in low:
+        if u.get("stage") in TRAINER_SWITCH_STAGES and (u.get("analysis_json") or int(u.get("has_started_training") or 0) == 1 or u.get("day_core_skill_date")):
+            await open_trainer_switch(m, u, u.get("stage") or "unknown")
+            return
+
     if user_is_in_action_loop(u) and text and detects_body_doubling_signal(text):
         await record_profile_signal(u["user_id"], "training", {
             "preferred_activation": "body_doubling",
@@ -3212,7 +3509,7 @@ async def main_flow(m: Message):
             previous_text = stored_analysis_user_text(u)
         except Exception:
             previous_text = ""
-        combined_text = clamp_str(f"{previous_text}\n\nЧаще ломает вход: {text}", 1500)
+        combined_text = analysis_need_more_expanded_text(previous_text, text)
         u["analysis_json"] = json.dumps(safe_analysis_memory(combined_text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
         await save_user(u, DB_PATH)

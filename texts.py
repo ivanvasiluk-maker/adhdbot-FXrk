@@ -855,7 +855,7 @@ kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Давай действие")],
         [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="Ещё")],
-        [KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🔄 Сменить тренера"), KeyboardButton(text="🆘 Кризис")],
     ],
     resize_keyboard=True
 )
@@ -1193,6 +1193,16 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="😑 Ты меня не понял")],
         [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="🔄 Сменить тренера")],
+    ],
+    resize_keyboard=True
+)
+
+kb_misunderstood_reasons = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="5. Объясню по-другому")],
     ],
     resize_keyboard=True
 )
@@ -1210,6 +1220,17 @@ kb_working_map = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➡️ Переходим к первому навыку")],
         [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="😑 Ты меня не понял")],
+        [KeyboardButton(text="🔄 Сменить тренера")],
+    ],
+    resize_keyboard=True
+)
+
+
+kb_trainer_switch = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🐈‍⬛ Скинни"), KeyboardButton(text="🐈 Марша")],
+        [KeyboardButton(text="🐈‍🦁 Бек")],
+        [KeyboardButton(text="⬅️ Назад")],
     ],
     resize_keyboard=True
 )
