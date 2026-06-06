@@ -6,10 +6,13 @@ Core logic should stay UI-independent for future app migration.
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
-from skills import SKILLS_DB, get_current_plan
+from skills import SKILLS_DB, get_current_plan, core_skill_id_for_variant, core_skill_title, variants_for_core_skill
 
 
 Screen = Dict[str, Any]
@@ -23,6 +26,14 @@ SKILL_CARD_BUTTONS = [
     "🆘 Кризис",
 ]
 DONE_BUTTONS = ["🔁 Ещё круг", "🌙 На сегодня хватит"]
+DAY_STOP_BUTTONS = ["🧭 Моя карта", "📚 Почему это работает", "🌙 До завтра"]
+MAX_CORE_ROUNDS_PER_DAY = 4
+DAY_CORE_STOP_TEXT = (
+    "На сегодня достаточно.\n\n"
+    "Сейчас важнее повторение навыка,\n"
+    "а не поиск новой техники.\n\n"
+    "Новый навык откроется завтра."
+)
 FAILED_BUTTONS = ["😣 Слишком сложно", "😵 Нет сил", "📱 Залип", "🤔 Не понял"]
 DOWNSCALE_BUTTONS = ["✅ Сделал", "😣 Даже это сложно", "🤔 Зачем так мало?"]
 PAY_OFFER_BUTTONS = ["7 дней — €20", "Месяц — €40", "Не сейчас"]
@@ -100,6 +111,58 @@ def _skill_steps(skill: Dict[str, Any]) -> List[str]:
     return steps or ["Открой место, где лежит задача."]
 
 
+
+
+def _local_date(user_state: UserState) -> str:
+    tz_name = str(user_state.get("timezone") or "Europe/Vilnius").strip()
+    try:
+        return datetime.now(ZoneInfo(tz_name)).date().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def _admin_ids() -> set[str]:
+    return {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
+
+
+def _test_mode_enabled(user_state: UserState) -> bool:
+    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}:
+        return True
+    user_id = str(user_state.get("user_id") or "")
+    if user_id not in _admin_ids():
+        return False
+    return _safe_int(user_state.get("is_test_user"), 0) == 1 or _safe_int(user_state.get("fast_forward_enabled"), 0) == 1
+
+
+def _locked_day_core_skill_id(user_state: UserState) -> Optional[str]:
+    if _test_mode_enabled(user_state):
+        return None
+    skill_id = user_state.get("day_core_skill_id")
+    if user_state.get("day_core_skill_date") == _local_date(user_state) and skill_id in SKILLS_DB:
+        return str(skill_id)
+    return None
+
+
+def core_round_count_today(user_state: UserState) -> int:
+    if user_state.get("day_core_skill_date") != _local_date(user_state):
+        return 0
+    return max(0, _safe_int(user_state.get("day_core_round_count"), 0))
+
+
+def build_day_core_updates(user_state: UserState, skill_id: str, reset_rounds: bool = False) -> Dict[str, Any]:
+    today = _local_date(user_state)
+    same_lock = user_state.get("day_core_skill_date") == today and user_state.get("day_core_skill_id") == skill_id
+    same_visible_core = user_state.get("current_core_skill_date") == today and user_state.get("current_core_skill_id")
+    visible_core_id = str(user_state.get("current_core_skill_id") or "") if same_visible_core else core_skill_id_for_variant(skill_id)
+    return {
+        "day_core_skill_id": skill_id,
+        "day_core_skill_date": today,
+        "day_core_round_count": 0 if reset_rounds or not same_lock else core_round_count_today(user_state),
+        "current_core_skill_id": visible_core_id,
+        "current_skill_variant_id": skill_id,
+        "current_core_skill_date": today,
+    }
+
 def _parse_plan_ids(user_state: UserState) -> List[str]:
     plan = user_state.get("plan")
     if isinstance(plan, list):
@@ -119,8 +182,11 @@ def _parse_plan_ids(user_state: UserState) -> List[str]:
 def select_skill(user_state: UserState) -> Dict[str, Any]:
     """Select the current skill without mutating the user state."""
     day = max(1, _safe_int(user_state.get("pending_skill_day") or user_state.get("day"), 1))
+    locked_skill_id = _locked_day_core_skill_id(user_state)
     pending_skill_id = user_state.get("pending_skill_id")
-    if pending_skill_id in SKILLS_DB:
+    if locked_skill_id:
+        skill_id = locked_skill_id
+    elif pending_skill_id in SKILLS_DB:
         skill_id = pending_skill_id
     else:
         plan = _parse_plan_ids(user_state)
@@ -141,6 +207,13 @@ def select_skill(user_state: UserState) -> Dict[str, Any]:
     return {"skill_id": skill_id, "skill": skill, "day": day}
 
 
+
+def _target_header(target: str) -> str:
+    target = (target or "").strip()
+    if target == "__target_not_selected__":
+        return "📌 Дело пока не выбрано\n\nБудем тренироваться\nна типичных ситуациях прокрастинации."
+    return f"📌 Дело: {target}"
+
 def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     """Build a UI-neutral skill card from live skill fields."""
     trainer_key = _trainer_key(user_state)
@@ -149,14 +222,18 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
     why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
     skill_name = skill.get("name", "Микро-шаг")
+    visible_core_id = user_state.get("current_core_skill_id") or core_skill_id_for_variant(str(skill.get("skill_id") or ""))
+    visible_core_title = core_skill_title(str(visible_core_id))
+    variant_label = user_state.get("skill_variant_label") or "Вариант сейчас"
     trainer_variants = skill.get("trainer_variants") or {}
     trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha") or "Давай бережно: только маленький вход, без давления на результат."
 
     if trainer_key == "beck":
         text = (
             f"{_trainer_header(user_state)}\n\n"
-            f"📌 Дело: {target}\n\n"
-            f"🧩 Навык: {skill_name}\n\n"
+            f"{_target_header(target)}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             f"Почему это работает:\n{why_short}\n\n"
             f"Сделай:\n{steps_text}\n\n"
@@ -165,8 +242,9 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     elif trainer_key == "skinny":
         text = (
             f"{_trainer_header(user_state)}\n\n"
-            f"📌 Дело: {target}\n\n"
-            f"🧩 {skill_name}\n\n"
+            f"{_target_header(target)}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             f"Делаешь только это:\n\n{steps_text}\n\n"
             f"Минимум:\n{minimum_action}\n\n"
@@ -175,8 +253,9 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     else:
         text = (
             f"{_trainer_header(user_state)}\n\n"
-            f"📌 Дело: {target}\n\n"
-            f"🧩 Навык: {skill_name}\n\n"
+            f"{_target_header(target)}\n\n"
+            f"🧩 Навык дня: {visible_core_title}\n\n"
+            f"{variant_label}:\n{skill_name}\n\n"
             f"{trainer_line}\n\n"
             f"Попробуй:\n{steps_text}\n\n"
             f"Минимум:\n{minimum_action}\n\n"
@@ -210,9 +289,9 @@ def handle_action_result(user_state: UserState, result: str) -> Screen:
 
     if result == "done":
         prompts = {
-            "beck": "Факт есть. Ты обошёл входной блок.\n\nЧто заметил во время выполнения?",
-            "skinny": "Есть. Один подход засчитан.\n\nЧто почувствовал во время выполнения?",
-            "marsha": "Получилось. Даже маленький шаг считается.\n\nКак тебе было это делать?",
+            "beck": "Факт есть. Подход засчитан.",
+            "skinny": "Есть. Один подход. Без разбора.",
+            "marsha": "Получилось. Маленький шаг засчитан.",
         }
         return _screen(
             text=prompts[trainer_key],
@@ -253,11 +332,14 @@ def handle_action_result(user_state: UserState, result: str) -> Screen:
 
 def handle_downscale(user_state: UserState, reason: str) -> Screen:
     """Build the downscale skill card and state transition."""
-    skill_id = DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL
+    current_core_id = str(user_state.get("current_core_skill_id") or "") if user_state.get("current_core_skill_date") == _local_date(user_state) else ""
+    variants = [sid for sid in variants_for_core_skill(current_core_id) if sid in SKILLS_DB]
+    skill_id = variants[1] if len(variants) > 1 else (DOWNSCALE_PRIMARY_SKILL if DOWNSCALE_PRIMARY_SKILL in SKILLS_DB else DOWNSCALE_FALLBACK_SKILL)
     skill = deepcopy(SKILLS_DB[skill_id])
     skill.setdefault("skill_id", skill_id)
     local_state = dict(user_state)
     local_state["today_target"] = local_state.get("today_target") or "Прокрастинация в целом"
+    local_state["skill_variant_label"] = "Упрощение"
     card = build_skill_card(local_state, skill)
     card.update(
         {
@@ -268,6 +350,7 @@ def handle_downscale(user_state: UserState, reason: str) -> Screen:
                 "pending_skill_id": None,
                 "pending_skill_day": None,
                 "selected_skill": skill_id,
+                "current_skill_variant_id": skill_id,
                 "pattern": "initiation_before_tool",
                 "plan_override_day": _safe_int(user_state.get("day"), 1),
             },
@@ -322,7 +405,7 @@ def get_next_screen(user_state: UserState, event: Dict[str, Any]) -> Screen:
     if event_type == "target_submitted":
         target = _clamp_text(event.get("text"), 200, "Прокрастинация в целом")
         if target.lower() == "пропустить":
-            target = "Прокрастинация в целом"
+            target = "__target_not_selected__"
         selection = select_skill(user_state)
         local_state = dict(user_state)
         local_state["today_target"] = target
@@ -331,6 +414,7 @@ def get_next_screen(user_state: UserState, event: Dict[str, Any]) -> Screen:
             "today_target": target,
             "pending_skill_id": None,
             "pending_skill_day": None,
+            **build_day_core_updates(user_state, selection["skill_id"]),
         }
         card["events"] = [
             _event("target_set", "training", {"day": selection["day"], "text": target}),
@@ -340,9 +424,16 @@ def get_next_screen(user_state: UserState, event: Dict[str, Any]) -> Screen:
         return card
 
     if event_type == "repeat_skill_card":
+        if core_round_count_today(user_state) >= MAX_CORE_ROUNDS_PER_DAY:
+            return _screen(
+                text=DAY_CORE_STOP_TEXT,
+                buttons=DAY_STOP_BUTTONS,
+                next_state="waiting_next_day",
+                events=[_event("day_core_round_limit_reached", "training", {"round_count": core_round_count_today(user_state)})],
+            )
         selection = select_skill(user_state)
         card = build_skill_card(user_state, selection["skill"])
-        card["events"] = [_event("done_more_round", "training"), *card.get("events", [])]
+        card["events"] = [_event("done_more_round", "training", {"round_count": core_round_count_today(user_state)}), *card.get("events", [])]
         card["skill_id"] = selection["skill_id"]
         return card
 
