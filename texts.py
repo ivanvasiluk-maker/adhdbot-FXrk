@@ -1198,6 +1198,23 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+kb_misunderstood_reasons = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="5. Объясню по-другому")],
+    ],
+    resize_keyboard=True
+)
+
+kb_analysis_need_more = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
+        [KeyboardButton(text="📱 Отвлечения"), KeyboardButton(text="🌀 Слишком много вариантов")],
+        [KeyboardButton(text="😶 Не вижу смысла")],
+    ],
+    resize_keyboard=True
+)
 
 kb_working_map = ReplyKeyboardMarkup(
     keyboard=[
