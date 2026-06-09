@@ -151,6 +151,121 @@ def check_launch_week_invariants() -> list[str]:
         if sensitive_key not in sheets_text:
             errors.append(f"launch invariant: Sheets sanitizer missing sensitive key: {sensitive_key}")
 
+    adult_progress_required = (
+        "Уровень развития",
+        "Серия действий",
+        "Достижения развития",
+        "История роста",
+        "это не игра",
+    )
+    combined_progress_text = "\n".join((texts_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8")))
+    for marker in adult_progress_required:
+        if marker not in combined_progress_text:
+            errors.append(f"adult gamification invariant: missing progress marker: {marker!r}")
+
+    forbidden_game_markers = (
+        "Очки:",
+        "Стрик:",
+        "монеты",
+        "сундук",
+        "игровая валюта",
+        "PvP",
+    )
+    for marker in forbidden_game_markers:
+        if marker in combined_progress_text:
+            errors.append(f"adult gamification invariant: forbidden game marker remains in UI text: {marker!r}")
+
+    day3_offer_required = (
+        "ТВОЙ ПРОФИЛЬ",
+        "Что уже видно:",
+        "Неделя 1:",
+        "запуск задач",
+        "Неделя 2:",
+        "удержание внимания",
+        "Неделя 3:",
+        "самокритика",
+        "Неделя 4:",
+        "возврат после срыва",
+        "14.98 €/месяц",
+        "Мы продаём не навыки",
+        "персональной модели",
+        "какие навыки реально работают",
+        "какую сложность выдерживает",
+        "каким маршрутом тебе легче возвращаться",
+    )
+    for marker in day3_offer_required:
+        if marker not in bot_text:
+            errors.append(f"day3 offer invariant: missing marker: {marker!r}")
+
+    db_text = (REPO_ROOT / "db.py").read_text(encoding="utf-8")
+    skills_text = (REPO_ROOT / "skills.py").read_text(encoding="utf-8")
+    mirror_required = (
+        "development_history",
+        "Зеркало развития",
+        "недельный отчёт",
+        "месячный отчёт",
+        "отчёт за 90 дней",
+        "отчёт за 180 дней",
+        "Кем ты был(а) раньше",
+        "Какие стратегии сработали",
+        "Главные направления роста",
+        "Я вижу, как меняюсь",
+    )
+    combined_mirror_text = "\n".join((bot_text, db_text, texts_text))
+    for marker in mirror_required:
+        if marker not in combined_mirror_text:
+            errors.append(f"development mirror invariant: missing marker: {marker!r}")
+
+    safe_tone_required = (
+        "похоже",
+        "сейчас видно",
+        "пока предполагаем",
+        "мы проверим",
+        "данных пока мало",
+        "эта модель будет уточняться",
+        "Срыв = информация. Не наказание.",
+        "Пауза = информация, не наказание",
+    )
+    combined_safety_text = "\n".join((bot_text, db_text, texts_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8")))
+    for marker in safe_tone_required:
+        if marker not in combined_safety_text:
+            errors.append(f"safety tone invariant: missing marker: {marker!r}")
+
+    forbidden_certainty = (
+        "у тебя точно",
+        "ты такой человек",
+        "навсегда",
+        "100%",
+        "точный показатель",
+    )
+    combined_user_text = "\n".join((bot_text, texts_text, skills_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8")))
+    for marker in forbidden_certainty:
+        if marker in combined_user_text:
+            errors.append(f"safety tone invariant: forbidden certainty marker remains: {marker!r}")
+
+    daily_profile_required = (
+        "Сегодняшний фокус",
+        "current_development_focus",
+        "development_focus_reason",
+        "В прошлый раз маленький шаг помог",
+        "Мы проверим навык",
+    )
+    combined_daily_text = "\n".join((db_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8")))
+    for marker in daily_profile_required:
+        if marker not in combined_daily_text:
+            errors.append(f"daily profile invariant: missing marker: {marker!r}")
+
+    sales_analysis_required = (
+        "не общий совет, а первую персональную модель",
+        "не просто выдавать упражнения",
+        "уточнять твою персональную модель",
+        "что помогает именно тебе",
+        "Продолжение — 14.98 €/месяц",
+    )
+    for marker in sales_analysis_required:
+        if marker not in texts_text:
+            errors.append(f"sales analysis invariant: missing marker: {marker!r}")
+
     return errors
 
 

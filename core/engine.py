@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from skills import SKILLS_DB, get_current_plan, core_skill_id_for_variant, core_skill_title, variants_for_core_skill
+from skills import SKILLS_DB, get_current_plan, core_skill_id_for_variant, core_skill_title, variants_for_core_skill, adapt_plan_to_profile
 
 
 Screen = Dict[str, Any]
@@ -195,7 +195,7 @@ def select_skill(user_state: UserState) -> Dict[str, Any]:
                 plan = get_current_plan(user_state)
             except Exception:
                 plan = []
-        safe_plan = [sid for sid in plan if sid in SKILLS_DB]
+        safe_plan = adapt_plan_to_profile([sid for sid in plan if sid in SKILLS_DB], user_state)
         if safe_plan:
             idx = max(0, min(len(safe_plan) - 1, day - 1))
             skill_id = safe_plan[idx]

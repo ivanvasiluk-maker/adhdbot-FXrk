@@ -18,10 +18,14 @@ from texts import (
     trainer_say, skill_explain, PRAISE, DAILY_LIVE_LINES,
     day_task_text, midday_ping, TRAINER_INTRO_TEXT,
     kb_yes_no, kb_training_main, kb_crisis_mode, keyboard_button_count,
-    CRISIS_LIMIT,
+    CRISIS_LIMIT, progress_achievements_text, growth_history_text,
 )
 from skills import SKILLS_DB, get_current_plan, build_28_day_plan, build_plan
-from db import get_user, save_user, log_event, USER_FIELDS, is_paid, update_user_profile
+from db import (
+    get_user, save_user, log_event, USER_FIELDS, is_paid, update_user_profile,
+    diagnosis_user_profile_patch, get_user_profile, render_development_avatar,
+    render_development_mirror_report, daily_profile_explanation, determine_development_focus,
+)
 
 # Logging
 log = logging.getLogger("bot")
@@ -111,6 +115,18 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
         u["plan_json"] = json.dumps(plan, ensure_ascii=False)
         await save_user(u, db_path)
     skill = SKILLS_DB[sid]
+    profile = await get_user_profile(u["user_id"], db_path)
+    focus = determine_development_focus(profile)
+    await update_user_profile(
+        u["user_id"],
+        {
+            "current_development_focus": focus["code"],
+            "development_focus_reason": focus["reason"],
+            "today_recommended_skill": sid,
+        },
+        db_path,
+        source="daily_focus",
+    )
 
     u["day"] = day
     u["stage"] = "await_training_target"
@@ -124,6 +140,8 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
         anxiety = u.get("last_anxiety") or "?"
         energy = u.get("last_energy") or "?"
         await m.answer(f"🕒 Быстрый чек\nСон: {sleep}\nТревога: {anxiety}\nЭнергия: {energy}")
+
+    await m.answer(daily_profile_explanation(profile, sid))
 
     # Вопрос перед выдачей навыка
     question = (
@@ -149,8 +167,11 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
     last_active = float(u.get("last_active") or 0)
     now = time.time()
     if last_active and now - last_active > 2*24*3600:
-        await m.answer("Ты не сорвался. Ты выпал. Разница есть. Возвращаемся на 3 минуты. Это критично для ADHD.")
-        u["streak"] = 0
+        await m.answer(
+            "Пауза = информация, не наказание. "
+            "Сейчас видно, что нужен мягкий возврат: начнём с 3 минут и уточним модель."
+        )
+        u["return_count"] = int(u.get("return_count") or 0) + 1
 
     u["last_active"] = now
     await save_user(u, db_path)
@@ -160,7 +181,7 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
     name = u.get("name") or "друг"
     trainer_key = u.get("trainer_key") or "marsha"
 
-    plan_ids = json.loads(u.get("plan_json") or "[]")
+    plan_ids = get_current_plan(u)
     if not plan_ids:
         plan_ids = build_plan(u.get("bucket") or "mixed")
         u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
@@ -168,6 +189,19 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
 
     sid = plan_ids[0]
     skill = SKILLS_DB.get(sid) or list(SKILLS_DB.values())[0]
+    profile = await get_user_profile(u["user_id"], db_path)
+    focus = determine_development_focus(profile)
+    await update_user_profile(
+        u["user_id"],
+        {
+            "current_development_focus": focus["code"],
+            "development_focus_reason": focus["reason"],
+            "today_recommended_skill": sid,
+        },
+        db_path,
+        source="daily_focus",
+    )
+    personal_context = daily_profile_explanation(profile, sid)
 
     msg = (
         f"🌅 {name}, День 1\n\n"
@@ -176,6 +210,7 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         f"🧩 Навык: {skill['name']}\n"
         f"🎯 Цель: {skill['goal']}\n"
         f"✅ Как: {skill_explain(trainer_key, skill)}\n\n"
+        f"{personal_context}\n\n"
         "Вечером спросим: сделал(а)? вернулся(лась)?"
     )
     button_count = keyboard_button_count(kb_training_main)
@@ -187,7 +222,7 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
     name = u.get("name") or "друг"
     trainer_key = u.get("trainer_key") or "marsha"
 
-    plan_ids = json.loads(u.get("plan_json") or "[]")
+    plan_ids = get_current_plan(u)
     if not plan_ids:
         plan_ids = build_plan(u.get("bucket") or "mixed")
         u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
@@ -196,12 +231,26 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
     day = max(1, min(day, len(plan_ids)))
     sid = plan_ids[day - 1]
     skill = SKILLS_DB.get(sid) or list(SKILLS_DB.values())[0]
+    profile = await get_user_profile(u["user_id"], db_path)
+    focus = determine_development_focus(profile)
+    await update_user_profile(
+        u["user_id"],
+        {
+            "current_development_focus": focus["code"],
+            "development_focus_reason": focus["reason"],
+            "today_recommended_skill": sid,
+        },
+        db_path,
+        source="daily_focus",
+    )
+    personal_context = daily_profile_explanation(profile, sid)
 
     msg = (
         f"🌅 {name}, День {day}\n\n"
         f"🧩 Навык: {skill['name']}\n"
         f"🎯 Цель: {skill['goal']}\n"
         f"✅ Как: {skill_explain(trainer_key, skill)}\n\n"
+        f"{personal_context}\n\n"
         "Считается попытка 60–120 сек."
     )
     button_count = keyboard_button_count(kb_training_main)
@@ -276,7 +325,7 @@ async def ai_crisis_help(trainer_key: str, bucket: str, user_text: str, client=N
         "Ты — CBT/DBT психолог в формате кризисного ответа.\n"
         "Контекст: клиент в кризисе из-за прокрастинации. Нужна помощь 'здесь и сейчас'.\n"
         "Твоя задача: кратко поддержать, дать понятный шаг и выбрать навык из базы навыков.\n"
-        "Это НЕ терапия и НЕ диагноз. Нельзя обещать лечение. Без клинических терминов.\n"
+        "Это НЕ терапия и НЕ медицинское заключение. Нельзя обещать лечение. Без клинических терминов.\n"
         "Всегда выбирай skill_id ТОЛЬКО из allowed_ids.\n"
         "Каталог навыков: " + " | ".join(skill_catalog) + "\n"
         "Формат ответа СТРОГО JSON без комментариев и текста вокруг:\n"
@@ -844,7 +893,7 @@ def _working_map_scripts(pattern: str, core_hypothesis: str) -> Dict[str, str]:
                 "🔹 как быстро получается вернуться после срыва\n"
                 "🔹 усиливает ли самокритика откладывание\n"
                 "🔹 помогает ли внешний контакт / body doubling\n\n"
-                "Пока это не диагноз и не окончательный вывод.\n\n"
+                "Пока это не медицинское заключение и не окончательный вывод.\n\n"
                 "Это рабочая модель.\n\n"
                 "Ближайшие дни я буду смотреть:\n\n"
                 "— какие навыки реально помогают\n"
@@ -1308,7 +1357,7 @@ def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str
 
 async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
     """Запустить анализ"""
-    from texts import kb_analysis_confirm, kb_analysis_need_more, preliminary_hypothesis_note
+    from texts import kb_analysis_confirm, kb_analysis_need_more, preliminary_hypothesis_note, preliminary_diagnosis_conclusion_text
 
     if analysis_needs_more_input(user_text):
         u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True), ensure_ascii=False)
@@ -1372,16 +1421,24 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 
     # Log that analysis was shown
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
+    diagnosis_patch = diagnosis_user_profile_patch(comp_to_store)
     live_patch = live_analysis_profile_patch(str(comp_to_store.get("live_pattern") or ""))
-    if live_patch:
-        await update_user_profile(u["user_id"], live_patch, db_path)
-        await log_event(u["user_id"], "analysis", "profile_signal_detected", {"source": "live_analysis", **live_patch}, db_path, sheets_webhook)
-        await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "live_analysis", **live_patch}, db_path, sheets_webhook)
+    profile_patch = {**diagnosis_patch, **live_patch}
+    if profile_patch:
+        updated_profile = await update_user_profile(u["user_id"], profile_patch, db_path, source="initial_diagnosis")
+        u["profile_json"] = updated_profile
+        await log_event(u["user_id"], "analysis", "profile_signal_detected", {"source": "initial_diagnosis", **profile_patch}, db_path, sheets_webhook)
+        await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "initial_diagnosis", **profile_patch}, db_path, sheets_webhook)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
     # Show the actual precise analysis before asking for confirmation.
     analysis_text = format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))
-    msg = f"{analysis_text}\n\nЭто похоже на тебя?"
+    preliminary_conclusion = preliminary_diagnosis_conclusion_text(
+        comp_to_store.get("specific_pattern") or comp_to_store.get("live_pattern") or "",
+        comp_to_store.get("useful_signal") or "",
+        comp_to_store.get("skills_focus") if isinstance(comp_to_store.get("skills_focus"), list) else [],
+    )
+    msg = f"{preliminary_conclusion}\n\n{analysis_text}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(
@@ -1412,21 +1469,25 @@ async def send_weekly_summary(m: Message, u: dict, db_path: str):
 
     stats = {e: c for e, c in rows}
 
+    profile = await get_user_profile(uid, db_path)
     msg = (
         f"📊 {u.get('name') or 'друг'}, итоги недели:\n\n"
         f"✅ попытки: {stats.get('done',0)}\n"
         f"↩️ возвраты: {stats.get('return',0)}\n"
         f"🆘 кризисы: {stats.get('crisis_message',0)}\n\n"
+        "🏆 Достижения развития:\n"
+        f"{progress_achievements_text(u, profile, stats)}\n\n"
+        f"{growth_history_text(u, profile, stats)}\n\n"
         "Главное:\n"
-        "ты не бросил(а).\n"
-        "Значит, система работает."
+        "ты видишь, как меняешься.\n"
+        "Это не игра — это история роста."
     )
 
     await m.answer(msg)
 
 async def send_progress_report(m: Message, u: dict, db_path: str):
     """Отправить отчет о прогрессе"""
-    from texts import gamify_status_line
+    from texts import gamify_status_line, progress_achievements_text, growth_history_text
     
     uid = u["user_id"]
     since = time.time() - 7 * 24 * 3600
@@ -1446,12 +1507,25 @@ async def send_progress_report(m: Message, u: dict, db_path: str):
     day = int(u.get("day") or 1)
     next_skill = SKILLS_DB[plan[min(day, len(plan)-1)]]["name"] if plan else "—"
 
+    profile = await get_user_profile(uid, db_path)
+    avatar_text = render_development_avatar(profile)
+
+    achievements_text = progress_achievements_text(u, profile, counts)
+    history_text = growth_history_text(u, profile, counts)
+    mirror_text = render_development_mirror_report(profile, period_days=7)
+
     msg = (
         "📊 Твой прогресс за 7 дней:\n"
         f"✅ выполнено: {done}\n"
         f"↩️ возвратов: {ret}\n"
         f"🆘 кризис-обращений: {crisis}\n\n"
+        f"{avatar_text}\n\n"
+        "🏆 Достижения развития:\n"
+        f"{achievements_text}\n\n"
         f"{gamify_status_line(u)}\n\n"
+        f"{history_text}\n\n"
+        f"{mirror_text}\n\n"
+        "Главное: ты видишь, как меняешься — это не игра и не очки.\n\n"
         f"➡️ Следующий навык по плану: {next_skill}"
     )
     await m.answer(msg)

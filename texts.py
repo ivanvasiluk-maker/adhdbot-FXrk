@@ -544,7 +544,7 @@ def day3_offer_text(main_pattern: str = "сложно войти в действ
         f"Похоже, главный паттерн:\n{main_pattern}\n\n"
         f"Что уже помогает:\n{best_skill}\n\n"
         f"Где ещё ломается:\n{weak_point}\n\n"
-        "Это не диагноз.\n"
+        "Это не медицинское заключение.\n"
         "Это рабочая карта, которую мы строим по твоим действиям.\n\n"
         "Дальше собираем полную карту на 30 дней:\n"
         "навыки, среда, возврат, внимание, отдых и личный режим.\n\n"
@@ -565,6 +565,65 @@ def preliminary_hypothesis_note() -> str:
         "— помогают ли внешние люди.\n\n"
         "Это станет понятнее через несколько дней.\n"
         "Тогда я соберу твою персональную карту."
+    )
+
+
+def preliminary_diagnosis_conclusion_text(
+    main_pattern: str = "",
+    useful_signal: str = "",
+    skills_focus: list | None = None,
+) -> str:
+    """Short post-diagnosis conclusion: explicitly preliminary, not a diagnosis."""
+    skills_focus = skills_focus or []
+    focus_lines = "\n".join(f"— {x}" for x in skills_focus[:3] if x) or "— уменьшить вход в задачу\n— проверить, что помогает возвращаться\n— подобрать рабочий формат старта"
+    main_line = main_pattern or "вход в действие сейчас требует слишком много усилия"
+    useful_line = f"\nЧто уже можно использовать как ресурс:\n— {useful_signal}\n" if useful_signal else ""
+    return (
+        "📌 ПРЕДВАРИТЕЛЬНОЕ ЗАКЛЮЧЕНИЕ\n\n"
+        "Это первая рабочая модель.\n"
+        "Мы ещё собираем данные.\n\n"
+        "Сейчас это не медицинское заключение и не окончательный вывод.\n"
+        "Это рабочая гипотеза, которую мы будем уточнять по твоим действиям.\n\n"
+        f"Что сейчас похоже на главный узел:\n— {main_line}\n"
+        f"{useful_line}\n"
+        "Основные направления развития на ближайшие дни:\n"
+        f"{focus_lines}\n\n"
+        "Почему это важно:\n"
+        "— ты получаешь не общий совет, а первую персональную модель\n"
+        "— дальше я буду подбирать навык, размер шага и объяснение по твоим реакциям\n"
+        "— каждый выполненный или не выполненный шаг делает карту точнее\n\n"
+        "Через несколько дней модель станет точнее: я буду смотреть, что сработало, где шаг оказался большим, где был возврат и какие навыки реально подходят."
+    )
+
+
+def day3_full_conclusion_text(
+    main_pattern: str,
+    avoidance_trigger: str,
+    successful_skills: str,
+    failed_skills: str,
+    return_pattern: str,
+    behavior_records: str = "",
+) -> str:
+    behavior_block = f"\nЧто уже проверили действиями:\n{behavior_records}\n" if behavior_records else ""
+    return (
+        "📌 ПОЛНОЕ ЗАКЛЮЧЕНИЕ ПОСЛЕ 3 ДНЕЙ\n\n"
+        "Это уже не только результат диагностики.\n"
+        "Здесь учтены первые реальные действия: что получилось, что не подошло, где пришлось уменьшать шаг и как ты возвращался после сбоев.\n\n"
+        "Что сейчас видно:\n"
+        f"— основной паттерн: {main_pattern}\n"
+        f"— чаще всего мешает: {avoidance_trigger}\n"
+        f"— после срыва сейчас похоже: {return_pattern}\n\n"
+        "Что уже сработало:\n"
+        f"{successful_skills}\n\n"
+        "Что не подошло или потребовало упрощения:\n"
+        f"{failed_skills}\n"
+        f"{behavior_block}\n"
+        "Что становится ценностью дальше:\n"
+        "— не просто выдавать упражнения, а уточнять твою персональную модель\n"
+        "— выбирать сложность шага по тому, что реально получилось\n"
+        "— быстрее возвращать тебя после паузы без самокритики\n"
+        "— показывать, каким становится твой способ действовать\n\n"
+        "Вывод пока остаётся рабочей моделью, а не медицинским заключением. Но система уже знает тебя лучше, чем в первый день, потому что опирается не только на слова, а на поведение."
     )
 
 
@@ -612,7 +671,7 @@ def day3_primary_map_text(
         "— как удерживать внимание\n"
         "— как возвращаться без самокритики\n"
         "— какие навыки реально работают именно у тебя\n\n"
-        "Это не диагноз. Это твоя рабочая карта действия.\n\n"
+        "Это не медицинское заключение. Это твоя рабочая карта действия.\n\n"
         "Сейчас у нас уже есть первые сигналы.\n"
         "Но устойчивые паттерны появляются только через повторения.\n\n"
         "Следующий этап —\n"
@@ -622,7 +681,43 @@ def day3_primary_map_text(
         "где ломается внимание,\n"
         "и как выстроить систему,\n"
         "в которую мозгу легче возвращаться.\n\n"
-        "Месяц — €14.98"
+        "Поэтому продолжение — это не библиотека навыков.\n"
+        "Это персональная модель, которая каждый день становится точнее.\n\n"
+        "Продолжение — 14.98 €/месяц"
+    )
+
+
+def preliminary_development_map_text(
+    assumptions: list[str] | None = None,
+    checks: list[str] | None = None,
+) -> str:
+    """User-facing preliminary development map shown after analysis confirmation."""
+    assumptions = [str(x) for x in (assumptions or []) if x][:4]
+    checks = [str(x) for x in (checks or []) if x][:5]
+    if not assumptions:
+        assumptions = ["страх оценки", "самокритика после откладывания"]
+    if not checks:
+        checks = [
+            "помогает ли уменьшение шага",
+            "помогает ли плохой черновик",
+            "помогает ли присутствие других людей",
+        ]
+    assumptions_text = "\n".join(f"✔ {item}" for item in assumptions)
+    checks_text = "\n".join(f"✔ {item}" for item in checks)
+    return (
+        "🗺 Предварительная карта\n\n"
+        "Это не окончательный вывод и не медицинское заключение.\n"
+        "Сейчас это рабочие гипотезы, которые мы будем проверять действиями.\n\n"
+        "Сейчас мы предполагаем:\n\n"
+        f"{assumptions_text}\n\n"
+        "Хотим проверить:\n\n"
+        f"{checks_text}\n\n"
+        "Следующие дни я буду смотреть:\n\n"
+        "— что помогает\n"
+        "— что мешает\n"
+        "— где ты возвращаешься\n"
+        "— где застреваешь\n\n"
+        "Через несколько дней карта станет точнее."
     )
 
 
@@ -670,7 +765,7 @@ def profile_signals_text(
     system_block = f"\n\nЧто ещё заметили:\n{system_day_signals}" if system_day_signals else ""
     return (
         "🧭 Твоя предварительная карта\n\n"
-        "Пока это не диагноз, а рабочая гипотеза.\n\n"
+        "Пока это не медицинское заключение, а рабочая гипотеза.\n\n"
         "Что уже видно:\n"
         f"{visible_text}\n\n"
         "Что сработало:\n"
@@ -810,8 +905,9 @@ def user_help_text() -> str:
         "— уменьшает шаг, если сложно начать\n"
         "— вечером закрывает день без стыда\n"
         "— показывает прогресс и маршрут\n"
+        "— показывает зеркало развития по /mirror\n"
         "— включает кризисный режим по /crisis\n\n"
-        "Команды: /progress, /settings, /stop, /start_over, /crisis."
+        "Команды: /progress, /mirror, /settings, /stop, /start_over, /crisis."
     )
 
 
@@ -1095,7 +1191,7 @@ def crisis_tool_text(pattern: str) -> str:
             "Напиши:\n\n"
             "Факт:\n\n"
             "...\n\n"
-            "Без диагноза.\n"
+            "Без клинических ярлыков.\n"
             "Без оценки.\n"
             "Без выводов о себе."
         ),
@@ -1427,7 +1523,7 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не диагноз.\nВ кризис — жми «🆘 Кризис».',
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Кризис».',
     'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
 
@@ -1661,8 +1757,9 @@ def offer_day_3_text(u: dict) -> str:
         f"↩️ возвраты: {ret}\n\n"
         "Это не «старался(ась)».\n"
         "Это и есть сдвиг.\n\n"
-        "Если продолжить — эффект закрепится.\n"
-        "Со скидкой — прямо сейчас."
+        "Если продолжить, система будет не просто давать упражнения,\n"
+        "а уточнять твою персональную модель: что помогает, где ломается вход, как возвращаться быстрее.\n\n"
+        "Продолжение — 14.98 €/месяц."
     )
 
 def inactivity_ping(trainer_key: str) -> str:
@@ -1714,18 +1811,78 @@ def midday_ping(name: str, trainer_key: str) -> str:
         return f"⏱ {name}, это тренировка процесса, не результата."
     return f"⏱ {name}, если не сделал — просто вернись. Этого достаточно."
 
+ADULT_GAMIFICATION_POLICY = {
+    "principle": "visualize_real_development_not_game",
+    "forbidden": [
+        "coins",
+        "chests",
+        "magic",
+        "weapons",
+        "pvp",
+        "fantasy_characters",
+        "game_currency",
+    ],
+    "allowed": [
+        "development_levels",
+        "action_series",
+        "achievement_markers",
+        "weekly_results",
+        "monthly_changes",
+        "growth_history",
+    ],
+}
+
+
 def gamify_status_line(u: dict) -> str:
-    pts = int(u.get("points") or 0)
+    """Adult progress line: no currencies, loot, RPG framing or game points."""
     lvl = int(u.get("level") or 1)
     streak = int(u.get("streak") or 0)
-    return f"🏅 Очки: {pts} | Уровень: {lvl} | Стрик: {streak}"
+    done = int(u.get("done_count") or 0)
+    ret = int(u.get("return_count") or 0)
+    return (
+        f"🏅 Уровень развития: {lvl}\n"
+        f"📈 Серия действий: {streak}\n"
+        f"✅ Запусков всего: {done}\n"
+        f"↩️ Возвратов всего: {ret}"
+    )
+
+
+def progress_achievements_text(u: dict, profile: dict, weekly_counts: dict | None = None) -> str:
+    weekly_counts = weekly_counts or {}
+    achievements = []
+    if int(u.get("done_count") or 0) > 0 or int(weekly_counts.get("done") or weekly_counts.get("action_done") or 0) > 0:
+        achievements.append("первый запуск действия")
+    if int(u.get("return_count") or 0) > 0 or int(weekly_counts.get("return") or 0) > 0:
+        achievements.append("возврат после выпадения")
+    if int((profile or {}).get("downscale_count") or 0) > 0:
+        achievements.append("уменьшение шага вместо давления")
+    if (profile or {}).get("preferred_activation") == "body_doubling":
+        achievements.append("найден внешний формат запуска")
+    if not achievements:
+        achievements.append("базовая линия развития создана")
+    return "\n".join(f"— {item}" for item in achievements[:5])
+
+
+def growth_history_text(u: dict, profile: dict, weekly_counts: dict | None = None) -> str:
+    weekly_counts = weekly_counts or {}
+    done_week = int(weekly_counts.get("done") or weekly_counts.get("action_done") or 0)
+    ret_week = int(weekly_counts.get("return") or 0)
+    downscale_total = int((profile or {}).get("downscale_count") or 0)
+    created = u.get("first_start_date") or u.get("created_at") or "старт"
+    return (
+        "История роста:\n"
+        f"— точка старта: {created}\n"
+        f"— за неделю: запусков {done_week}, возвратов {ret_week}\n"
+        f"— за всё время: запусков {int(u.get('done_count') or 0)}, возвратов {int(u.get('return_count') or 0)}\n"
+        f"— месячные изменения: копим историю; уже видно уменьшений шага {downscale_total}"
+    )
 
 # ============================================================
 # AI SYSTEM PROMPTS
 # ============================================================
 
 AI_ANALYSIS_SYSTEM_PROMPT = """
-Ты — AI-ассистент тренинга ADHD-навыков. Это НЕ психотерапия и НЕ диагноз.
+Ты — AI-ассистент тренинга ADHD-навыков. Это НЕ психотерапия и НЕ медицинское заключение.
 
 Задача: дать короткий точный анализ поведения, без generic GPT-фраз и без мотивационной лекции.
 
@@ -1757,7 +1914,7 @@ AI_ANALYSIS_SYSTEM_PROMPT = """
 
 def build_ai_system_prompt() -> str:
     return (
-        "Ты — ассистент тренинга навыков саморегуляции. Это НЕ терапия, НЕ диагноз.\n"
+        "Ты — ассистент тренинга навыков саморегуляции. Это НЕ терапия, НЕ медицинское заключение.\n"
         "Твоя задача: по короткому описанию определить рабочий bucket и дать краткий разбор.\n"
         "Выход строго JSON без текста вокруг.\n"
         "Формат:\n"
@@ -1768,5 +1925,5 @@ def build_ai_system_prompt() -> str:
         '  "top_signals": ["...","..."],\n'
         '  "first_action": "1 конкретный шаг на сегодня"\n'
         "}\n"
-        "Не придумывай диагнозов. Не говори про лечение. Без морали.\n"
+        "Не делай клинических выводов. Не говори про лечение. Без морали.\n"
     )

@@ -18,6 +18,1048 @@ log = logging.getLogger("bot")
 # Global test switch to unlock features without paywalls
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
 
+
+# ============================================================
+# USER PROFILE: dynamic digital model
+# ============================================================
+
+USER_PROFILE_SCHEMA_VERSION = 1
+
+USER_PROFILE_LIST_FIELDS = {
+    "strengths",
+    "barriers",
+    "resources",
+    "failure_patterns",
+    "working_strategies",
+    "successful_skills",
+    "failed_skills",
+    "confirmed_signals",
+    "secondary_hypotheses",
+    "system_day_opened",
+    "system_day_useful",
+    "system_day_already",
+}
+
+USER_PROFILE_DICT_FIELDS = {
+    "attention_profile",
+    "motivation_profile",
+    "emotional_profile",
+    "development_stats",
+    "development_avatar",
+    "development_map",
+    "development_history",
+}
+
+USER_PROFILE_CORE_FIELDS = USER_PROFILE_LIST_FIELDS | USER_PROFILE_DICT_FIELDS | {
+    "preferred_trainer",
+    "avatar_version",
+    "profile_prompt",
+}
+
+DEVELOPMENT_AVATAR_VERSION = 1
+DEVELOPMENT_HISTORY_VERSION = 1
+DEVELOPMENT_AVATAR_BASE_VALUE = 20
+DEVELOPMENT_AVATAR_DIMENSIONS = {
+    "task_initiation": {"emoji": "🧠", "label": "Запуск задач"},
+    "attention_holding": {"emoji": "🎯", "label": "Удержание внимания"},
+    "slip_recovery": {"emoji": "🔄", "label": "Возврат после срыва"},
+    "self_regulation": {"emoji": "⚖", "label": "Саморегуляция"},
+    "resilience": {"emoji": "🔥", "label": "Устойчивость"},
+    "consistency": {"emoji": "📈", "label": "Последовательность действий"},
+    "social_activity": {"emoji": "🤝", "label": "Социальная активность"},
+    "professional_activity": {"emoji": "💼", "label": "Профессиональная активность"},
+}
+
+SAFE_TONE_ALLOWED_MARKERS = (
+    "похоже",
+    "сейчас видно",
+    "пока предполагаем",
+    "мы проверим",
+    "данных пока мало",
+    "эта модель будет уточняться",
+)
+
+UNSAFE_CERTAINTY_MARKERS = (
+    "у тебя " + "точно",
+    "ты такой " + "человек",
+    "нав" + "сегда",
+    "100" + "%",
+    "точный " + "показатель",
+)
+
+SLIP_AS_INFORMATION_PRINCIPLE = "Срыв = информация. Не наказание."
+
+DEVELOPMENT_FOCUS_LABELS = {
+    "task_initiation": "запуск задач",
+    "attention_holding": "удержание внимания",
+    "self_regulation": "саморегуляция",
+    "self_criticism": "самокритика",
+    "slip_recovery": "возврат после срыва",
+    "social_activity": "социальная активность",
+    "professional_activity": "профессиональная активность",
+}
+
+
+def _utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        text = str(value).replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _as_list(value: Any) -> List[Any]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _merge_unique_list(current: Any, incoming: Any, *, limit: int = 50) -> List[Any]:
+    merged: List[Any] = []
+    seen = set()
+    for item in [*_as_list(current), *_as_list(incoming)]:
+        if item in (None, ""):
+            continue
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged[-limit:]
+
+
+def _avatar_metric(value: int = DEVELOPMENT_AVATAR_BASE_VALUE, *, updated_at: str = "") -> Dict[str, Any]:
+    return {
+        "value": max(0, min(100, int(value))),
+        "trend": "data_needed",
+        "samples": 0,
+        "last_delta": 0,
+        "updated_at": updated_at,
+    }
+
+
+def default_development_avatar(now: Optional[str] = None) -> Dict[str, Any]:
+    """Create the adult development avatar model (not a game character)."""
+    now = now or _utc_iso()
+    return {
+        "version": DEVELOPMENT_AVATAR_VERSION,
+        "principle": "self_development_reflection",
+        "precision_note": "ranges_and_trends_not_diagnosis",
+        "metrics": {
+            key: _avatar_metric(updated_at=now)
+            for key in DEVELOPMENT_AVATAR_DIMENSIONS
+        },
+        "events_count": 0,
+        "slips_recorded": 0,
+        "last_event": "",
+        "updated_at": now,
+    }
+
+
+def normalize_development_avatar(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw else {}
+        except Exception:
+            raw = {}
+    avatar = raw.copy() if isinstance(raw, dict) else {}
+    normalized = default_development_avatar()
+    normalized.update({k: v for k, v in avatar.items() if k != "metrics"})
+    raw_metrics = avatar.get("metrics") if isinstance(avatar.get("metrics"), dict) else {}
+    metrics = {}
+    for key in DEVELOPMENT_AVATAR_DIMENSIONS:
+        current = raw_metrics.get(key) if isinstance(raw_metrics.get(key), dict) else {}
+        metric = _avatar_metric(current.get("value", DEVELOPMENT_AVATAR_BASE_VALUE))
+        metric.update({k: current.get(k, metric[k]) for k in metric})
+        metric["value"] = max(0, min(100, int(metric.get("value") or DEVELOPMENT_AVATAR_BASE_VALUE)))
+        metric["samples"] = max(0, int(metric.get("samples") or 0))
+        metrics[key] = metric
+    normalized["metrics"] = metrics
+    normalized["version"] = DEVELOPMENT_AVATAR_VERSION
+    normalized["precision_note"] = "ranges_and_trends_not_diagnosis"
+    return normalized
+
+
+def _avatar_trend(samples: int, delta: int) -> str:
+    if samples < 2:
+        return "data_needed"
+    if delta > 0:
+        return "up"
+    if delta < 0:
+        return "down"
+    return "stable"
+
+
+def _avatar_apply_delta(avatar: Dict[str, Any], metric_key: str, delta: int, now: str) -> None:
+    metric = avatar["metrics"].get(metric_key)
+    if not metric:
+        return
+    old_value = int(metric.get("value") or DEVELOPMENT_AVATAR_BASE_VALUE)
+    new_value = max(0, min(100, old_value + int(delta)))
+    samples = int(metric.get("samples") or 0) + 1
+    metric.update({
+        "value": new_value,
+        "trend": _avatar_trend(samples, new_value - old_value),
+        "samples": samples,
+        "last_delta": new_value - old_value,
+        "updated_at": now,
+    })
+
+
+def development_avatar_event_patch(profile: Dict[str, Any], event_type: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return a mergeable patch that updates the development avatar from user actions.
+
+    Slips/failures are recorded as information, never as penalties.
+    """
+    context = context or {}
+    now = _utc_iso()
+    avatar = normalize_development_avatar((profile or {}).get("development_avatar"))
+    deltas = {
+        "skill_done": {"task_initiation": 4, "consistency": 2},
+        "return_after_slip": {"slip_recovery": 5, "resilience": 3, "consistency": 1},
+        "downscale": {"self_regulation": 4, "resilience": 1},
+        "five_day_streak": {"consistency": 6},
+        "body_doubling": {"social_activity": 4, "task_initiation": 1},
+        "professional_action": {"professional_activity": 4, "task_initiation": 1},
+        "attention_action": {"attention_holding": 3, "self_regulation": 1},
+    }
+    event_deltas = dict(deltas.get(event_type, {}))
+    skill_id = str(context.get("skill_id") or "")
+    if event_type == "skill_done":
+        if skill_id == "body_doubling_plan":
+            event_deltas.update(deltas["body_doubling"])
+        if skill_id in {"one_tab_focus", "phone_far_3min", "visible_next_step", "urge_surf_60"}:
+            event_deltas.update(deltas["attention_action"])
+        target_text = str(context.get("target") or "").lower()
+        if context.get("professional") or any(x in target_text for x in ("работ", "проект", "код", "созвон", "учеб", "документ")):
+            event_deltas.update(deltas["professional_action"])
+        if int(context.get("streak") or 0) == 5:
+            event_deltas["consistency"] = event_deltas.get("consistency", 0) + deltas["five_day_streak"]["consistency"]
+
+    for metric_key, delta in event_deltas.items():
+        _avatar_apply_delta(avatar, metric_key, delta, now)
+
+    avatar["events_count"] = int(avatar.get("events_count") or 0) + 1
+    avatar["last_event"] = event_type
+    avatar["updated_at"] = now
+    if event_type in {"slip_recorded", "action_failed"}:
+        avatar["slips_recorded"] = int(avatar.get("slips_recorded") or 0) + 1
+        avatar["last_slip_at"] = now
+
+    stats = dict((profile or {}).get("development_stats") or {})
+    stats["avatar_events_count"] = avatar["events_count"]
+    stats["avatar_last_event"] = event_type
+    if event_type in {"slip_recorded", "action_failed"}:
+        stats["slips_recorded_as_information"] = int(stats.get("slips_recorded_as_information") or 0) + 1
+
+    return {
+        "development_avatar": avatar,
+        "development_stats": stats,
+        "avatar_version": DEVELOPMENT_AVATAR_VERSION,
+    }
+
+
+async def record_development_avatar_event(
+    user_id: int,
+    event_type: str,
+    db_path: str = "bot.db",
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    profile = await get_user_profile(user_id, db_path)
+    patch = development_avatar_event_patch(profile, event_type, context)
+    return await update_user_profile(user_id, patch, db_path, source=f"avatar_{event_type}")
+
+
+def _avatar_range_label(value: int) -> str:
+    if value < 25:
+        return "низкий диапазон"
+    if value < 50:
+        return "формируется"
+    if value < 75:
+        return "укрепляется"
+    return "сильная зона"
+
+
+def _avatar_trend_label(trend: str) -> str:
+    return {
+        "up": "↗ растёт",
+        "stable": "→ стабильно",
+        "down": "↘ снизилось",
+        "data_needed": "данных пока мало",
+    }.get(trend or "", "данных пока мало")
+
+
+def render_development_avatar(profile: Dict[str, Any], *, limit: int = 8) -> str:
+    avatar = normalize_development_avatar((profile or {}).get("development_avatar"))
+    lines = [
+        "🧩 Аватар развития",
+        "Это не оценка личности и не медицинское заключение — только диапазоны и тренды по действиям.",
+    ]
+    for key, meta in list(DEVELOPMENT_AVATAR_DIMENSIONS.items())[:limit]:
+        metric = avatar["metrics"].get(key, {})
+        value = int(metric.get("value") or DEVELOPMENT_AVATAR_BASE_VALUE)
+        lines.append(
+            f"{meta['emoji']} {meta['label']}: {_avatar_range_label(value)} ({_avatar_trend_label(str(metric.get('trend') or 'data_needed'))})"
+        )
+    if int(avatar.get("slips_recorded") or 0):
+        lines.append("Срывы здесь учитываются как данные, не как штраф.")
+    return "\n".join(lines)
+
+
+DEVELOPMENT_MAP_VERSION = 1
+
+
+def default_development_map(now: Optional[str] = None) -> Dict[str, Any]:
+    now = now or _utc_iso()
+    return {
+        "version": DEVELOPMENT_MAP_VERSION,
+        "status": "learning",
+        "hypotheses": [],
+        "checks": [
+            {"label": "помогает ли уменьшение шага", "status": "testing", "evidence_count": 0, "contradiction_count": 0},
+            {"label": "помогает ли плохой черновик", "status": "testing", "evidence_count": 0, "contradiction_count": 0},
+            {"label": "помогает ли присутствие других людей", "status": "testing", "evidence_count": 0, "contradiction_count": 0},
+        ],
+        "helps": [],
+        "blocks": [],
+        "slip_points": [],
+        "return_points": [],
+        "successful_strategies": [],
+        "ineffective_strategies": [],
+        "behavior_events_count": 0,
+        "last_update_source": "",
+        "updated_at": now,
+    }
+
+
+def _normalize_map_items(items: Any) -> List[Dict[str, Any]]:
+    normalized = []
+    for item in _as_list(items):
+        if isinstance(item, dict):
+            label = str(item.get("label") or item.get("name") or "").strip()
+            if not label:
+                continue
+            normalized.append({
+                "label": label,
+                "status": str(item.get("status") or "testing"),
+                "evidence_count": max(0, int(item.get("evidence_count") or 0)),
+                "contradiction_count": max(0, int(item.get("contradiction_count") or 0)),
+                "last_source": item.get("last_source") or "",
+                "updated_at": item.get("updated_at") or "",
+            })
+        elif item not in (None, ""):
+            normalized.append({
+                "label": str(item),
+                "status": "testing",
+                "evidence_count": 0,
+                "contradiction_count": 0,
+                "last_source": "",
+                "updated_at": "",
+            })
+    return normalized
+
+
+def normalize_development_map(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw else {}
+        except Exception:
+            raw = {}
+    current = raw.copy() if isinstance(raw, dict) else {}
+    normalized = default_development_map()
+    normalized.update({k: v for k, v in current.items() if k not in {"hypotheses", "checks"}})
+    normalized["hypotheses"] = _normalize_map_items(current.get("hypotheses"))
+    raw_checks = _normalize_map_items(current.get("checks"))
+    if raw_checks:
+        normalized["checks"] = raw_checks
+    for key in ("helps", "blocks", "slip_points", "return_points", "successful_strategies", "ineffective_strategies"):
+        normalized[key] = _merge_unique_list([], normalized.get(key), limit=20)
+    normalized["version"] = DEVELOPMENT_MAP_VERSION
+    normalized["behavior_events_count"] = max(0, int(normalized.get("behavior_events_count") or 0))
+    return normalized
+
+
+def _map_touch_item(items: Any, label: str, *, source: str, evidence_delta: int = 0, contradiction_delta: int = 0, status: str = "testing") -> List[Dict[str, Any]]:
+    label = str(label or "").strip()
+    if not label:
+        return _normalize_map_items(items)
+    now = _utc_iso()
+    normalized = _normalize_map_items(items)
+    for item in normalized:
+        if item["label"] == label:
+            item["evidence_count"] = max(0, int(item.get("evidence_count") or 0) + evidence_delta)
+            item["contradiction_count"] = max(0, int(item.get("contradiction_count") or 0) + contradiction_delta)
+            if item["evidence_count"] >= 2 and item["evidence_count"] > item["contradiction_count"]:
+                item["status"] = "confirmed"
+            elif item["contradiction_count"] >= 2 and item["contradiction_count"] > item["evidence_count"]:
+                item["status"] = "weakened"
+            else:
+                item["status"] = status or item.get("status") or "testing"
+            item["last_source"] = source
+            item["updated_at"] = now
+            return normalized
+    normalized.append({
+        "label": label,
+        "status": status,
+        "evidence_count": max(0, evidence_delta),
+        "contradiction_count": max(0, contradiction_delta),
+        "last_source": source,
+        "updated_at": now,
+    })
+    return normalized[-12:]
+
+
+def _skill_label_for_map(skill_id: Any) -> str:
+    if not skill_id:
+        return ""
+    raw = str(skill_id)
+    return globals().get("SKILL_LABELS", {}).get(raw, raw)
+
+
+def development_map_event_patch(profile: Dict[str, Any], signal_patch: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Update the development map from behavior signals without exposing internals."""
+    profile = profile or {}
+    signal_patch = signal_patch or {}
+    source = source or "profile_signal"
+    now = _utc_iso()
+    dev_map = normalize_development_map(profile.get("development_map"))
+
+    main = signal_patch.get("main_hypothesis") or signal_patch.get("main_pattern") or signal_patch.get("avoidance_pattern")
+    if main:
+        dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), str(main), source=source, evidence_delta=1, status="testing")
+    for item in _as_list(signal_patch.get("secondary_hypotheses")):
+        dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), str(item), source=source, status="testing")
+
+    skill = _skill_label_for_map(signal_patch.get("best_skill") or signal_patch.get("last_successful_skill") or signal_patch.get("best_variant"))
+    failed_skill = _skill_label_for_map(signal_patch.get("failed_skill") or signal_patch.get("worst_skill"))
+    trigger = signal_patch.get("avoidance_trigger") or signal_patch.get("avoidance_reason")
+
+    if source in {"action_done", "downscale_done", "after_action_note_saved"} or signal_patch.get("last_effect_note"):
+        if skill:
+            dev_map["helps"] = _merge_unique_list(dev_map.get("helps"), [skill], limit=12)
+            dev_map["successful_strategies"] = _merge_unique_list(dev_map.get("successful_strategies"), [skill], limit=12)
+            dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), f"помогает: {skill}", source=source, evidence_delta=1, status="testing")
+        if signal_patch.get("preferred_activation") == "body_doubling":
+            dev_map["checks"] = _map_touch_item(dev_map.get("checks"), "помогает ли присутствие других людей", source=source, evidence_delta=1, status="testing")
+        if signal_patch.get("downscale_pattern") or int(signal_patch.get("downscale_count") or 0):
+            dev_map["checks"] = _map_touch_item(dev_map.get("checks"), "помогает ли уменьшение шага", source=source, evidence_delta=1, status="testing")
+
+    if source.startswith("downscale") or signal_patch.get("needs_downscale") or signal_patch.get("downscale_pattern"):
+        dev_map["checks"] = _map_touch_item(dev_map.get("checks"), "помогает ли уменьшение шага", source=source, evidence_delta=1, status="testing")
+        dev_map["helps"] = _merge_unique_list(dev_map.get("helps"), ["уменьшение шага"], limit=12)
+        dev_map["successful_strategies"] = _merge_unique_list(dev_map.get("successful_strategies"), ["уменьшение шага"], limit=12)
+
+    if source in {"action_failed", "downscale_even_too_hard"} or signal_patch.get("action_failed_count"):
+        if trigger:
+            dev_map["blocks"] = _merge_unique_list(dev_map.get("blocks"), [str(trigger)], limit=12)
+            dev_map["slip_points"] = _merge_unique_list(dev_map.get("slip_points"), [str(trigger)], limit=12)
+        if failed_skill:
+            dev_map["ineffective_strategies"] = _merge_unique_list(dev_map.get("ineffective_strategies"), [failed_skill], limit=12)
+            dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), f"не подходит: {failed_skill}", source=source, evidence_delta=1, status="testing")
+        if main:
+            dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), str(main), source=source, contradiction_delta=1, status="testing")
+
+    if source == "return_after_slip" or signal_patch.get("return_pattern"):
+        return_label = str(signal_patch.get("return_pattern") or "возврат после срыва")
+        dev_map["return_points"] = _merge_unique_list(dev_map.get("return_points"), [return_label], limit=12)
+        dev_map["helps"] = _merge_unique_list(dev_map.get("helps"), ["возврат через маленький шаг"], limit=12)
+        dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), "возврат после срыва тренируется", source=source, evidence_delta=1, status="testing")
+
+    for tag in _as_list(signal_patch.get("effect_tags")):
+        dev_map["helps"] = _merge_unique_list(dev_map.get("helps"), [str(tag)], limit=12)
+
+    dev_map["behavior_events_count"] = int(dev_map.get("behavior_events_count") or 0) + 1
+    dev_map["last_update_source"] = source
+    dev_map["updated_at"] = now
+    return {"development_map": dev_map}
+
+
+def default_development_history(now: Optional[str] = None) -> Dict[str, Any]:
+    now = now or _utc_iso()
+    return {
+        "version": DEVELOPMENT_HISTORY_VERSION,
+        "principle": "development_mirror_not_tracker",
+        "snapshots": [],
+        "periodic_reports": {
+            "weekly": [],
+            "monthly": [],
+            "day90": [],
+            "day180": [],
+        },
+        "updated_at": now,
+    }
+
+
+def _normalize_history_snapshots(items: Any) -> List[Dict[str, Any]]:
+    snapshots: List[Dict[str, Any]] = []
+    for item in _as_list(items):
+        if not isinstance(item, dict):
+            continue
+        created_at = str(item.get("created_at") or item.get("date") or "")
+        if not created_at:
+            continue
+        snapshots.append({
+            "created_at": created_at,
+            "source": str(item.get("source") or "profile_update"),
+            "changed_fields": [str(x) for x in _as_list(item.get("changed_fields")) if x not in (None, "")],
+            "status": str(item.get("status") or "learning"),
+            "avatar_metrics": item.get("avatar_metrics") if isinstance(item.get("avatar_metrics"), dict) else {},
+            "successful_skills": _merge_unique_list([], item.get("successful_skills"), limit=12),
+            "ineffective_strategies": _merge_unique_list([], item.get("ineffective_strategies"), limit=12),
+            "barriers": _merge_unique_list([], item.get("barriers"), limit=12),
+            "working_strategies": _merge_unique_list([], item.get("working_strategies"), limit=12),
+            "series_actions": int(item.get("series_actions") or 0),
+            "return_count": int(item.get("return_count") or 0),
+            "done_count": int(item.get("done_count") or 0),
+            "slips_recorded": int(item.get("slips_recorded") or 0),
+            "growth_directions": _merge_unique_list([], item.get("growth_directions"), limit=12),
+        })
+    snapshots.sort(key=lambda x: _parse_iso_datetime(x.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc))
+    return snapshots[-240:]
+
+
+def normalize_development_history(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw else {}
+        except Exception:
+            raw = {}
+    current = raw.copy() if isinstance(raw, dict) else {}
+    normalized = default_development_history()
+    normalized.update({k: v for k, v in current.items() if k not in {"snapshots", "periodic_reports"}})
+    normalized["snapshots"] = _normalize_history_snapshots(current.get("snapshots"))
+    reports = current.get("periodic_reports") if isinstance(current.get("periodic_reports"), dict) else {}
+    normalized["periodic_reports"] = {
+        "weekly": _merge_unique_list([], reports.get("weekly"), limit=24),
+        "monthly": _merge_unique_list([], reports.get("monthly"), limit=18),
+        "day90": _merge_unique_list([], reports.get("day90"), limit=8),
+        "day180": _merge_unique_list([], reports.get("day180"), limit=4),
+    }
+    normalized["version"] = DEVELOPMENT_HISTORY_VERSION
+    normalized["principle"] = "development_mirror_not_tracker"
+    normalized["updated_at"] = normalized.get("updated_at") or _utc_iso()
+    return normalized
+
+
+def _snapshot_from_profile(profile: Dict[str, Any], source: str, changed_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+    avatar = normalize_development_avatar(profile.get("development_avatar"))
+    dev_map = normalize_development_map(profile.get("development_map"))
+    stats = profile.get("development_stats") if isinstance(profile.get("development_stats"), dict) else {}
+    avatar_metrics = {
+        key: int((avatar.get("metrics") or {}).get(key, {}).get("value") or DEVELOPMENT_AVATAR_BASE_VALUE)
+        for key in DEVELOPMENT_AVATAR_DIMENSIONS
+    }
+    successful = _merge_unique_list(
+        dev_map.get("successful_strategies"),
+        [* _as_list(profile.get("successful_skills")), profile.get("best_skill"), profile.get("last_successful_skill")],
+        limit=12,
+    )
+    ineffective = _merge_unique_list(dev_map.get("ineffective_strategies"), profile.get("failed_skills"), limit=12)
+    barriers = _merge_unique_list(profile.get("barriers"), dev_map.get("blocks"), limit=12)
+    growth_directions = _merge_unique_list(
+        barriers,
+        [DEVELOPMENT_AVATAR_DIMENSIONS[k]["label"] for k, v in sorted(avatar_metrics.items(), key=lambda item: item[1])[:3]],
+        limit=12,
+    )
+    return {
+        "created_at": _utc_iso(),
+        "source": source or "profile_update",
+        "changed_fields": changed_fields or [],
+        "status": str(profile.get("status") or "learning"),
+        "avatar_metrics": avatar_metrics,
+        "successful_skills": successful,
+        "ineffective_strategies": ineffective,
+        "barriers": barriers,
+        "working_strategies": _merge_unique_list(profile.get("working_strategies"), dev_map.get("helps"), limit=12),
+        "series_actions": int(profile.get("streak") or stats.get("streak") or 0),
+        "return_count": int(profile.get("return_count") or stats.get("return_count") or 0),
+        "done_count": int(profile.get("done_count") or profile.get("action_done_count") or stats.get("done_count") or 0),
+        "slips_recorded": int(avatar.get("slips_recorded") or stats.get("slips_recorded_as_information") or 0),
+        "growth_directions": growth_directions,
+    }
+
+
+def append_development_history_snapshot(profile: Dict[str, Any], source: str, changed_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+    history = normalize_development_history(profile.get("development_history"))
+    snapshot = _snapshot_from_profile(profile, source, changed_fields)
+    snapshots = history.get("snapshots") or []
+    last = snapshots[-1] if snapshots else {}
+    last_time = _parse_iso_datetime(last.get("created_at"))
+    now_time = _parse_iso_datetime(snapshot.get("created_at")) or datetime.now(timezone.utc)
+    same_source_recently = (
+        last.get("source") == snapshot.get("source")
+        and last_time is not None
+        and (now_time - last_time).total_seconds() < 60
+    )
+    if same_source_recently:
+        snapshots[-1] = snapshot
+    else:
+        snapshots.append(snapshot)
+    history["snapshots"] = _normalize_history_snapshots(snapshots)
+    history["updated_at"] = snapshot["created_at"]
+    profile["development_history"] = history
+    return profile
+
+
+def _history_list_text(items: Any, fallback: str, *, limit: int = 4) -> str:
+    values = [str(x) for x in _as_list(items) if x not in (None, "")]
+    if not values:
+        return f"— {fallback}"
+    return "\n".join(f"— {x}" for x in values[:limit])
+
+
+def _snapshot_for_period(snapshots: List[Dict[str, Any]], period_days: int, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    if not snapshots:
+        return None
+    now = now or datetime.now(timezone.utc)
+    cutoff = now.timestamp() - period_days * 24 * 3600
+    older = [s for s in snapshots if (_parse_iso_datetime(s.get("created_at")) or now).timestamp() <= cutoff]
+    if older:
+        return older[-1]
+    return snapshots[0]
+
+
+def _metric_delta_lines(current: Dict[str, int], baseline: Dict[str, int], *, limit: int = 4) -> List[str]:
+    deltas = []
+    for key, meta in DEVELOPMENT_AVATAR_DIMENSIONS.items():
+        cur = int(current.get(key) or DEVELOPMENT_AVATAR_BASE_VALUE)
+        old = int(baseline.get(key) or DEVELOPMENT_AVATAR_BASE_VALUE)
+        delta = cur - old
+        if delta > 0:
+            deltas.append((delta, f"— {meta['label']} стало легче удерживать: +{delta} пунктов диапазона"))
+        elif delta < 0:
+            deltas.append((delta, f"— {meta['label']} пока требует внимания: {delta} пунктов диапазона"))
+    if not deltas:
+        return ["— изменения пока накапливаются; нужно больше действий для уверенного сравнения"]
+    deltas.sort(key=lambda item: abs(item[0]), reverse=True)
+    return [line for _, line in deltas[:limit]]
+
+
+def _period_title(period_days: int) -> str:
+    return {
+        7: "недельный отчёт",
+        30: "месячный отчёт",
+        90: "отчёт за 90 дней",
+        180: "отчёт за 180 дней",
+    }.get(period_days, f"отчёт за {period_days} дней")
+
+
+def render_development_mirror_report(profile: Dict[str, Any], period_days: int = 30) -> str:
+    """Render the long-term development mirror: identity/behavior change, not dry stats."""
+    profile = normalize_user_profile(profile)
+    history = normalize_development_history(profile.get("development_history"))
+    snapshots = history.get("snapshots") or []
+    current = _snapshot_from_profile(profile, "mirror_now", [])
+    baseline = _snapshot_for_period(snapshots, period_days) or current
+    baseline_metrics = baseline.get("avatar_metrics") if isinstance(baseline.get("avatar_metrics"), dict) else {}
+    current_metrics = current.get("avatar_metrics") if isinstance(current.get("avatar_metrics"), dict) else {}
+    changed_lines = "\n".join(_metric_delta_lines(current_metrics, baseline_metrics))
+    title = _period_title(period_days)
+    baseline_date = str(baseline.get("created_at") or "первые данные")[:10]
+    has_real_baseline = bool(snapshots) and baseline is not current
+    comparison_note = (
+        f"Сравнение с состоянием около {baseline_date}."
+        if has_real_baseline
+        else "Пока это первая линия сравнения; зеркало станет точнее через новые недели действий."
+    )
+    return (
+        f"🪞 Зеркало развития — {title}\n"
+        f"{comparison_note}\n\n"
+        "Кем ты был(а) раньше:\n"
+        f"{_history_list_text(baseline.get('barriers'), 'пока нет старой точки сравнения')}\n\n"
+        "Что изменилось:\n"
+        f"{changed_lines}\n"
+        f"— выполненных действий в модели: {current.get('done_count', 0)}\n"
+        f"— серия действий сейчас: {current.get('series_actions', 0)}\n"
+        f"— возвратов после срыва в модели: {current.get('return_count', 0)}\n\n"
+        "Какие стратегии сработали:\n"
+        f"{_history_list_text(current.get('successful_skills') or current.get('working_strategies'), 'пока проверяем первые навыки')}\n\n"
+        "Где стало легче:\n"
+        f"{_history_list_text(current.get('working_strategies'), 'пока собираем подтверждения')}\n\n"
+        "Где всё ещё трудно:\n"
+        f"{_history_list_text(current.get('barriers') or current.get('ineffective_strategies'), 'пока нет устойчивого паттерна')}\n\n"
+        "Главные направления роста:\n"
+        f"{_history_list_text(current.get('growth_directions'), 'продолжаем уточнять')}\n\n"
+        "Главная идея: «Я вижу, как меняюсь.»"
+    )
+
+
+def render_development_mirror_reports(profile: Dict[str, Any]) -> str:
+    return "\n\n".join(
+        render_development_mirror_report(profile, period_days=days)
+        for days in (7, 30, 90, 180)
+    )
+
+
+
+
+def determine_development_focus(profile: Dict[str, Any]) -> Dict[str, str]:
+    """Choose a current route focus from profile signals using cautious language."""
+    profile = profile or {}
+    dev_map = normalize_development_map(profile.get("development_map"))
+    failed = _as_list(profile.get("failed_skills"))
+    successful = _as_list(profile.get("successful_skills"))
+    barriers = _as_list(profile.get("barriers"))
+    blocks = _as_list(dev_map.get("blocks"))
+    helps = _as_list(dev_map.get("helps"))
+    target = str(profile.get("today_target") or profile.get("last_target") or "").lower()
+
+    if int(profile.get("return_count") or 0) > 0 or dev_map.get("return_points"):
+        code = "slip_recovery"
+        reason = "сейчас видно несколько сигналов возврата после паузы, поэтому мы проверим мягкий маршрут обратно"
+    elif profile.get("preferred_activation") == "body_doubling" or "body_doubling_plan" in successful:
+        code = "social_activity"
+        reason = "похоже, присутствие другого человека может снижать порог старта"
+    elif profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0) > 0:
+        code = "attention_holding"
+        reason = "сейчас видно, что внимание иногда уходит в автопилот, поэтому мы проверим короткий контейнер фокуса"
+    elif profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack" or any("самокрит" in str(x).lower() for x in barriers):
+        code = "self_criticism"
+        reason = "пока предполагаем, что самокритика после откладывания мешает старту"
+    elif int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in helps:
+        code = "self_regulation"
+        reason = "сейчас видно, что уменьшение шага помогает регулировать нагрузку"
+    elif any(x in target for x in ("работ", "проект", "код", "созвон", "учеб", "документ")):
+        code = "professional_activity"
+        reason = "мы проверим профессиональную активность через маленький рабочий шаг"
+    elif failed or blocks:
+        code = "task_initiation"
+        reason = "похоже, первый вход в задачу пока остаётся главным узким местом"
+    else:
+        code = "task_initiation"
+        reason = "данных пока мало, поэтому начнём с самого безопасного фокуса — запуск задач"
+    return {
+        "code": code,
+        "label": DEVELOPMENT_FOCUS_LABELS.get(code, code),
+        "reason": reason,
+    }
+
+
+def daily_profile_explanation(profile: Dict[str, Any], skill_id: str = "") -> str:
+    """Explain today's recommendation from accumulated profile without sounding diagnostic."""
+    profile = profile or {}
+    focus = determine_development_focus(profile)
+    dev_map = normalize_development_map(profile.get("development_map"))
+    lines = [
+        f"🧭 Сегодняшний фокус: {focus['label']}.",
+        f"Почему так: {focus['reason']}.",
+    ]
+    if int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in _as_list(dev_map.get("helps")):
+        lines.append("В прошлый раз маленький шаг помог тебе начать, поэтому сегодня начнём так же.")
+    if profile.get("best_skill") or profile.get("last_successful_skill"):
+        skill = label(SKILL_LABELS, profile.get("best_skill") or profile.get("last_successful_skill"), str(profile.get("best_skill") or profile.get("last_successful_skill")))
+        lines.append(f"Сейчас видно рабочий сигнал: раньше помогал формат «{skill}».")
+    if profile.get("failed_skill") or profile.get("failed_skills"):
+        lines.append("То, что не сработало раньше, мы не считаем провалом — это данные для настройки шага.")
+    if skill_id:
+        skill_label = label(SKILL_LABELS, skill_id, skill_id)
+        lines.append(f"Мы проверим навык «{skill_label}» как следующий маленький шаг маршрута.")
+    lines.append("Эта модель будет уточняться после твоих действий; данных может быть пока мало.")
+    return "\n".join(lines)
+
+def render_development_map(profile: Dict[str, Any]) -> str:
+    dev_map = normalize_development_map((profile or {}).get("development_map"))
+
+    def lines_from(items: Any, fallback: str, limit: int = 4) -> str:
+        values = [str(x) for x in _as_list(items) if x not in (None, "")]
+        if not values:
+            return f"— {fallback}"
+        return "\n".join(f"— {x}" for x in values[:limit])
+
+    hypotheses = _normalize_map_items(dev_map.get("hypotheses"))
+    if hypotheses:
+        hyp_lines = []
+        for item in hypotheses[:4]:
+            status = {"confirmed": "подтверждается", "weakened": "ослабла", "testing": "проверяем"}.get(item.get("status"), "проверяем")
+            hyp_lines.append(f"— {item['label']} ({status})")
+        hypotheses_text = "\n".join(hyp_lines)
+    else:
+        hypotheses_text = "— пока проверяем первые гипотезы"
+
+    return (
+        "🗺 Карта развития обновляется\n\n"
+        "Система уже уточняет карту по твоим действиям, а не только по диагностике.\n\n"
+        "Что начинает помогать:\n"
+        f"{lines_from(dev_map.get('helps'), 'данных пока мало')}\n\n"
+        "Что мешает / где застревание:\n"
+        f"{lines_from(dev_map.get('blocks'), 'пока собираем')}\n\n"
+        "Где происходит возврат:\n"
+        f"{lines_from(dev_map.get('return_points'), 'пока наблюдаем')}\n\n"
+        "Гипотезы карты:\n"
+        f"{hypotheses_text}\n\n"
+        "Чем больше реальных попыток, тем точнее становится карта."
+    )
+
+
+def _profile_items_text(items: Any, fallback: str = "пока собираем данные", *, limit: int = 5) -> str:
+    normalized = [str(x) for x in _as_list(items) if x not in (None, "")]
+    if not normalized:
+        return f"- {fallback}"
+    return "\n".join(f"- {x}" for x in normalized[:limit])
+
+
+def _profile_skill_labels(items: Any, fallback: str = "пока проверяем") -> str:
+    labels = []
+    mapping = globals().get("SKILL_LABELS", {})
+    for item in _as_list(items):
+        if item in (None, ""):
+            continue
+        raw = str(item)
+        labels.append(str(mapping.get(raw, raw)))
+    return _profile_items_text(labels, fallback)
+
+
+def build_profile_prompt(profile: Dict[str, Any]) -> str:
+    """Build the hidden working profile used for personalization.
+
+    This is intentionally stored as internal context, not as a user-facing text.
+    """
+    profile = profile or {}
+    barriers = _merge_unique_list(profile.get("barriers"), profile.get("failure_patterns"), limit=8)
+    working = _merge_unique_list(profile.get("working_strategies"), profile.get("resources"), limit=8)
+    bad = _merge_unique_list(profile.get("failed_skills"), profile.get("worst_skill"), limit=8)
+    good = _merge_unique_list(profile.get("successful_skills"), [profile.get("best_skill"), profile.get("last_successful_skill")], limit=8)
+
+    if int(profile.get("downscale_count") or 0) > 0 or profile.get("needs_downscale"):
+        working = _merge_unique_list(working, ["уменьшение шага", "минимальный вход"], limit=8)
+    if profile.get("preferred_activation") == "body_doubling":
+        good = _merge_unique_list(good, ["body_doubling_plan"], limit=8)
+        working = _merge_unique_list(working, ["внешний контроль / присутствие другого человека"], limit=8)
+    if int(profile.get("action_failed_count") or 0) > 0:
+        bad = _merge_unique_list(bad, [profile.get("failed_skill") or "слишком крупный первый шаг"], limit=8)
+
+    preferred_trainer = profile.get("preferred_trainer") or profile.get("trainer_current_mode") or ""
+    attention = profile.get("attention_profile") if isinstance(profile.get("attention_profile"), dict) else {}
+    motivation = profile.get("motivation_profile") if isinstance(profile.get("motivation_profile"), dict) else {}
+    emotional = profile.get("emotional_profile") if isinstance(profile.get("emotional_profile"), dict) else {}
+    notes = []
+    if attention:
+        notes.append(f"attention_profile={json.dumps(attention, ensure_ascii=False, sort_keys=True)}")
+    if motivation:
+        notes.append(f"motivation_profile={json.dumps(motivation, ensure_ascii=False, sort_keys=True)}")
+    if emotional:
+        notes.append(f"emotional_profile={json.dumps(emotional, ensure_ascii=False, sort_keys=True)}")
+
+    return (
+        "USER PROFILE\n\n"
+        "Главные барьеры:\n"
+        f"{_profile_items_text(barriers)}\n\n"
+        "Рабочие стратегии:\n"
+        f"{_profile_items_text(working)}\n\n"
+        "Плохо работают:\n"
+        f"{_profile_skill_labels(bad, 'пока нет подтверждённых неработающих навыков')}\n\n"
+        "Хорошо работают:\n"
+        f"{_profile_skill_labels(good, 'пока проверяем первые навыки')}\n\n"
+        "Предпочтительный стиль/тренер:\n"
+        f"- {preferred_trainer or 'пока не определён'}\n\n"
+        "Дополнительные сигналы:\n"
+        f"{_profile_items_text(notes, 'пока собираем данные')}"
+    )
+
+
+def default_user_profile(*, trainer_key: str = "") -> Dict[str, Any]:
+    """Create the V1 dynamic user profile skeleton.
+
+    The bot stores the profile in users.profile_json for backwards compatibility,
+    but the object itself follows the `user_profile` patch: strengths, barriers,
+    resources, failure patterns, working strategies and nested attention /
+    motivation / emotional / development stats.
+    """
+    now = _utc_iso()
+    return {
+        "schema_version": USER_PROFILE_SCHEMA_VERSION,
+        "status": "preliminary",
+        "strengths": [],
+        "barriers": [],
+        "resources": [],
+        "failure_patterns": [],
+        "working_strategies": [],
+        "attention_profile": {},
+        "motivation_profile": {},
+        "emotional_profile": {},
+        "preferred_trainer": trainer_key or "",
+        "successful_skills": [],
+        "failed_skills": [],
+        "development_stats": {},
+        "development_avatar": default_development_avatar(now),
+        "development_map": default_development_map(now),
+        "development_history": default_development_history(now),
+        "current_development_focus": "task_initiation",
+        "development_focus_reason": "данных пока мало, начинаем с запуска задач",
+        "safety_tone_policy": "working_model_not_precise_assessment",
+        "slip_principle": SLIP_AS_INFORMATION_PRINCIPLE,
+        "avatar_version": DEVELOPMENT_AVATAR_VERSION,
+        "profile_prompt": "",
+        "created_at": now,
+        "updated_at": now,
+        "update_log": [],
+    }
+
+
+def normalize_user_profile(raw: Any, *, trainer_key: str = "") -> Dict[str, Any]:
+    """Return a full V1 user profile while preserving legacy flat signals."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw else {}
+        except Exception:
+            raw = {}
+    profile = raw.copy() if isinstance(raw, dict) else {}
+    defaults = default_user_profile(trainer_key=trainer_key)
+    normalized = {**defaults, **profile}
+
+    for key in USER_PROFILE_LIST_FIELDS:
+        normalized[key] = _merge_unique_list([], normalized.get(key))
+    for key in USER_PROFILE_DICT_FIELDS:
+        normalized[key] = normalized.get(key) if isinstance(normalized.get(key), dict) else {}
+
+    normalized["development_avatar"] = normalize_development_avatar(normalized.get("development_avatar"))
+    normalized["development_map"] = normalize_development_map(normalized.get("development_map"))
+    normalized["development_history"] = normalize_development_history(normalized.get("development_history"))
+    normalized["schema_version"] = USER_PROFILE_SCHEMA_VERSION
+    normalized["avatar_version"] = int(normalized.get("avatar_version") or DEVELOPMENT_AVATAR_VERSION)
+    if not normalized.get("preferred_trainer") and trainer_key:
+        normalized["preferred_trainer"] = trainer_key
+    normalized["created_at"] = normalized.get("created_at") or defaults["created_at"]
+    normalized["updated_at"] = normalized.get("updated_at") or defaults["updated_at"]
+    normalized["update_log"] = _merge_unique_list([], normalized.get("update_log"), limit=30)
+    if not normalized.get("profile_prompt"):
+        normalized["profile_prompt"] = build_profile_prompt(normalized)
+    return normalized
+
+
+def merge_user_profile_patch(profile: Dict[str, Any], patch: dict, *, source: str = "profile_patch") -> Dict[str, Any]:
+    """Merge a profile patch without resetting accumulated model data."""
+    merged = normalize_user_profile(profile)
+    changed_fields: List[str] = []
+    for key, value in (patch or {}).items():
+        if value is None:
+            continue
+        if key in USER_PROFILE_LIST_FIELDS:
+            before = list(merged.get(key) or [])
+            merged[key] = _merge_unique_list(merged.get(key), value)
+            if merged[key] != before:
+                changed_fields.append(key)
+        elif key in USER_PROFILE_DICT_FIELDS:
+            incoming = value if isinstance(value, dict) else {}
+            before = dict(merged.get(key) or {})
+            merged[key] = {**before, **incoming}
+            if merged[key] != before:
+                changed_fields.append(key)
+        else:
+            if value == "" and merged.get(key):
+                continue
+            if merged.get(key) != value:
+                merged[key] = value
+                changed_fields.append(key)
+
+    focus = determine_development_focus(merged)
+    if merged.get("current_development_focus") != focus["code"]:
+        merged["current_development_focus"] = focus["code"]
+        changed_fields.append("current_development_focus")
+    if merged.get("development_focus_reason") != focus["reason"]:
+        merged["development_focus_reason"] = focus["reason"]
+        changed_fields.append("development_focus_reason")
+
+    merged["schema_version"] = USER_PROFILE_SCHEMA_VERSION
+    merged["updated_at"] = _utc_iso()
+    if changed_fields:
+        log_item = {
+            "source": source or "profile_patch",
+            "fields": changed_fields,
+            "created_at": merged["updated_at"],
+        }
+        merged["update_log"] = _merge_unique_list(merged.get("update_log"), [log_item], limit=30)
+        merged = append_development_history_snapshot(merged, source or "profile_patch", changed_fields)
+    merged["profile_prompt"] = build_profile_prompt(merged)
+    return merged
+
+
+
+def diagnosis_user_profile_patch(comp: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the first preliminary profile patch from diagnosis output."""
+    bucket = str(comp.get("bucket") or "mixed").strip()
+    mapping = {
+        "anxiety": {
+            "main_pattern": "anxiety_avoidance",
+            "avoidance_reason": "fear_of_bad_result",
+            "emotional_trigger": "shame_or_anxiety",
+            "barriers": ["страх ошибки или оценки", "тревога перед входом в задачу"],
+            "resources": ["бережный маленький шаг"],
+            "failure_patterns": ["избегание из-за страха плохого результата"],
+            "working_strategies": ["плохой черновик", "уменьшение шага"],
+            "emotional_profile": {"dominant_load": "shame_or_anxiety"},
+        },
+        "low_energy": {
+            "main_pattern": "start_avoidance",
+            "avoidance_reason": "low_energy",
+            "emotional_trigger": "fatigue_or_overload",
+            "barriers": ["низкий ресурс на старте", "перегруз"],
+            "resources": ["минимально жизнеспособный день"],
+            "failure_patterns": ["задача не запускается, когда требует много энергии"],
+            "working_strategies": ["сначала тело, потом задача", "минимальный вход"],
+            "motivation_profile": {"energy_gate": "low_start_energy"},
+            "emotional_profile": {"dominant_load": "fatigue_or_overload"},
+        },
+        "distractibility": {
+            "main_pattern": "start_avoidance",
+            "avoidance_reason": "unclear_first_step",
+            "emotional_trigger": "distraction_or_restlessness",
+            "barriers": ["неясный первый шаг", "отвлечения уводят от действия"],
+            "resources": ["видимый следующий шаг"],
+            "failure_patterns": ["уход в отвлечение до ясного старта"],
+            "working_strategies": ["одно окно", "сделать следующий шаг видимым"],
+            "attention_profile": {"risk": "scroll_autopilot_or_context_switching"},
+        },
+        "mixed": {
+            "main_pattern": "start_avoidance",
+            "avoidance_reason": "task_too_big",
+            "emotional_trigger": "shame_or_anxiety",
+            "barriers": ["первый шаг кажется слишком большим", "самокритика после откладывания"],
+            "resources": ["способность вернуться через маленький шаг"],
+            "failure_patterns": ["откладывание усиливается, когда задача выглядит большой"],
+            "working_strategies": ["открыть задачу без требования работать", "уменьшение шага"],
+            "attention_profile": {"start_gate": "unclear_or_large_first_step"},
+            "emotional_profile": {"dominant_load": "shame_or_anxiety"},
+        },
+    }
+    patch = dict(mapping.get(bucket, mapping["mixed"]))
+    skills_focus = comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else []
+    selected_skill = comp.get("selected_skill")
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    if not selected_skill:
+        selected_skill = analysis_result.get("recommended_variant")
+    if comp.get("useful_signal"):
+        patch["strengths"] = [str(comp.get("useful_signal"))]
+    patch["working_strategies"] = [
+        *patch.get("working_strategies", []),
+        *[str(x) for x in skills_focus[:3] if x],
+    ]
+    if selected_skill:
+        patch["working_strategies"].append(str(selected_skill))
+        patch["recommended_variant"] = str(selected_skill)
+    patch["status"] = "preliminary"
+    patch["recommended_track"] = "procrastination"
+    patch["development_stats"] = {
+        "diagnosis_completed": True,
+        "diagnosis_bucket": bucket,
+        "profile_confidence": "preliminary",
+    }
+    return patch
+
+
 # ============================================================
 # 4) DB: schema + CRUD
 # ============================================================
@@ -184,7 +1226,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "analysis_retry_count": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
         "last_offer_shown_at": None,
-        "profile_json": {},
+        "profile_json": default_user_profile(trainer_key="marsha"),
         "last_micro_habit_id": None,
         "last_micro_habit_date": None,
         "micro_habit_json": None,
@@ -477,20 +1519,12 @@ def label(mapping: dict, value: Optional[str], fallback: str) -> str:
 
 async def get_user_profile(user_id: int, db_path: str = "bot.db") -> dict:
     user = await get_user(user_id, db_path)
-    raw = user.get("profile_json") or "{}"
-    if isinstance(raw, dict):
-        return raw
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        return {}
+    return normalize_user_profile(user.get("profile_json") or "{}", trainer_key=str(user.get("trainer_key") or ""))
 
 
-async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db") -> dict:
+async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db", source: str = "profile_patch") -> dict:
     profile = await get_user_profile(user_id, db_path)
-    profile.update(patch or {})
-    profile["updated_at"] = datetime.utcnow().isoformat()
+    profile = merge_user_profile_patch(profile, patch or {}, source=source)
 
     profile_json = json.dumps(profile, ensure_ascii=False)
     async with aiosqlite.connect(db_path) as db:
@@ -517,10 +1551,14 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
         visible.append("внешний контакт может снижать порог старта")
     visible_text = "\n".join(f"— {item}" for item in visible[:5])
     note_block = f"\n\nЧто отметили после шага:\n“{note}”" if note else ""
+    dev_map = normalize_development_map(profile.get("development_map"))
+    learning_block = ""
+    if int(dev_map.get("behavior_events_count") or 0):
+        learning_block = "\n\n" + render_development_map(profile)
 
     return f"""🧭 Твоя предварительная карта
 
-Пока это не диагноз, а рабочая гипотеза.
+Пока это не медицинское заключение, а рабочая гипотеза.
 
 Что уже видно:
 {visible_text}
@@ -530,7 +1568,7 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
 
 Дальше проверим:
 — помогает ли тебе внешний контакт / body doubling
-— какой формат входа держится лучше"""
+— какой формат входа держится лучше{learning_block}"""
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
     """Применить геймификацию"""
