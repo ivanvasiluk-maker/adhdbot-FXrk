@@ -49,7 +49,9 @@ from skills import (
 from db import (
     USER_FIELDS, default_user, init_db, migrate_db, get_user, save_user, 
     log_event, gamify_apply, is_paid, EXTRA_USER_COLS,
-    get_user_profile, update_user_profile, render_short_user_map, label, SKILL_LABELS
+    get_user_profile, update_user_profile, render_short_user_map, label, SKILL_LABELS,
+    record_development_avatar_event, development_map_event_patch,
+    render_development_mirror_reports,
 )
 from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
@@ -453,7 +455,9 @@ async def record_profile_signal(user_id: int, stage: str, patch: Dict[str, Any],
     safe_patch = {k: v for k, v in patch.items() if v not in (None, "")}
     if not safe_patch:
         return
-    await update_user_profile(user_id, safe_patch, DB_PATH)
+    current_profile = await get_user_profile(user_id, DB_PATH)
+    map_patch = development_map_event_patch(current_profile, safe_patch, source)
+    await update_user_profile(user_id, {**safe_patch, **map_patch}, DB_PATH, source=source)
     event_meta = {"source": source, **safe_patch}
     await log_event(user_id, stage, "profile_signal_detected", event_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(user_id, stage, "profile_map_updated", event_meta, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -574,6 +578,34 @@ def working_map_profile_patch(comp: Dict[str, Any]) -> Dict[str, Any]:
         "failed_skills": [],
         "successful_skills": [],
     }
+
+
+def preliminary_development_map_from_analysis(comp: Dict[str, Any]) -> str:
+    """Build the preliminary development map shown after user confirms analysis."""
+    comp = comp if isinstance(comp, dict) else {}
+    assumptions: List[str] = []
+    main = _analysis_main_hypothesis(comp)
+    if main:
+        assumptions.append(main)
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    for item in analysis_result.get("evidence_signals") or []:
+        if item and len(assumptions) < 3:
+            assumptions.append(str(item))
+    if comp.get("avoidance_behavior") and len(assumptions) < 3:
+        assumptions.append(str(comp.get("avoidance_behavior")))
+
+    secondary_checks = _analysis_secondary_hypotheses(comp)
+    # Keep the required product checks visible even when AI produced custom checks.
+    required_checks = [
+        "помогает ли уменьшение шага",
+        "помогает ли плохой черновик",
+        "помогает ли присутствие других людей",
+    ]
+    checks = list(required_checks)
+    for item in secondary_checks:
+        if item not in checks:
+            checks.append(item)
+    return preliminary_development_map_text(assumptions, checks)
 
 
 def working_map_text(comp: Dict[str, Any], trainer_key: str) -> str:
@@ -1325,7 +1357,7 @@ def rebuild_current_skill(u: Dict[str, Any]) -> str:
     current_sid = current_skill_id(u) or (plan[max(0, min(len(plan) - 1, day - 1))] if plan else "open_only")
     current_skill = SKILLS_DB.get(current_sid, {})
     track = current_skill.get("track") or u.get("bucket") or "mixed"
-    new_sid = suggest_alternative_skill(track, current_sid) or current_sid
+    new_sid = suggest_alternative_skill(track, current_sid, u) or current_sid
     if new_sid == current_sid:
         alt = [k for k, v in SKILLS_DB.items() if v.get("track") == track and k != current_sid]
         if alt:
@@ -1423,7 +1455,7 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
     current_skill = SKILLS_DB.get(current_sid, {})
     track = current_skill.get("track") or u.get("bucket") or "mixed"
     candidates: List[str] = []
-    suggested = suggest_alternative_skill(track, current_sid)
+    suggested = suggest_alternative_skill(track, current_sid, u)
     if suggested:
         candidates.append(suggested)
     candidates.extend([sid for sid in CORE_LAUNCH_WEEK_SKILL_IDS if sid in SKILLS_DB])
@@ -1534,33 +1566,173 @@ async def show_route(m: Message, u: Dict[str, Any], source: str):
 
 
 def profile_patch_from_diagnosis(comp: Dict[str, Any]) -> Dict[str, Any]:
-    """Map diagnosis output to profile categories only (no free text)."""
+    """Map diagnosis output to the V1 dynamic user profile categories."""
     bucket = (comp.get("bucket") or "mixed").strip()
     mapping = {
         "anxiety": {
             "main_pattern": "anxiety_avoidance",
             "avoidance_reason": "fear_of_bad_result",
             "emotional_trigger": "shame_or_anxiety",
+            "barriers": ["страх ошибки или оценки", "тревога перед входом в задачу"],
+            "resources": ["бережный маленький шаг"],
+            "failure_patterns": ["избегание из-за страха плохого результата"],
+            "working_strategies": ["плохой черновик", "уменьшение шага"],
+            "emotional_profile": {"dominant_load": "shame_or_anxiety"},
         },
         "low_energy": {
             "main_pattern": "start_avoidance",
             "avoidance_reason": "low_energy",
             "emotional_trigger": "fatigue_or_overload",
+            "barriers": ["низкий ресурс на старте", "перегруз"],
+            "resources": ["минимально жизнеспособный день"],
+            "failure_patterns": ["задача не запускается, когда требует много энергии"],
+            "working_strategies": ["сначала тело, потом задача", "минимальный вход"],
+            "motivation_profile": {"energy_gate": "low_start_energy"},
+            "emotional_profile": {"dominant_load": "fatigue_or_overload"},
         },
         "distractibility": {
             "main_pattern": "start_avoidance",
             "avoidance_reason": "unclear_first_step",
             "emotional_trigger": "distraction_or_restlessness",
+            "barriers": ["неясный первый шаг", "отвлечения уводят от действия"],
+            "resources": ["видимый следующий шаг"],
+            "failure_patterns": ["уход в отвлечение до ясного старта"],
+            "working_strategies": ["одно окно", "сделать следующий шаг видимым"],
+            "attention_profile": {"risk": "scroll_autopilot_or_context_switching"},
         },
         "mixed": {
             "main_pattern": "start_avoidance",
             "avoidance_reason": "task_too_big",
             "emotional_trigger": "shame_or_anxiety",
+            "barriers": ["первый шаг кажется слишком большим", "самокритика после откладывания"],
+            "resources": ["способность вернуться через маленький шаг"],
+            "failure_patterns": ["откладывание усиливается, когда задача выглядит большой"],
+            "working_strategies": ["открыть задачу без требования работать", "уменьшение шага"],
+            "attention_profile": {"start_gate": "unclear_or_large_first_step"},
+            "emotional_profile": {"dominant_load": "shame_or_anxiety"},
         },
     }
     patch = dict(mapping.get(bucket, mapping["mixed"]))
-    patch["recommended_track"] = "procrastination"
+    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    selected_skill = comp.get("selected_skill") or analysis_result.get("recommended_variant")
+    skills_focus = comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else []
+    useful_signal = comp.get("useful_signal")
+
+    patch.update({
+        "status": "preliminary",
+        "recommended_track": "procrastination",
+        "strengths": [x for x in [useful_signal] if x],
+        "working_strategies": [*patch.get("working_strategies", []), *[str(x) for x in skills_focus[:3] if x]],
+        "development_stats": {
+            "diagnosis_completed": True,
+            "diagnosis_bucket": bucket,
+            "profile_confidence": "preliminary",
+        },
+    })
+    if selected_skill in SKILLS_DB:
+        patch["working_strategies"].append(SKILLS_DB[selected_skill].get("name") or selected_skill)
+        patch["recommended_variant"] = selected_skill
     return patch
+
+
+def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
+    points: List[str] = []
+    if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
+        points.append("легче заходишь через маленький шаг")
+    if (
+        profile.get("shame_signal")
+        or profile.get("emotional_trigger") == "shame_or_anxiety"
+        or profile.get("main_pattern") == "shame_self_attack"
+    ):
+        points.append("самокритика после откладывания заметно влияет на старт")
+    if (
+        profile.get("avoidance_reason") == "fear_of_bad_result"
+        or profile.get("main_pattern") == "anxiety_avoidance"
+    ):
+        points.append("страх ошибки или оценки выше среднего")
+    if int(summary.get("return_count") or profile.get("return_count") or 0) > 0:
+        points.append("возврат после срыва уже начал тренироваться")
+    if (
+        profile.get("preferred_activation") == "body_doubling"
+        or profile.get("best_skill") == "body_doubling_plan"
+    ):
+        points.append("присутствие другого человека может снижать порог старта")
+    if (
+        summary.get("attention_pattern") == "scroll_autopilot"
+        or int(summary.get("attention_escape_count") or 0) > 0
+    ):
+        points.append("отвлечения включаются как способ уйти от напряжения")
+    best_skill = (
+        summary.get("best_skill")
+        or profile.get("best_skill")
+        or profile.get("last_successful_skill")
+    )
+    if best_skill:
+        points.append(f"уже есть первый рабочий навык: {_skill_label(str(best_skill))}")
+
+    fallback = [
+        "легче заходишь через маленький шаг",
+        "самокритика после откладывания может усиливать ступор",
+        "страх оценки или ошибки пока остаётся важной гипотезой",
+    ]
+    for item in fallback:
+        if len(points) >= 3:
+            break
+        if item not in points:
+            points.append(item)
+    return points[:5]
+
+
+def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    visible_points = "\n".join(
+        f"✔ {item}" for item in _day3_offer_profile_points(summary, profile)
+    )
+    return (
+        "ТВОЙ ПРОФИЛЬ\n\n"
+        "Что уже видно:\n\n"
+        f"{visible_points}\n\n"
+        "Что будем делать дальше:\n\n"
+        "Неделя 1:\n"
+        "запуск задач\n\n"
+        "Неделя 2:\n"
+        "удержание внимания\n\n"
+        "Неделя 3:\n"
+        "самокритика\n\n"
+        "Неделя 4:\n"
+        "возврат после срыва\n\n"
+        "Стоимость:\n\n"
+        "14.98 €/месяц\n\n"
+        "Мы продаём не навыки.\n\n"
+        "Мы продаём развитие персональной модели,\n"
+        "которая становится точнее с каждым днём.\n\n"
+        "Каждый следующий день уточняет:\n"
+        "— какие навыки реально работают;\n"
+        "— какую сложность выдерживает твой мозг;\n"
+        "— каким маршрутом тебе легче возвращаться."
+    )
+
+
+def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    full_conclusion = day3_full_conclusion_text(
+        summary.get("start_pattern_text") or summary.get("main_pattern") or "рабочая гипотеза уточняется",
+        summary.get("avoidance_trigger") or "пока проверяем главный триггер",
+        summary.get("best_skills_text") or _profile_skill_list_text(profile, "successful_skills", "— пока проверяем первые навыки"),
+        _profile_skill_list_text(profile, "failed_skills", "— пока явных провалов навыков нет"),
+        summary.get("return_pattern") or "пока смотрим, как происходит возврат",
+        summary.get("behavior_records_text", ""),
+    )
+    primary_map = day3_primary_map_text(
+        summary["start_pattern_text"],
+        summary["avoidance_trigger"],
+        summary["best_skills_text"],
+        summary["downscale_pattern"],
+        summary["preferred_activation"],
+        summary["return_pattern"],
+        summary.get("system_day_signals", ""),
+        summary.get("behavior_records_text", ""),
+    )
+    personal_offer = day3_personal_offer_text(summary, profile)
+    return f"{personal_offer}\n\n{full_conclusion}\n\n{primary_map}"
 
 
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
@@ -1646,16 +1818,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     await answer_with_keyboard(
         m,
         u,
-        day3_primary_map_text(
-            summary["start_pattern_text"],
-            summary["avoidance_trigger"],
-            summary["best_skills_text"],
-            summary["downscale_pattern"],
-            summary["preferred_activation"],
-            summary["return_pattern"],
-            summary.get("system_day_signals", ""),
-            summary.get("behavior_records_text", ""),
-        ),
+        day3_conclusion_and_map_text(summary, profile),
         kb_pay_choice,
         "pay_choice",
     )
@@ -2004,6 +2167,12 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         await send_progress_report(m, u, DB_PATH)
         return True
 
+    if command == "/mirror":
+        profile = await get_user_profile(uid, DB_PATH)
+        await log_event(uid, u.get("stage", ""), "development_mirror_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(render_development_mirror_reports(profile))
+        return True
+
     if command == "/settings":
         await log_event(uid, u.get("stage", ""), "settings_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(settings_text(int(u.get("notifications_enabled") if u.get("notifications_enabled") is not None else 1), u.get("timezone") or "Europe/Vilnius"))
@@ -2158,7 +2327,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"last_offer_shown_at: {u.get('last_offer_shown_at')}\n"
             f"last_active: {u.get('last_active')}\n"
             f"profile_json_present: {str(bool(u.get('profile_json'))).lower()}\n"
-            f"profile_json: {u.get('profile_json')}"
+            "profile_json: <hidden; contains internal profile_prompt>"
         )
         return True
 
@@ -2509,6 +2678,7 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
         **_today_profile_counter_patch(profile, "downscale_count_today", "downscale_count_date"),
     }
     await record_profile_signal(u["user_id"], "training", signal_patch, source=f"downscale_{reason}")
+    await record_development_avatar_event(u["user_id"], "downscale", DB_PATH, {"reason": reason, "skill_id": skill_id})
     await log_event(
         u["user_id"],
         "training",
@@ -2761,6 +2931,7 @@ async def main_flow(m: Message):
                 "failed_reason_count": failed_count,
                 **_today_profile_counter_patch(profile, "failed_reason_count_today", "failed_reason_count_date"),
             }, source="action_failed")
+            await record_development_avatar_event(u["user_id"], "slip_recorded", DB_PATH, {"skill_id": sid})
             await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
             await log_engine_events(u, screen)
             await answer_with_keyboard(m, u, screen["text"], kb_failed, "failed")
@@ -2845,6 +3016,7 @@ async def main_flow(m: Message):
                     "next_skill_hint": "task_naming",
                     "downscale_count": downscale_count,
                 }, source="downscale_even_too_hard")
+                await record_development_avatar_event(u["user_id"], "downscale", DB_PATH, {"reason": "even_open_too_hard", "skill_id": DOWNSCALE_FALLBACK_SKILL})
                 await m.answer(trainer_failed_response(u.get("trainer_key") or "marsha"))
                 await answer_with_keyboard(
                     m,
@@ -2887,6 +3059,7 @@ async def main_flow(m: Message):
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                 }, source="downscale_done")
+                await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "after_downscale": True, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
                 await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
@@ -2912,6 +3085,7 @@ async def main_flow(m: Message):
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                 }, source="downscale_done")
+                await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "after_downscale": True, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
                 await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
@@ -2966,8 +3140,9 @@ async def main_flow(m: Message):
             effect_patch["effect_anxiety_down"] = True
         if "clarity_up" in effect_tags:
             effect_patch["effect_clarity"] = True
-        await update_user_profile(u["user_id"], effect_patch, DB_PATH)
-        await record_working_map_skill_result(u["user_id"], "successful_skills", current_skill_id(u))
+        sid = current_skill_id(u)
+        await record_profile_signal(u["user_id"], "training", {**effect_patch, "best_skill": sid, "last_successful_skill": sid}, source="after_action_note_saved")
+        await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
         await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note), "effect_tags": effect_tags}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_keyboard(m, u, after_action_note_saved_text(u.get("trainer_key") or "marsha"), kb_done, "done")
         return
@@ -3394,7 +3569,8 @@ async def main_flow(m: Message):
             except Exception:
                 comp = {}
             comp = comp if isinstance(comp, dict) else {}
-            await update_user_profile(u["user_id"], working_map_profile_patch(comp), DB_PATH)
+            updated_profile = await update_user_profile(u["user_id"], working_map_profile_patch(comp), DB_PATH, source="working_map_confirmed")
+            u["profile_json"] = updated_profile
             u["stage"] = "working_map"
             u["day"] = 1
             ensure_first_start_date(u)
@@ -3402,7 +3578,7 @@ async def main_flow(m: Message):
             await answer_with_keyboard(
                 m,
                 u,
-                working_map_text(comp, u.get("trainer_key") or "marsha"),
+                preliminary_development_map_from_analysis(comp),
                 kb_working_map,
                 "working_map",
             )
@@ -3633,7 +3809,7 @@ async def main_flow(m: Message):
             return
 
         if text == "📚 Что это значит" or "что это значит" in low:
-            await m.answer("Это не диагноз, а рабочая гипотеза по твоим действиям. Сейчас активен только модуль прокрастинации и запуска; остальные направления — будущие.")
+            await m.answer("Это не медицинское заключение, а рабочая гипотеза по твоим действиям. Сейчас активен только модуль прокрастинации и запуска; остальные направления — будущие.")
             return
 
         if text == "⬅️ Назад" or low == "назад":
@@ -3688,6 +3864,7 @@ async def main_flow(m: Message):
                 "preferred_activation": preferred_activation,
                 "action_done_count": done_count,
             }, source="action_done")
+            await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
             await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
             await log_engine_events(u, screen)
             if should_show_day3_offer(u, day):
@@ -3712,6 +3889,7 @@ async def main_flow(m: Message):
                 "return_count": int(u.get("return_count") or 0),
                 **_today_profile_counter_patch(profile, "return_count_today", "return_count_date"),
             }, source="return_after_slip")
+            await record_development_avatar_event(u["user_id"], "return_after_slip", DB_PATH, {"return_count": int(u.get("return_count") or 0)})
             await log_engine_events(u, screen)
             await m.answer(trainer_say(u.get("trainer_key") or "marsha", screen["text"]))
             try:
@@ -3928,7 +4106,7 @@ async def main_flow(m: Message):
                 "где ломается внимание,\n"
                 "и как выстроить систему,\n"
                 "в которую мозгу легче возвращаться.\n\n"
-                "Цена: €14.98 за 30 дней."
+                "Цена: 14.98 €/месяц."
             )
             if pay_url:
                 await m.answer(f"{payment_intro}\n\nНажми кнопку ниже для оплаты.")
@@ -3979,16 +4157,7 @@ async def main_flow(m: Message):
             await answer_with_keyboard(
                 m,
                 u,
-                day3_primary_map_text(
-                    summary["start_pattern_text"],
-                    summary["avoidance_trigger"],
-                    summary["best_skills_text"],
-                    summary["downscale_pattern"],
-                    summary["preferred_activation"],
-                    summary["return_pattern"],
-                    summary.get("system_day_signals", ""),
-                    summary.get("behavior_records_text", ""),
-                ),
+                day3_conclusion_and_map_text(summary, profile),
                 kb_pay_choice,
                 "pay_choice",
             )
@@ -4014,12 +4183,24 @@ async def on_callbacks(c: CallbackQuery):
         return
     if u.get("stage") == "confirm_analysis":
         if c.data == "yes":
-            u["stage"] = "waiting_next_day"
+            try:
+                comp = json.loads(u.get("analysis_json") or "{}")
+            except Exception:
+                comp = {}
+            comp = comp if isinstance(comp, dict) else {}
+            updated_profile = await update_user_profile(u["user_id"], working_map_profile_patch(comp), DB_PATH, source="working_map_confirmed")
+            u["profile_json"] = updated_profile
+            u["stage"] = "working_map"
             u["day"] = 1
             ensure_first_start_date(u)
             await save_user(u, DB_PATH)
-            # Показываем первый календарный навык сразу после онбординга (через callback)
-            await start_day(m=c.message, u=u, day=calendar_program_day(u), db_path=DB_PATH, sheets_webhook=SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(
+                c.message,
+                u,
+                preliminary_development_map_from_analysis(comp),
+                kb_working_map,
+                "working_map",
+            )
         else:
             u["stage"] = "await_problem_text"
             await save_user(u, DB_PATH)
@@ -4087,7 +4268,8 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     diagnosis_profile_patch = {**profile_patch_from_diagnosis(comp), **live_analysis_profile_patch(str(comp.get("live_pattern") or ""))}
-    await update_user_profile(u["user_id"], diagnosis_profile_patch, DB_PATH)
+    updated_profile = await update_user_profile(u["user_id"], diagnosis_profile_patch, DB_PATH, source="initial_map")
+    u["profile_json"] = updated_profile
     await log_event(
         u["user_id"],
         "analysis",
@@ -4107,7 +4289,12 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await log_event(u["user_id"], "analysis", "recommended_track_shown", {"recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     comp_for_message = dict(comp)
-    msg = f"{format_comprehensive_analysis(comp_for_message, trainer_key=u.get('trainer_key', 'marsha'))}\n\nЭто похоже на тебя?"
+    preliminary_conclusion = preliminary_diagnosis_conclusion_text(
+        comp_for_message.get("specific_pattern") or comp_for_message.get("live_pattern") or "",
+        comp_for_message.get("useful_signal") or "",
+        comp_for_message.get("skills_focus") if isinstance(comp_for_message.get("skills_focus"), list) else [],
+    )
+    msg = f"{preliminary_conclusion}\n\n{format_comprehensive_analysis(comp_for_message, trainer_key=u.get('trainer_key', 'marsha'))}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 
 # ============================================================

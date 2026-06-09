@@ -140,7 +140,7 @@ def get_current_plan(u: dict) -> list:
         except Exception:
             continue
 
-    return safe_base
+    return adapt_plan_to_profile(safe_base, u)
 # ============================================================
 # SKILLS.PY — Все навыки, планы и функции
 # ============================================================
@@ -1006,7 +1006,7 @@ CORE_BASE_SKILLS = {
         "why_long": "Телефон даёт быстрый стимул и перехватывает старт. Физическая дистанция снижает автоматизм и даёт окну входа шанс начаться.",
         "if_boring_response": "Да. Три минуты без телефона — это тренировка среды, не характера.",
         "if_hard_response": "Не убирай далеко. Просто переверни экраном вниз на 60 секунд.",
-        "if_skeptic_response": "Мы не запрещаем телефон навсегда. Мы создаём короткий коридор для входа.",
+        "if_skeptic_response": "Мы не запрещаем телефон на всю жизнь. Мы создаём короткий коридор для входа.",
         "if_failed_response": "Ок. Тогда только переверни телефон экраном вниз.",
         "if_dont_understand_response": "Нужно убрать самый быстрый отвлекающий стимул на 3 минуты.",
         "coach_feedback": "Среда стала тише. Теперь входу легче конкурировать.",
@@ -1111,7 +1111,7 @@ CORE_BASE_SKILLS = {
         "why_long": "В distress tolerance важно пережить пик без автоматического действия. Даже 60 секунд создают зазор между импульсом и выбором.",
         "if_boring_response": "Да. Это тренировка паузы, не драматичный инсайт.",
         "if_hard_response": "Сократи до 10 секунд. Просто назови импульс.",
-        "if_skeptic_response": "Мы не запрещаем отвлечение навсегда. Мы тренируем одну паузу перед ним.",
+        "if_skeptic_response": "Мы не запрещаем отвлечение на всю жизнь. Мы тренируем одну паузу перед ним.",
         "if_failed_response": "Если ушёл — вернись и назови: «это был импульс». Уже данные.",
         "if_dont_understand_response": "Не борись с желанием. Наблюдай 60 секунд, не выполняя его.",
         "coach_feedback": "Пауза появилась. Это уже контроль над автоматизмом.",
@@ -1295,12 +1295,88 @@ def generate_month_map(track: str) -> str:
         text += "\n"
     return text
 
+PROFILE_PROMOTED_SMALL_STEP_SKILLS = ["open_only", "task_naming", "visible_next_step", "ninety_sec_start"]
+PROFILE_ATTENTION_SKILLS = ["one_tab_focus", "phone_far_3min", "visible_next_step", "urge_surf_60"]
+PROFILE_BODY_DOUBLING_SKILLS = ["body_doubling_plan"]
+PROFILE_LONG_OR_TIMER_SKILLS = ["ninety_sec_start", "urge_surf_60"]
+
+
+def _profile_from_user_state(u: dict) -> dict:
+    raw = (u or {}).get("profile_json") or (u or {}).get("profile") or {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _move_skills_to_front(plan: list, skill_ids: list) -> list:
+    front = [sid for sid in skill_ids if sid in plan and sid in SKILLS_DB]
+    rest = [sid for sid in plan if sid not in front]
+    return front + rest
+
+
+def _move_skills_to_back(plan: list, skill_ids: list) -> list:
+    back_set = {sid for sid in skill_ids if sid in SKILLS_DB}
+    front = [sid for sid in plan if sid not in back_set]
+    back = [sid for sid in plan if sid in back_set]
+    return front + back
+
+
+def adapt_plan_to_profile(plan: list, u_or_profile: dict) -> list:
+    """Personalize plan order from the hidden profile prompt signals.
+
+    The user never sees `profile_prompt`; it quietly biases skill choice away from
+    failed formats and toward strategies that already worked.
+    """
+    safe_plan = [sid for sid in (plan or []) if sid in SKILLS_DB]
+    if not safe_plan:
+        return safe_plan
+
+    profile = _profile_from_user_state(u_or_profile)
+    if not profile and isinstance(u_or_profile, dict) and ("profile_prompt" in u_or_profile or "successful_skills" in u_or_profile):
+        profile = u_or_profile
+    if not profile:
+        return safe_plan
+
+    successful = [str(x) for x in profile.get("successful_skills") or [] if x in SKILLS_DB]
+    failed = [str(x) for x in profile.get("failed_skills") or [] if x in SKILLS_DB]
+    best = [str(x) for x in (profile.get("best_skill"), profile.get("last_successful_skill"), profile.get("recommended_variant")) if x in SKILLS_DB]
+    worst = [str(x) for x in (profile.get("worst_skill"), profile.get("failed_skill")) if x in SKILLS_DB]
+
+    adapted = list(safe_plan)
+    # If smaller steps worked or failures show the entry is too big, bias toward low-friction starts.
+    if int(profile.get("downscale_count") or 0) > 0 or profile.get("needs_downscale") or profile.get("downscale_pattern"):
+        adapted = _move_skills_to_front(adapted, PROFILE_PROMOTED_SMALL_STEP_SKILLS)
+        adapted = _move_skills_to_back(adapted, PROFILE_LONG_OR_TIMER_SKILLS)
+
+    # If body doubling worked, keep it visible earlier in the route.
+    if profile.get("preferred_activation") == "body_doubling" or "body_doubling_plan" in successful:
+        adapted = _move_skills_to_front(adapted, PROFILE_BODY_DOUBLING_SKILLS)
+
+    # Attention escape signals bias toward attention container skills.
+    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0) > 0:
+        adapted = _move_skills_to_front(adapted, PROFILE_ATTENTION_SKILLS)
+
+    adapted = _move_skills_to_front(adapted, [*best, *successful])
+    # Do not remove failed skills forever; just postpone them unless they also succeeded later.
+    adapted = _move_skills_to_back(adapted, [sid for sid in [*worst, *failed] if sid not in successful and sid not in best])
+    return adapted
+
+
 # PATCH 4 — Override после кризиса (замена навыка)
-def suggest_alternative_skill(track: str, current_skill: str):
+def suggest_alternative_skill(track: str, current_skill: str, profile: dict | None = None):
     alternatives = [k for k, v in SKILLS_DB.items() if v["track"] == track and k != current_skill]
     if not alternatives:
         return None
-    return alternatives[0]
+    if profile:
+        alternatives = adapt_plan_to_profile(alternatives, profile)
+        alternatives = [sid for sid in alternatives if sid != current_skill]
+    return alternatives[0] if alternatives else None
 
 # PATCH 5 — Улучшенная подача навыков по стилю
 def format_skill(skill_id: str, trainer_key: str):

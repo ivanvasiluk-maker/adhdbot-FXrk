@@ -1,10 +1,20 @@
 import asyncio
 import os
+import sys
 import tempfile
 import types
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import bot
-from db import init_db, migrate_db, get_user, save_user, get_user_profile
+from db import (
+    init_db, migrate_db, get_user, save_user, get_user_profile,
+    render_development_mirror_report, render_development_mirror_reports,
+    daily_profile_explanation, determine_development_focus,
+)
 
 
 class DummyMessage:
@@ -70,14 +80,76 @@ async def run():
         print("[SMOKE] perfectionism main_pattern:", p1.get("main_pattern"))
         print("[SMOKE] failed main_pattern:", p2.get("main_pattern"))
         print("[SMOKE] done best_skill:", p3.get("best_skill"))
+        avatar = p3.get("development_avatar") or {}
+        metrics = avatar.get("metrics") or {}
+        task_start = metrics.get("task_initiation") or {}
+        prompt = p3.get("profile_prompt") or ""
+        dev_map = p3.get("development_map") or {}
         print("[SMOKE] done action_done_count:", p3.get("action_done_count"))
+        print("[SMOKE] avatar task_initiation:", task_start.get("value"))
+        print("[SMOKE] profile_prompt_present:", bool(prompt))
+        print("[SMOKE] development_map_events:", dev_map.get("behavior_events_count"))
+        history = p3.get("development_history") or {}
+        daily_explanation = daily_profile_explanation(p3, "open_only")
+        focus = determine_development_focus(p3)
+        mirror_month = render_development_mirror_report(p3, period_days=30)
+        old_snapshot = dict((history.get("snapshots") or [{}])[-1])
+        old_snapshot["created_at"] = "2026-01-01T00:00:00+00:00"
+        old_snapshot["barriers"] = ["раньше старт задачи почти всегда застревал"]
+        old_metrics = dict(old_snapshot.get("avatar_metrics") or {})
+        old_metrics["task_initiation"] = 20
+        old_snapshot["avatar_metrics"] = old_metrics
+        profile_with_old_history = {
+            **p3,
+            "development_history": {
+                **history,
+                "snapshots": [old_snapshot, *(history.get("snapshots") or [])],
+            },
+        }
+        mirror_90 = render_development_mirror_report(profile_with_old_history, period_days=90)
+        mirror_all = render_development_mirror_reports(profile_with_old_history)
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
+        print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
+        print("[SMOKE] daily_focus:", focus.get("code"))
         has_adaptive_payment = any("€14.98" in t and "Продолжить" in t for t in kb_texts)
         has_primary_map = "🧭 Первичная карта" in offer_text
+        has_day3_conclusion = "📌 ПОЛНОЕ ЗАКЛЮЧЕНИЕ ПОСЛЕ 3 ДНЕЙ" in offer_text
+        has_personal_offer = "ТВОЙ ПРОФИЛЬ" in offer_text and "14.98 €/месяц" in offer_text
+        has_model_value = "Мы продаём не навыки" in offer_text and "персональной модели" in offer_text
+        has_selling_specifics = "какие навыки реально работают" in offer_text and "какую сложность выдерживает" in offer_text
+        assert int(task_start.get("value") or 0) > 20, avatar
+        assert prompt.startswith("USER PROFILE"), prompt
+        assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map
+        assert dev_map.get("helps"), dev_map
+        assert len(history.get("snapshots") or []) >= 1, history
+        assert "🪞 Зеркало развития — месячный отчёт" in mirror_month, mirror_month
+        assert "Кем ты был(а) раньше" in mirror_month, mirror_month
+        assert "Какие стратегии сработали" in mirror_month, mirror_month
+        assert "Главные направления роста" in mirror_month, mirror_month
+        assert "отчёт за 90 дней" in mirror_all and "отчёт за 180 дней" in mirror_all, mirror_all
+        assert "Сравнение с состоянием около 2026-01-01" in mirror_90, mirror_90
+        assert "раньше старт задачи" in mirror_90, mirror_90
+        assert focus.get("code") in {"task_initiation", "attention_holding", "self_regulation", "self_criticism", "slip_recovery", "social_activity", "professional_activity"}, focus
+        assert "Сегодняшний фокус" in daily_explanation, daily_explanation
+        assert "Мы проверим навык" in daily_explanation, daily_explanation
+        assert "эта модель будет уточняться" in daily_explanation.lower(), daily_explanation
+        assert "точный показатель" not in daily_explanation.lower(), daily_explanation
+        assert "USER PROFILE" not in offer_text, offer_text
         assert has_adaptive_payment, kb_texts
         assert has_primary_map, offer_text
+        assert has_day3_conclusion, offer_text
+        assert has_personal_offer, offer_text
+        assert has_model_value, offer_text
+        assert has_selling_specifics, offer_text
         print("[SMOKE] offer has adaptive payment button:", has_adaptive_payment)
         print("[SMOKE] offer contains primary map title:", has_primary_map)
+        print("[SMOKE] offer contains day3 conclusion:", has_day3_conclusion)
+        print("[SMOKE] offer contains personal profile:", has_personal_offer)
+        print("[SMOKE] offer contains model value:", has_model_value)
+        print("[SMOKE] offer contains selling specifics:", has_selling_specifics)
+        print("[SMOKE] mirror monthly report present:", "месячный отчёт" in mirror_month)
+        print("[SMOKE] mirror long reports present:", "отчёт за 180 дней" in mirror_all)
+        print("[SMOKE] daily explanation personalized:", "Сегодняшний фокус" in daily_explanation)
         print("[SMOKE] payment url month set:", bool(bot.PAYMENT_URL_MONTH_1498))
         print("[SMOKE] OK")
 
