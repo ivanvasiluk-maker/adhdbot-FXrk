@@ -120,6 +120,16 @@ def keyboard_button_count(reply_markup) -> int:
 # Crisis limit for non-paid users
 CRISIS_LIMIT = 3
 
+MENTAL_HEALTH_BOUNDARY_NOTE = (
+    "Я могу дать только навык самопомощи и не заменяю психолога, врача или экстренную службу."
+)
+
+CRISIS_SAFETY_NOTE = (
+    "Если есть риск причинить вред себе или кому-то, угроза насилия, потеря контроля "
+    "или состояние резко ухудшается — пожалуйста, обратись за срочной живой помощью: "
+    "позвони в местный экстренный номер или напиши/позвони близкому человеку рядом."
+)
+
 # Praise phrases per trainer
 PRAISE = {
     "skinny": "Сделал. Факт есть. Это тренировка.",
@@ -1050,7 +1060,13 @@ kb_crisis_mode = ReplyKeyboardMarkup(
 
 
 def crisis_entry_text() -> str:
-    return "Что удобнее?\n\n🎙 Голосом\n✍️ Текстом"
+    return (
+        "Что удобнее?\n\n"
+        "🎙 Голосом\n"
+        "✍️ Текстом\n\n"
+        f"{MENTAL_HEALTH_BOUNDARY_NOTE}\n"
+        f"{CRISIS_SAFETY_NOTE}"
+    )
 
 
 kb_crisis_stabilize = ReplyKeyboardMarkup(
@@ -1101,8 +1117,12 @@ def crisis_tool_prompt_text() -> str:
 
 def crisis_tool_limit_text() -> str:
     return (
-        "Сегодня лимит быстрых кризисных подборов использован.\n\n"
-        "Используй основной навык дня или дождись завтра."
+        "Сегодня лимит быстрых подборов использован.\n\n"
+        "Но стабилизационный минимум остаётся доступен:\n"
+        "1. Стопы на пол.\n"
+        "2. Один длинный выдох.\n"
+        "3. Напиши живому человеку или вернись к основному навыку дня.\n\n"
+        f"{CRISIS_SAFETY_NOTE}"
     )
 
 
@@ -1245,17 +1265,19 @@ def crisis_stabilize_text() -> str:
         "1. Ноги на пол.\n"
         "2. Один длинный выдох.\n"
         "3. Одна фраза: что происходит?\n\n"
-        "Потом подберём следующий шаг."
+        f"{MENTAL_HEALTH_BOUNDARY_NOTE}\n"
+        f"{CRISIS_SAFETY_NOTE}\n\n"
+        "Если непосредственной опасности нет — потом подберём следующий шаг."
     )
 
 
 def crisis_still_bad_text() -> str:
     return (
         "Ок. Тогда задача не продуктивность.\n"
-        "Задача — стабилизация.\n\n"
+        "Задача — стабилизация и живая поддержка.\n\n"
         "Сделай одну вещь:\n"
         "вода / сесть / открыть окно / написать живому человеку.\n\n"
-        "Если есть риск причинить вред себе или кому-то — обратись за срочной живой помощью."
+        f"{CRISIS_SAFETY_NOTE}"
     )
 
 # Keyboard shown after user requests more details — allows asking for clarification
