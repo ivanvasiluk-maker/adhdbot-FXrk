@@ -206,7 +206,6 @@ NO_SUCCESS_ACTIONS = {"SKIP", "CHANGE_SKILL", "EASIER", "MORE_INFO", "NOT_UNDERS
 
 ACTION_RELATED_STAGES = {
     "training",
-    "await_training_target",
     "action_clarification",
     "downscale_action",
     "downscale_name_task",
@@ -2133,11 +2132,14 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str):
     await log_event(u["user_id"], u.get("stage", ""), "test_cheat_activated", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
     await m.answer(
         "Тестовый чит включён для этого пользователя.\n\n"
-        "Календарные переходы, новый день и ручной offer всё равно доступны только ADMIN.\n\n"
         "Доступно:\n"
+        "/force_next_day — перейти на следующий день\n"
+        "/set_day 3 — прыгнуть на день 3\n"
+        "/show_offer — показать offer вручную\n"
         "/debug_user\n"
         "/reset_me\n"
-        "/testmode_off"
+        "/testmode_off\n\n"
+        "Админские команды оплаты, статистики и синка по-прежнему закрыты."
     )
 
 
@@ -2212,10 +2214,23 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     }
     if command not in admin_commands:
         return False
-    test_user_commands = {"/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health"}
-    if not is_admin(uid):
-        if not (int(u.get("is_test_user") or 0) == 1 and command in test_user_commands):
-            await m.answer("Команда недоступна.")
+    # Keep destructive/admin operations locked, but allow day-jump QA helpers
+    # for explicit test users and for deployments started with TEST_MODE=1.
+    test_user_commands = {
+        "/debug_user", "/reset_me", "/testmode_off", "/whoami", "/health",
+        "/set_day", "/force_next_day", "/show_offer",
+    }
+    test_mode_commands = test_user_commands | {"/testmode_on"}
+    is_admin_user = is_admin(uid)
+    is_explicit_test_user = int(u.get("is_test_user") or 0) == 1
+    if not is_admin_user:
+        allowed_for_test_user = is_explicit_test_user and command in test_user_commands
+        allowed_in_global_test_mode = TEST_MODE and command in test_mode_commands
+        if not (allowed_for_test_user or allowed_in_global_test_mode):
+            if command in {"/testmode_on", "/set_day", "/force_next_day", "/show_offer"}:
+                await m.answer("Команда доступна админу или тест-пользователю. Включи тест-доступ: /test_access <код>.")
+            else:
+                await m.answer("Команда недоступна.")
             return True
 
     if command == "/testmode_on":
@@ -2274,10 +2289,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
 
     if command == "/show_offer":
-        if not is_admin(uid):
-            await m.answer("Команда недоступна.")
-            return True
-        await log_event(uid, u.get("stage", ""), "admin_show_offer", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, u.get("stage", ""), "admin_show_offer", {"test_user": int(u.get("is_test_user") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
         await show_day3_offer(m, u, "manual_test")
         return True
 
@@ -2857,6 +2869,18 @@ async def main_flow(m: Message):
         if user_is_in_action_loop(u):
             await record_working_map_skill_result(u["user_id"], "failed_skills", current_skill_id(u))
         await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
+        return
+
+    # Pre-skill target prompt: "Пропустить" here means "no specific task",
+    # not an action-loop skip/failure. Keep it before action-loop skip handling.
+    if u.get("stage") == "await_training_target":
+        screen = engine_get_next_screen(u, {"type": "target_submitted", "text": text})
+        apply_engine_updates(u, screen)
+        await save_user(u, DB_PATH)
+        await log_engine_events(u, screen)
+        await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+        await maybe_show_micro_habit(m, u, "day_start")
+        await m.answer(gamify_status_line(u))
         return
 
     # Action-loop clarification/downscale: не запускаем повторную карту после старта тренировки
@@ -3747,17 +3771,6 @@ async def main_flow(m: Message):
             f"Чтобы пройти тест, выбери вариант кнопкой ниже 👇\n\n❓ Вопрос {next_q_num}/5:\n\n{next_q['text']}",
             reply_markup=create_test_question_keyboard(next_q_num),
         )
-        return
-
-    # Вопрос перед выдачей навыка
-    if u.get("stage") == "await_training_target":
-        screen = engine_get_next_screen(u, {"type": "target_submitted", "text": text})
-        apply_engine_updates(u, screen)
-        await save_user(u, DB_PATH)
-        await log_engine_events(u, screen)
-        await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
-        await maybe_show_micro_habit(m, u, "day_start")
-        await m.answer(gamify_status_line(u))
         return
 
     # TRAINING stage
