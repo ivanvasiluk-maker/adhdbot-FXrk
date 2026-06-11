@@ -48,7 +48,7 @@ TEST_CHEAT_CODE=SKILLER_TEST_1498
 Notes:
 - Leave `OPENAI_API_KEY` empty to run without AI features.
 - Set `TEST_MODE=1` to skip paywalls and unlock full flow during testing.
-- Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables limited per-user QA helpers. Day jumps and manual offer commands stay ADMIN-only.
+- Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables per-user QA helpers, including `/force_next_day`, `/set_day 3`, and `/show_offer`. Destructive/admin operations such as payment marking, stats, and Sheets sync stay ADMIN-only.
 - `DB_PATH` points to the SQLite file; it is auto-created/migrated on start.
 
 ## Docker
