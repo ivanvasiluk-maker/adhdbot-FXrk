@@ -147,7 +147,7 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
     question = (
         "Перед стартом: что ты прокрастинируешь сегодня?\n"
         "Одна задача/дело, на котором потренируемся.\n"
-        "Напиши коротко или нажми 'Пропустить'."
+        "Напиши коротко, пришли голосовое или нажми 'Пропустить'."
     )
     skip_kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Пропустить")]],
@@ -266,7 +266,7 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
     await m.answer(
         "Перед стартом: что ты прокрастинируешь сегодня?\n"
         "Одна задача/дело, на котором потренируемся.\n"
-        "Напиши коротко или нажми 'Пропустить'.",
+        "Напиши коротко, пришли голосовое или нажми 'Пропустить'.",
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="Пропустить")]],
             resize_keyboard=True
@@ -291,9 +291,8 @@ async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheet
     u["crisis_count"] = int(u.get("crisis_count") or 0) + 1
     await save_user(u, db_path)
 
-    if not is_paid(u) and int(u.get("crisis_count") or 0) > CRISIS_LIMIT:
-        await m.answer("🆘 Кризис — доступен без ограничений в полной версии.")
-        return
+    # Stabilization should never be blocked by monetization.
+    # Limits may apply only to repeated skill matching, not to safety guidance.
 
     await log_event(u["user_id"], u.get("stage", ""), "crisis_message", {"len": len(user_text or "")}, db_path, sheets_webhook)
     gamify_apply(u, 1, "crisis_used")
@@ -322,10 +321,11 @@ async def ai_crisis_help(trainer_key: str, bucket: str, user_text: str, client=N
     allowed_ids = list(SKILLS_DB.keys())
     skill_catalog = [f"{sid}: {SKILLS_DB[sid].get('name','')}" for sid in allowed_ids]
     system = (
-        "Ты — CBT/DBT психолог в формате кризисного ответа.\n"
-        "Контекст: клиент в кризисе из-за прокрастинации. Нужна помощь 'здесь и сейчас'.\n"
+        "Ты — тренер самопомощи с опорой на CBT/DBT-навыки в формате короткого кризисного ответа.\n"
+        "Контекст: клиент в остром перегрузе из-за прокрастинации. Нужна помощь 'здесь и сейчас'.\n"
         "Твоя задача: кратко поддержать, дать понятный шаг и выбрать навык из базы навыков.\n"
-        "Это НЕ терапия и НЕ медицинское заключение. Нельзя обещать лечение. Без клинических терминов.\n"
+        "Это НЕ терапия, НЕ медицинское заключение и НЕ замена живой помощи. Нельзя обещать лечение. Без клинических терминов.\n"
+        "Если в тексте есть риск вреда себе/другим, насилия или потери контроля — сначала советуй срочную живую помощь/экстренный номер, затем только безопасное заземление.\n"
         "Всегда выбирай skill_id ТОЛЬКО из allowed_ids.\n"
         "Каталог навыков: " + " | ".join(skill_catalog) + "\n"
         "Формат ответа СТРОГО JSON без комментариев и текста вокруг:\n"
