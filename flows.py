@@ -147,7 +147,7 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
     question = (
         "Перед стартом: что ты прокрастинируешь сегодня?\n"
         "Одна задача/дело, на котором потренируемся.\n"
-        "Напиши коротко или нажми 'Пропустить'."
+        "Напиши коротко, пришли голосовое или нажми 'Пропустить'."
     )
     skip_kb = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="Пропустить")]],
@@ -266,7 +266,7 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
     await m.answer(
         "Перед стартом: что ты прокрастинируешь сегодня?\n"
         "Одна задача/дело, на котором потренируемся.\n"
-        "Напиши коротко или нажми 'Пропустить'.",
+        "Напиши коротко, пришли голосовое или нажми 'Пропустить'.",
         reply_markup=ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="Пропустить")]],
             resize_keyboard=True

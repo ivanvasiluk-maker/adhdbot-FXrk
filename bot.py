@@ -213,6 +213,76 @@ ACTION_RELATED_STAGES = {
     "skip_options",
 }
 
+VOICE_FREE_TEXT_STAGES = {
+    "ask_name",
+    "await_trainer",
+    "notification_consent",
+    "trainer_intro",
+    "await_input_mode",
+    "choose_input_mode",
+    "await_training_target",
+    "morning_checkin",
+    "evening_checkin",
+    "downscale_name_task",
+    "after_action_note",
+    "misunderstood_problem_await",
+    "misunderstood_explain_await",
+    "analysis_need_more",
+    "analysis_retry_await_clarification",
+    "analysis_refine",
+    "crisis_text",
+    "crisis_effect_await",
+}
+
+
+def infer_morning_checkin_answer(raw: str) -> str:
+    low = (raw or "").lower()
+    if any(x in low for x in ("залип", "телефон", "youtube", "ютуб", "telegram", "телеграм", "соцсет", "скрол")):
+        return "📱 Залипаю"
+    if any(x in low for x in ("нет сил", "устал", "устала", "энерг", "выжат", "разбит")):
+        return "😵 Нет сил"
+    if any(x in low for x in ("тревог", "страш", "паник", "пережива")):
+        return "😬 Тревога"
+    if any(x in low for x in ("слишком", "больш", "много", "перегруз", "сложно")):
+        return "🌀 Всё слишком большое"
+    if any(x in low for x in ("не могу начать", "начать", "старт", "запуск", "приступ")):
+        return "🚪 Не могу начать"
+    return ""
+
+
+def infer_evening_checkin_answer(raw: str) -> str:
+    low = (raw or "").lower()
+    if any(x in low for x in ("срыв", "сорвал", "сорвался", "возвращ", "вернул")):
+        return "↩️ срывался, но возвращался"
+    if any(x in low for x in ("частично", "немного", "чуть", "наполовину", "кое-что")):
+        return "😐 частично"
+    if any(x in low for x in ("не сделал", "не сделала", "не получилось", "ничего", "провал")):
+        return "❌ не сделал"
+    if any(x in low for x in ("сделал", "сделала", "получилось", "готово", "выполнил", "выполнила")):
+        return "✅ сделал"
+    return ""
+
+
+async def transcribe_voice_for_current_prompt(m: Message, u: Dict[str, Any]) -> Optional[str]:
+    """Allow voice answers in free-text prompts without changing their state handlers."""
+    if not m.voice or u.get("stage") not in VOICE_FREE_TEXT_STAGES:
+        return None
+    await m.answer("Слушаю голосовое и перевожу в текст…")
+    voice_text = await whisper_transcribe(m)
+    if not voice_text:
+        await m.answer("Не смог разобрать голосовое. Можно ответить текстом или выбрать кнопку.")
+        return ""
+    await log_event(
+        u.get("user_id"),
+        u.get("stage", ""),
+        "voice_answer_transcribed",
+        {"len": len(voice_text)},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+    await m.answer(f"Распознал: {clamp_str(voice_text, 700)}")
+    return voice_text
+
 
 def user_is_in_action_loop(u: Dict[str, Any]) -> bool:
     """Пользователь уже после первой карты и находится в тренировочном loop."""
@@ -1071,14 +1141,19 @@ def _top_key(counts: Dict[str, int]) -> str:
 
 def crisis_effect_code(text: str) -> str:
     low = (text or "").lower().strip()
+    if "хуже" in low or "стало плохо" in low or "небезопас" in low:
+        return "worse"
     if "👍" in text or low in {"да", "yes", "y"} or "легче" in low:
         return "better"
-    if "👎" in text or low in {"нет", "no", "n"} or "хуже" in low:
+    if "👎" in text or low in {"нет", "no", "n"}:
         return "no"
     return "same"
 
 
 async def classify_crisis_pattern(reason_text: str) -> str:
+    allowed = {"attention_escape", "task_entry_block", "perfectionism", "overwhelm", "low_energy", "self_attack", "anxiety_loop", "unknown"}
+    if (reason_text or "").strip() in allowed:
+        return (reason_text or "").strip()
     fallback = crisis_pattern_from_text(reason_text)
     if not AI_ANALYSIS_ENABLED or client is None or not reason_text:
         return fallback
@@ -1096,7 +1171,6 @@ async def classify_crisis_pattern(reason_text: str) -> str:
             max_tokens=12,
         )
         code = (resp.choices[0].message.content or "").strip().lower()
-        allowed = {"attention_escape", "task_entry_block", "perfectionism", "overwhelm", "low_energy", "self_attack", "anxiety_loop", "unknown"}
         return code if code in allowed else fallback
     except Exception as e:
         log.warning("crisis_pattern_ai_failed: %s", e)
@@ -2271,7 +2345,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(f"День установлен: {day}.\nМожно вызвать /show_offer.")
+        await m.answer(f"День установлен: {day}. Открываю тренировку дня.")
+        await start_day(m, u, day, DB_PATH, SHEETS_WEBHOOK_URL)
         return True
 
     if command == "/force_next_day":
@@ -2285,7 +2360,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_force_next_day", {"from_day": current_day, "day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(f"Ок. Следующий день: {next_day}. Core skill можно назначить заново.")
+        await m.answer(f"Ок. Следующий день: {next_day}. Открываю тренировку дня.")
+        await start_day(m, u, next_day, DB_PATH, SHEETS_WEBHOOK_URL)
         return True
 
     if command == "/show_offer":
@@ -2769,6 +2845,13 @@ async def main_flow(m: Message):
         sync_calendar_day(u)
         await save_user(u, DB_PATH)
 
+    voice_text = await transcribe_voice_for_current_prompt(m, u)
+    if voice_text == "":
+        return
+    if voice_text:
+        text = voice_text.strip()
+        low = text.lower()
+
     if u.get("stage") == "trainer_switch":
         await handle_trainer_switch_choice(m, u, text)
         return
@@ -2813,6 +2896,11 @@ async def main_flow(m: Message):
         return
 
     morning_answers = set(MORNING_STATE_SKILL_MAP) | set(LEGACY_MORNING_STATE_ALIASES)
+    if u.get("stage") == "morning_checkin" and text not in morning_answers:
+        inferred = infer_morning_checkin_answer(text)
+        if inferred:
+            text = inferred
+            low = text.lower()
     if u.get("stage") == "morning_checkin" and text in morning_answers:
         state, config = morning_state_config(text)
         skill_id = apply_morning_skill_choice(u, state, config)
@@ -2842,6 +2930,11 @@ async def main_flow(m: Message):
         return
 
     evening_answers = {"✅ сделал", "😐 частично", "❌ не сделал", "↩️ срывался, но возвращался"}
+    if u.get("stage") == "evening_checkin" and text not in evening_answers:
+        inferred = infer_evening_checkin_answer(text)
+        if inferred:
+            text = inferred
+            low = text.lower()
     if u.get("stage") == "evening_checkin" and text in evening_answers:
         remember_checkin_state(u, "last_evening_state", text)
         u["last_active"] = time.time()
@@ -3047,7 +3140,7 @@ async def main_flow(m: Message):
                     u,
                     "Ок. Тогда ещё меньше.\n\n"
                     "Не открывай задачу.\n"
-                    "Просто напиши сюда название задачи одним словом.",
+                    "Просто напиши сюда название задачи одним словом или пришли голосовое.",
                     kb_downscale_name_task,
                     "downscale_name_task",
                 )
@@ -3150,7 +3243,7 @@ async def main_flow(m: Message):
     if u.get("stage") == "after_action_note":
         note = " ".join((text or "").split()[:5]).strip()
         if not note:
-            await m.answer("Напиши 1–5 слов: что изменилось после шага?")
+            await m.answer("Напиши 1–5 слов или пришли голосовое: что изменилось после шага?")
             return
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
@@ -3193,7 +3286,7 @@ async def main_flow(m: Message):
             u["stage"] = "after_action_note"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "training", "after_action_note_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Напиши 1-5 слов: что изменилось после шага?")
+            await m.answer("Напиши 1–5 слов или пришли голосовое: что изменилось после шага?")
             return
         if text == "🔁 Ещё круг" or "еще круг" in low or "ещё круг" in low:
             profile = await get_user_profile(u["user_id"], DB_PATH)
@@ -3396,7 +3489,7 @@ async def main_flow(m: Message):
             u["input_mode"] = "text"
             u["stage"] = "await_problem_text"
             await save_user(u, DB_PATH)
-            await m.answer("Ок. Напиши 2–5 предложений: что сейчас мешает делать важное?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
+            await m.answer("Ок. Напиши 2–5 предложений или пришли голосовое: что сейчас мешает делать важное?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
             return
         if text == "🎙 Диагностика голосом" or "голос" in low:
             u["input_mode"] = "voice"
@@ -3432,7 +3525,7 @@ async def main_flow(m: Message):
             u["input_mode"] = "text"
             u["stage"] = "await_problem_text"
             await save_user(u, DB_PATH)
-            await m.answer("Ок. Напиши 2–5 предложений: что сейчас мешает делать важное?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
+            await m.answer("Ок. Напиши 2–5 предложений или пришли голосовое: что сейчас мешает делать важное?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
             return
         if text == "🎙 Диагностика голосом" or "голос" in low:
             u["input_mode"] = "voice"
@@ -3458,7 +3551,7 @@ async def main_flow(m: Message):
             await m.answer("Слушаю голосовое и перевожу в текст…")
             user_text = await whisper_transcribe(m)
             if not user_text:
-                await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
+                await m.answer("Не смог разобрать голосовое. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
                 return
             await m.answer(f"Распознал: {clamp_str(user_text, 700)}")
         elif not text or text.lower() == "пропустить":
@@ -3680,21 +3773,21 @@ async def main_flow(m: Message):
             u["stage"] = "misunderstood_explain_await"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Ок. Напиши иначе одним сообщением. Я пересоберу карту без полного онбординга.")
+            await m.answer("Ок. Напиши иначе одним сообщением или пришли голосовое. Я пересоберу карту без полного онбординга.")
             return
         await answer_with_keyboard(m, u, misunderstood_prompt_text(), kb_misunderstood_reasons, "misunderstood_reasons")
         return
 
     if u.get("stage") == "misunderstood_problem_await":
         if not text:
-            await m.answer("Напиши 1–2 предложения: какая проблема точнее?")
+            await m.answer("Напиши 1–2 предложения или пришли голосовое: какая проблема точнее?")
             return
         await rebuild_analysis_lightweight(m, u, f"Не та проблема. Точнее: {text}", "wrong_problem")
         return
 
     if u.get("stage") == "misunderstood_explain_await":
         if not text:
-            await m.answer("Напиши одним сообщением, как объяснить точнее.")
+            await m.answer("Напиши одним сообщением или пришли голосовое: как объяснить точнее.")
             return
         await rebuild_analysis_lightweight(m, u, f"Пользователь объяснил иначе: {text}", "explain_differently", replace_skill=True)
         return
@@ -3721,7 +3814,7 @@ async def main_flow(m: Message):
     # analysis_retry_await_clarification
     if u.get("stage") == "analysis_retry_await_clarification":
         if not text:
-            await m.answer("Напиши, пожалуйста, что не совпадает с реальностью. (1–3 предложения)")
+            await m.answer("Напиши или пришли голосовое: что не совпадает с реальностью. (1–3 предложения)")
             return
         u["analysis_json"] = json.dumps(safe_analysis_memory(text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         u["stage"] = "run_analysis"
@@ -3733,7 +3826,7 @@ async def main_flow(m: Message):
     # analysis_refine
     if u["stage"] == "analysis_refine":
         if not text:
-            await m.answer("Напиши 1–2 предложения, чтобы я пересобрал вывод.")
+            await m.answer("Напиши 1–2 предложения или пришли голосовое, чтобы я пересобрал вывод.")
             return
         # Объединяем исходный текст и уточнение, чтобы модель видела весь контекст
         base_user_text = ""
@@ -3941,6 +4034,17 @@ async def main_flow(m: Message):
         low = (text or "").lower().strip()
         if text == "✅ Сделал" or low == "сделал":
             await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_done", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            pending = {}
+            try:
+                pending = json.loads(u.get("pending_plan_change") or "{}")
+            except Exception:
+                pending = {}
+            if isinstance(pending, dict) and pending.get("type") == "crisis_voice_pattern" and pending.get("pattern"):
+                pattern = str(pending.get("pattern") or "unknown")
+                u["pending_plan_change"] = None
+                await save_user(u, DB_PATH)
+                await send_crisis_tool(m, u, pattern)
+                return
             await show_crisis_tool_prompt(m, u)
             return
         if text == "↩️ Вернуться в тренировку" or "вернуться" in low:
@@ -3957,7 +4061,7 @@ async def main_flow(m: Message):
             u["stage"] = "crisis_text"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "crisis_stabilize", "crisis_write_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Напиши 1–3 предложения: что происходит прямо сейчас?")
+            await m.answer("Напиши 1–3 предложения или пришли голосовое: что происходит прямо сейчас?")
             return
         await answer_with_keyboard(m, u, crisis_stabilize_text(), kb_crisis_stabilize, "crisis_stabilize")
         return
@@ -3983,8 +4087,13 @@ async def main_flow(m: Message):
 
         # Если сразу прислал голосовое — обрабатываем без лишних шагов
         if m.voice:
+            await m.answer("Слушаю голосовое и перевожу в текст…")
             t = await whisper_transcribe(m)
             if t:
+                pattern = await classify_crisis_pattern(t)
+                u["pending_plan_change"] = json.dumps({"type": "crisis_voice_pattern", "pattern": pattern}, ensure_ascii=False)
+                await save_user(u, DB_PATH)
+                await m.answer(f"Распознал: {clamp_str(t, 700)}")
                 await send_crisis_stabilize(m, u, "voice_entry")
                 return
             await m.answer("Не смог разобрать голос. Выбери голосом/текстом кнопкой.")
@@ -4014,13 +4123,22 @@ async def main_flow(m: Message):
         return
 
     if u.get("stage") == "crisis_text":
+        if m.voice and not text:
+            await m.answer("Слушаю голосовое и перевожу в текст…")
+            t = await whisper_transcribe(m)
+            if not t:
+                await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
+                return
+            text = t.strip()
+            low = text.lower()
+            await m.answer(f"Распознал: {clamp_str(text, 700)}")
         if text and text.lower().strip() in {"⬅️ назад", "назад"}:
             u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
             return
         if not text:
-            await m.answer("Напиши 1–3 предложения.")
+            await m.answer("Напиши 1–3 предложения или пришли голосовое.")
             return
         await send_crisis_tool(m, u, text)
         return
@@ -4036,7 +4154,7 @@ async def main_flow(m: Message):
             return
         t = await whisper_transcribe(m)
         if not t:
-            await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения.")
+            await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
             u["stage"] = "crisis_text"
             await save_user(u, DB_PATH)
             return
@@ -4066,6 +4184,13 @@ async def main_flow(m: Message):
         }
         await record_profile_signal(u["user_id"], "crisis", patch, source="crisis_effect")
         await log_event(u["user_id"], "crisis", "crisis_effect_recorded", {"crisis_pattern": pattern, "crisis_skill": skill, "crisis_effect": effect}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if effect == "worse":
+            u["stage"] = "crisis_stabilize"
+            u["pending_crisis_pattern"] = None
+            u["pending_crisis_skill"] = None
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
+            return
         u["stage"] = "waiting_next_day"
         u["pending_crisis_pattern"] = None
         u["pending_crisis_skill"] = None
