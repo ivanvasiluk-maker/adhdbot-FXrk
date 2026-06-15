@@ -748,22 +748,87 @@ def determine_development_focus(profile: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def daily_profile_explanation(profile: Dict[str, Any], skill_id: str = "") -> str:
+def daily_profile_explanation(profile: Dict[str, Any], skill_id: str = "", day: int | None = None) -> str:
     """Explain today's recommendation from accumulated profile without sounding diagnostic."""
     profile = profile or {}
     focus = determine_development_focus(profile)
     dev_map = normalize_development_map(profile.get("development_map"))
+
+    yesterday_insights = []
+    if int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in _as_list(dev_map.get("helps")):
+        yesterday_insights.append("вход в задачу часто становится слишком большим")
+        yesterday_insights.append("после уменьшения шага становится легче")
+    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
+        yesterday_insights.append("телефон появляется как способ уйти от напряжения")
+    if profile.get("failed_skill") or profile.get("failed_skills"):
+        yesterday_insights.append("если навык не подошёл, нужен более простой вход")
+    if profile.get("best_skill") or profile.get("last_successful_skill"):
+        skill = label(SKILL_LABELS, profile.get("best_skill") or profile.get("last_successful_skill"), str(profile.get("best_skill") or profile.get("last_successful_skill")))
+        yesterday_insights.append(f"раньше помогал формат «{skill}»")
+    if not yesterday_insights:
+        yesterday_insights.append("данных пока мало, поэтому начинаем с самого безопасного входа")
+    current_pattern = label(PATTERN_LABELS, profile.get("main_pattern") or profile.get("avoidance_pattern"), "важная задача → много вариантов → напряжение → откладывание → труднее начать")
+
+    if skill_id:
+        skill_label = label(SKILL_LABELS, skill_id, skill_id)
+        today_hypothesis = f"помогает ли тебе навык «{skill_label}» как следующий маленький вход"
+    elif int(profile.get("downscale_count") or 0) > 0:
+        today_hypothesis = "помогает ли тебе вход без требования работать долго"
+    else:
+        today_hypothesis = "помогает ли тебе начать с одного маленького физического шага"
+
+    day_num = max(1, int(day or 1))
+    if day_num == 1:
+        map_lines = [
+            "🧭 Предварительная карта",
+            "",
+            "Пока это гипотеза.",
+            "Сегодня мы смотрим, где ломается вход в задачу.",
+        ]
+    elif day_num == 2:
+        first_signal_lines = [
+            f"что помогает: {label(SKILL_LABELS, skill_id, 'маленький вход в задачу') if skill_id else 'маленький вход в задачу'}",
+            "где шаг оказался большим",
+            "как ты реагируешь на залипание",
+        ]
+        map_lines = [
+            "🧭 Первые сигналы",
+            "",
+            "Уже видно:",
+            "\n".join(f"— {item}" for item in first_signal_lines),
+        ]
+    elif day_num == 3:
+        map_lines = [
+            "🧭 Первый паттерн",
+            "",
+            "Теперь видно не отдельные реакции, а цикл:",
+            current_pattern,
+            "",
+            "Можно продолжить коротко или включить полный режим.",
+        ]
+    else:
+        new_insight = yesterday_insights[0] if yesterday_insights else "карта уточняется по сегодняшним действиям"
+        map_lines = [
+            "🧭 Уточнение карты",
+            "",
+            "Сегодня карта стала точнее:",
+            new_insight,
+            "",
+            "Следующая проверка:",
+            today_hypothesis,
+        ]
+
     lines = [
+        *map_lines,
+        "",
+        "Это не диагноз и не окончательный вывод.",
+        "Карта уточняется по твоим действиям.",
+        "",
         f"🧭 Сегодняшний фокус: {focus['label']}.",
         f"Почему так: {focus['reason']}.",
     ]
     if int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in _as_list(dev_map.get("helps")):
         lines.append("В прошлый раз маленький шаг помог тебе начать, поэтому сегодня начнём так же.")
-    if profile.get("best_skill") or profile.get("last_successful_skill"):
-        skill = label(SKILL_LABELS, profile.get("best_skill") or profile.get("last_successful_skill"), str(profile.get("best_skill") or profile.get("last_successful_skill")))
-        lines.append(f"Сейчас видно рабочий сигнал: раньше помогал формат «{skill}».")
-    if profile.get("failed_skill") or profile.get("failed_skills"):
-        lines.append("То, что не сработало раньше, мы не считаем провалом — это данные для настройки шага.")
     if skill_id:
         skill_label = label(SKILL_LABELS, skill_id, skill_id)
         lines.append(f"Мы проверим навык «{skill_label}» как следующий маленький шаг маршрута.")
@@ -1537,38 +1602,70 @@ async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db"
 
 
 def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
-    main_pattern = label(PATTERN_LABELS, profile.get("main_pattern"), "вход часто становится слишком большим")
-    skill = label(SKILL_LABELS, profile.get("best_variant") or profile.get("best_skill"), "маленький вход в задачу")
-    note = profile.get("last_effect_note") or profile.get("last_after_action_note") or ""
-    visible = [main_pattern]
-    if int(profile.get("downscale_count") or 0):
-        visible.append("после уменьшения шага действие получается легче")
-    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
-        visible.append("самокритика усиливает ступор")
-    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        visible.append("залипание появляется как способ уйти от напряжения")
-    if profile.get("preferred_activation") == "body_doubling":
-        visible.append("внешний контакт может снижать порог старта")
-    visible_text = "\n".join(f"— {item}" for item in visible[:5])
-    note_block = f"\n\nЧто отметили после шага:\n“{note}”" if note else ""
+    profile = profile or {}
     dev_map = normalize_development_map(profile.get("development_map"))
-    learning_block = ""
-    if int(dev_map.get("behavior_events_count") or 0):
-        learning_block = "\n\n" + render_development_map(profile)
 
-    return f"""🧭 Твоя предварительная карта
+    def bullet_lines(items: Any, fallback: str, limit: int = 4) -> str:
+        values = [str(x) for x in _as_list(items) if x not in (None, "")]
+        if not values:
+            values = [fallback]
+        return "\n".join(f"— {item}" for item in values[:limit])
 
-Пока это не медицинское заключение, а рабочая гипотеза.
+    stable_patterns = [label(PATTERN_LABELS, profile.get("main_pattern") or profile.get("avoidance_pattern"), "вход часто становится слишком большим")]
+    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
+        stable_patterns.append("залипание появляется как способ уйти от напряжения")
+    if int(profile.get("downscale_count") or 0):
+        stable_patterns.append("после уменьшения шага действие получается легче")
+    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
+        stable_patterns.append("самокритика усиливает ступор")
 
-Что уже видно:
-{visible_text}
+    working_skills = _merge_unique_list(
+        [profile.get("best_variant"), profile.get("best_skill"), profile.get("last_successful_skill")],
+        [* _as_list(profile.get("successful_skills")), * _as_list(profile.get("working_strategies")), * _as_list(dev_map.get("helps"))],
+        limit=8,
+    )
+    if int(profile.get("downscale_count") or 0):
+        working_skills = _merge_unique_list(working_skills, ["уменьшить шаг"], limit=8)
+    working_skills = [label(SKILL_LABELS, str(item), str(item)) for item in working_skills]
 
-Что сработало:
-— {skill}{note_block}
+    barriers = _merge_unique_list(profile.get("barriers"), dev_map.get("blocks"), limit=8)
+    if profile.get("avoidance_trigger"):
+        barriers = _merge_unique_list(barriers, [profile.get("avoidance_trigger")], limit=8)
+    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
+        barriers = _merge_unique_list(barriers, ["быстрый дофамин и доступный телефон"], limit=8)
+    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
+        barriers = _merge_unique_list(barriers, ["страх недоделанности или самокритика"], limit=8)
 
-Дальше проверим:
-— помогает ли тебе внешний контакт / body doubling
-— какой формат входа держится лучше{learning_block}"""
+    next_tests = []
+    if profile.get("preferred_activation") == "body_doubling":
+        next_tests.append("помогает ли внешний контакт")
+    if int(profile.get("downscale_count") or 0):
+        next_tests.append("какой минимальный шаг держится лучше")
+    if profile.get("trainer_fit_signal") or profile.get("trainer_current_mode"):
+        next_tests.append("какой стиль поддержки работает: мягкий, жёсткий или аналитичный")
+    if not next_tests:
+        next_tests = [
+            "помогает ли внешний контакт",
+            "какой минимальный шаг держится лучше",
+            "какой стиль поддержки работает: мягкий, жёсткий или аналитичный",
+        ]
+
+    return f"""🧭 Твоя карта
+
+1. Что уже видно
+{bullet_lines(stable_patterns, "данных пока мало, собираем первые сигналы")}
+
+2. Что помогает
+{bullet_lines(working_skills, "пока проверяем первые навыки")}
+
+3. Что пока мешает
+{bullet_lines(barriers, "пока не видно устойчивого барьера")}
+
+4. Что проверяем дальше
+{bullet_lines(next_tests, "какой вход в задачу держится легче")}
+
+Карта не окончательная.
+Она становится точнее после каждого подхода."""
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
     """Применить геймификацию"""
