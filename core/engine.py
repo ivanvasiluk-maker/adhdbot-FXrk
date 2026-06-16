@@ -217,7 +217,7 @@ def _target_header(target: str) -> str:
 def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     """Build a UI-neutral skill card from live skill fields."""
     trainer_key = _trainer_key(user_state)
-    target = _clamp_text(user_state.get("today_target"), 200, "Прокрастинация в целом")
+    target = _clamp_text(user_state.get("today_target"), 200, "сегодняшняя задача")
     steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(_skill_steps(skill), start=1))
     minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
     why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
@@ -312,11 +312,14 @@ def handle_action_result(user_state: UserState, result: str) -> Screen:
 
     if result == "failed":
         return _screen(
-            text={
-                "beck": "Ок. Это данные. Значит, текущий шаг слишком большой. Уменьшаем.",
-                "skinny": "Не сделал — значит шаг большой. Режем задачу.",
-                "marsha": "Ок. Это не провал. Похоже, шаг был тяжёлым. Давай сделаем его меньше.",
-            }[trainer_key],
+            text=(
+                "Ок. Это не провал, это сигнал.\n\n"
+                "🧭 Добавляю в карту:\n"
+                "— текущий шаг мог быть слишком большим\n"
+                "— возможно, вход требует ещё меньшего действия\n"
+                "— сейчас лучше не давить, а уменьшать масштаб\n\n"
+                "Пробуем шаг меньше."
+            ),
             buttons=FAILED_BUTTONS,
             next_state="failed_options",
             events=[_event("not_done", "training", {"day": day, "skill_id": skill_id, "trainer_key": trainer_key})],
@@ -338,7 +341,7 @@ def handle_downscale(user_state: UserState, reason: str) -> Screen:
     skill = deepcopy(SKILLS_DB[skill_id])
     skill.setdefault("skill_id", skill_id)
     local_state = dict(user_state)
-    local_state["today_target"] = local_state.get("today_target") or "Прокрастинация в целом"
+    local_state["today_target"] = local_state.get("today_target") or "сегодняшняя задача"
     local_state["skill_variant_label"] = "Упрощение"
     card = build_skill_card(local_state, skill)
     card.update(
@@ -403,7 +406,7 @@ def get_next_screen(user_state: UserState, event: Dict[str, Any]) -> Screen:
     event_type = (event or {}).get("type")
 
     if event_type == "target_submitted":
-        target = _clamp_text(event.get("text"), 200, "Прокрастинация в целом")
+        target = _clamp_text(event.get("text"), 200, "сегодняшняя задача")
         if target.lower() == "пропустить":
             target = "__target_not_selected__"
         selection = select_skill(user_state)

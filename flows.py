@@ -141,7 +141,7 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
         energy = u.get("last_energy") or "?"
         await m.answer(f"🕒 Быстрый чек\nСон: {sleep}\nТревога: {anxiety}\nЭнергия: {energy}")
 
-    await m.answer(daily_profile_explanation(profile, sid))
+    await m.answer(daily_profile_explanation(profile, sid, day))
 
     # Вопрос перед выдачей навыка
     question = (
@@ -201,7 +201,7 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         db_path,
         source="daily_focus",
     )
-    personal_context = daily_profile_explanation(profile, sid)
+    personal_context = daily_profile_explanation(profile, sid, 1)
 
     msg = (
         f"🌅 {name}, День 1\n\n"
@@ -243,7 +243,7 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
         db_path,
         source="daily_focus",
     )
-    personal_context = daily_profile_explanation(profile, sid)
+    personal_context = daily_profile_explanation(profile, sid, day)
 
     msg = (
         f"🌅 {name}, День {day}\n\n"

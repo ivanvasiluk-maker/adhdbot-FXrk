@@ -390,6 +390,8 @@ def _target_header_text(today_target: str) -> str:
     target = (today_target or "").strip()
     if target == "__target_not_selected__":
         return "📌 Дело пока не выбрано\n\nБудем тренироваться\nна типичных ситуациях прокрастинации."
+    if not target:
+        target = "сегодняшняя задача"
     return f"📌 Дело: {target}"
 
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
@@ -781,11 +783,11 @@ def profile_signals_text(
         "Что сработало:\n"
         f"{best_skills}"
         f"{note_block}\n\n"
-        "Счётчики дня:\n"
-        f"— успешные подходы: {done_count}\n"
-        f"— downscale: {downscale_count}\n"
-        f"— возвраты после срыва: {return_count}\n"
-        f"— сбои не стали концом: {failed_reason_count}\n\n"
+        "Всего за период:\n"
+        f"— запусков: {done_count}\n"
+        f"— залипаний/сбоев: {failed_reason_count}\n"
+        f"— возвратов после залипания: {return_count}\n"
+        f"— уменьшений шага: {downscale_count}\n\n"
         "Чаще всего мешает:\n"
         f"😬 {avoidance_trigger}"
         f"{system_block}\n\n"
@@ -814,10 +816,14 @@ def payment_month_1498_stub_text() -> str:
 
 def payment_declined_soft_text() -> str:
     return (
-        "Ок.\n"
-        "Продолжим в коротком режиме.\n"
-        "Один навык в день.\n"
-        "Если захочешь полное сопровождение — вернёшься."
+        "Ок. Оставляю короткий режим.\n\n"
+        "В нём будет:\n"
+        "— один навык в день\n"
+        "— базовая тренировка\n"
+        "— короткие выводы\n\n"
+        "Без полного режима я не буду глубоко собирать карту, "
+        "сравнивать паттерны и подбирать систему запуска по твоим реакциям.\n\n"
+        "Вернуться к полному режиму можно позже."
     )
 
 
@@ -959,7 +965,7 @@ kb_trainers = ReplyKeyboardMarkup(
 
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="💪 Давай действие"), KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="Ещё")],
         [KeyboardButton(text="🔄 Сменить тренера"), KeyboardButton(text="🆘 Кризис")],
     ],
@@ -981,7 +987,7 @@ kb_skill_card = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
         [KeyboardButton(text="Пропустить"), KeyboardButton(text="🤔 Не понял")],
-        [KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Кризис")],
     ],
     resize_keyboard=True
 )
@@ -990,7 +996,7 @@ kb_done = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔁 Ещё круг")],
         [KeyboardButton(text="🌙 Хватит на сегодня")],
-        [KeyboardButton(text="📌 Что изменилось?")],
+        [KeyboardButton(text="📌 Что изменилось?"), KeyboardButton(text="🧭 Моя карта")],
     ],
     resize_keyboard=True
 )
@@ -1008,6 +1014,7 @@ kb_failed = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="😵 Нет сил")],
         [KeyboardButton(text="📱 Залип"), KeyboardButton(text="🤔 Не понял")],
+        [KeyboardButton(text="🧭 Моя карта")],
     ],
     resize_keyboard=True
 )
@@ -1024,7 +1031,7 @@ kb_downscale = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
-        [KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Кризис")],
     ],
     resize_keyboard=True
 )
@@ -1482,7 +1489,8 @@ kb_micro_habit = ReplyKeyboardMarkup(
 kb_skip_data = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔁 Другой навык")],
-        [KeyboardButton(text="😣 Сделать проще")],
+        [KeyboardButton(text="🧩 Уменьшить шаг")],
+        [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🌙 На сегодня хватит")],
     ],
     resize_keyboard=True
@@ -1490,10 +1498,10 @@ kb_skip_data = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💳 Продолжить за €14.98")],
-        [KeyboardButton(text="📚 Подробнее о карте")],
-        [KeyboardButton(text="🧭 Показать мои сигналы")],
-        [KeyboardButton(text="🤔 Подумаю")],
+        [KeyboardButton(text="💳 Продолжить полный режим")],
+        [KeyboardButton(text="📚 Что входит")],
+        [KeyboardButton(text="🧭 Показать карту")],
+        [KeyboardButton(text="🤔 Остаться в коротком режиме")],
     ],
     resize_keyboard=True
 )
