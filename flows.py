@@ -17,7 +17,7 @@ from aiogram import Bot
 from texts import (
     trainer_say, skill_explain, PRAISE, DAILY_LIVE_LINES,
     day_task_text, midday_ping, TRAINER_INTRO_TEXT,
-    kb_yes_no, kb_training_main, kb_crisis_mode, keyboard_button_count,
+    kb_yes_no, kb_training_main, kb_crisis_mode, keyboard_button_count, MAX_KEYBOARD_BUTTONS,
     CRISIS_LIMIT, progress_achievements_text, growth_history_text,
 )
 from skills import SKILLS_DB, get_current_plan, build_28_day_plan, build_plan
@@ -214,8 +214,8 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         "Вечером спросим: сделал(а)? вернулся(лась)?"
     )
     button_count = keyboard_button_count(kb_training_main)
-    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
-    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= 5 else None)
+    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
+    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= MAX_KEYBOARD_BUTTONS else None)
 
 async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str):
     """Универсальный скрипт для любого дня"""
@@ -254,8 +254,8 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
         "Считается попытка 60–120 сек."
     )
     button_count = keyboard_button_count(kb_training_main)
-    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= 5 else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
-    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= 5 else None)
+    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
+    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= MAX_KEYBOARD_BUTTONS else None)
 
     u["day"] = day
     u["stage"] = "await_training_target"
@@ -1368,12 +1368,12 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         await log_event(
             u["user_id"],
             "analysis",
-            "keyboard_shown" if button_count <= 5 else "keyboard_warning",
+            "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning",
             {"keyboard": "analysis_need_more", "button_count": button_count},
             db_path,
             sheets_webhook,
         )
-        await m.answer(analysis_need_more_text(user_text), reply_markup=kb_analysis_need_more if button_count <= 5 else None)
+        await m.answer(analysis_need_more_text(user_text), reply_markup=kb_analysis_need_more if button_count <= MAX_KEYBOARD_BUTTONS else None)
         return
 
     # Try quick analysis first (keeps fallback behavior)
@@ -1444,12 +1444,12 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     await log_event(
         u["user_id"],
         "analysis",
-        "keyboard_shown" if button_count <= 5 else "keyboard_warning",
+        "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning",
         {"keyboard": "analysis", "button_count": button_count},
         db_path,
         sheets_webhook,
     )
-    await m.answer(msg, reply_markup=kb_analysis_confirm if button_count <= 5 else None)
+    await m.answer(msg, reply_markup=kb_analysis_confirm if button_count <= MAX_KEYBOARD_BUTTONS else None)
 
 # ============================================================
 # PROGRESS & REPORTS

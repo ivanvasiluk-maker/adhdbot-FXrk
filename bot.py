@@ -1363,9 +1363,9 @@ def _select_downscale_skill(u: Dict[str, Any]) -> str:
 
 
 async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
-    """Send a keyboard only if it respects the <=5 button rule and log it."""
+    """Send a keyboard only if it respects the reply-keyboard button limit and log it."""
     button_count = keyboard_button_count(reply_markup)
-    event_name = "keyboard_shown" if button_count <= 5 else "keyboard_warning"
+    event_name = "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning"
     await log_event(
         u.get("user_id"),
         u.get("stage", ""),
@@ -1375,7 +1375,7 @@ async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_m
         SHEETS_WEBHOOK_URL,
     )
     try:
-        if button_count > 5:
+        if button_count > MAX_KEYBOARD_BUTTONS:
             log.warning("Keyboard %s has %s buttons; sending text without markup", keyboard_name, button_count)
             await m.answer(text)
             return
@@ -3422,14 +3422,17 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, after_action_note_saved_text(u.get("trainer_key") or "marsha"), kb_done, "done")
         return
 
-    # Пост-выполнение: только два варианта, без перегруза кнопками
-    if u.get("stage") == "waiting_next_day":
+    # Пост-выполнение: кнопки из меню после подхода/завершения дня должны
+    # работать и после answer_with_keyboard(..., "done"/"day_core_stop").
+    # Раньше stage менялся на "done" или "day_core_stop", и следующие нажатия
+    # попадали в общий fallback "Выбери действие", хотя кнопки были валидными.
+    if u.get("stage") in {"waiting_next_day", "done", "day_core_stop"}:
         trainer_key = u.get("trainer_key") or "marsha"
         if text == "🧭 Моя карта" or "моя карта" in low:
             profile = await get_user_profile(u["user_id"], DB_PATH)
             txt = render_short_user_map(profile, u.get("name"))
             await log_event(u["user_id"], "training", "profile_map_requested", {"source": "day_core_stop"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, txt, kb_done, "done")
+            await answer_with_keyboard(m, u, txt, kb_done, "waiting_next_day")
             return
         if text == "📚 Почему это работает" or "почему это работает" in low:
             await log_event(u["user_id"], "training", "day_lock_why_opened", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -4670,7 +4673,7 @@ async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply
     await log_event(
         u.get("user_id"),
         u.get("stage", ""),
-        "keyboard_shown" if button_count <= 5 else "keyboard_warning",
+        "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning",
         {"keyboard": keyboard_name, "button_count": button_count, "source": "background"},
         DB_PATH,
         SHEETS_WEBHOOK_URL,
@@ -4679,7 +4682,7 @@ async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply
         await bot.send_message(
             u["chat_id"],
             text,
-            reply_markup=reply_markup if button_count <= 5 else None,
+            reply_markup=reply_markup if button_count <= MAX_KEYBOARD_BUTTONS else None,
         )
     except Exception as e:
         log.exception("telegram_send_error: %s", e)

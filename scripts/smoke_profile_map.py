@@ -72,8 +72,9 @@ async def run():
         offer_text = offer_msg.answers[-1]["text"] if offer_msg.answers else ""
         kb = offer_msg.answers[-1].get("reply_markup") if offer_msg.answers else None
         kb_texts = []
-        if kb and getattr(kb, "keyboard", None):
-            for row in kb.keyboard:
+        if kb:
+            rows = getattr(kb, "keyboard", None) or getattr(kb, "inline_keyboard", None) or []
+            for row in rows:
                 for btn in row:
                     kb_texts.append(getattr(btn, "text", ""))
 
@@ -112,11 +113,11 @@ async def run():
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
         has_adaptive_payment = any("€14.98" in t and "Продолжить" in t for t in kb_texts)
-        has_primary_map = "🧭 Первичная карта" in offer_text
-        has_day3_conclusion = "📌 ПОЛНОЕ ЗАКЛЮЧЕНИЕ ПОСЛЕ 3 ДНЕЙ" in offer_text
-        has_personal_offer = "ТВОЙ ПРОФИЛЬ" in offer_text and "14.98 €/месяц" in offer_text
-        has_model_value = "Мы продаём не навыки" in offer_text and "персональной модели" in offer_text
-        has_selling_specifics = "какие навыки реально работают" in offer_text and "какую сложность выдерживает" in offer_text
+        has_primary_map = "🧭 Первичная карта" in offer_text or "🧭 За первые дни карта уже начала собираться." in offer_text
+        has_day3_conclusion = "📌 ПОЛНОЕ ЗАКЛЮЧЕНИЕ ПОСЛЕ 3 ДНЕЙ" in offer_text or "Похоже, твой цикл сейчас такой:" in offer_text
+        has_personal_offer = ("ТВОЙ ПРОФИЛЬ" in offer_text or "Полный режим:" in offer_text) and "14.98 €/месяц" in offer_text
+        has_model_value = ("Мы продаём не навыки" in offer_text and "персональной модели" in offer_text) or "личную инструкцию запуска" in offer_text
+        has_selling_specifics = ("какие навыки реально работают" in offer_text and "какую сложность выдерживает" in offer_text) or ("подбор шага под твои реакции" in offer_text and "разбор залипаний" in offer_text)
         assert int(task_start.get("value") or 0) > 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
         assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map

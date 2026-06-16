@@ -110,6 +110,9 @@ def trainer_say(trainer_key: str, text: str) -> str:
     return f"{t['emoji']} *{t['name']}*: {text}"
 
 
+MAX_KEYBOARD_BUTTONS = 8
+
+
 def keyboard_button_count(reply_markup) -> int:
     """Count buttons in reply/inline keyboards for overload guardrails."""
     if not reply_markup:
@@ -986,8 +989,9 @@ kb_more_actions = ReplyKeyboardMarkup(
 kb_skill_card = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
-        [KeyboardButton(text="Пропустить"), KeyboardButton(text="🤔 Не понял")],
-        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="Пропустить")],
+        [KeyboardButton(text="🤔 Не понял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🆘 Кризис")],
     ],
     resize_keyboard=True
 )
