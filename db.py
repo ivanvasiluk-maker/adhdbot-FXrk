@@ -1181,6 +1181,8 @@ USER_FIELDS = [
     "current_core_skill_id",
     "current_skill_variant_id",
     "current_core_skill_date",
+    "profile_map_shown_date",
+    "profile_map_shown_count",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1301,6 +1303,8 @@ def default_user(uid: int) -> Dict[str, Any]:
         "current_core_skill_id": None,
         "current_skill_variant_id": None,
         "current_core_skill_date": None,
+        "profile_map_shown_date": None,
+        "profile_map_shown_count": 0,
     }
 
 async def init_db(db_path: str):
@@ -1359,7 +1363,9 @@ async def init_db(db_path: str):
                 day_core_round_count INTEGER DEFAULT 0,
                 current_core_skill_id TEXT,
                 current_skill_variant_id TEXT,
-                current_core_skill_date TEXT
+                current_core_skill_date TEXT,
+                profile_map_shown_date TEXT,
+                profile_map_shown_count INTEGER DEFAULT 0
             )
             """
         )
@@ -1460,7 +1466,9 @@ EXTRA_USER_COLS = {
     "day_core_round_count": "INTEGER DEFAULT 0",
     "current_core_skill_id": "TEXT",
     "current_skill_variant_id": "TEXT",
-    "current_core_skill_date": "TEXT"
+    "current_core_skill_date": "TEXT",
+    "profile_map_shown_date": "TEXT",
+    "profile_map_shown_count": "INTEGER DEFAULT 0"
 }
 
 async def migrate_db(db_path: str):

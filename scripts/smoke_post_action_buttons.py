@@ -116,7 +116,7 @@ async def run() -> None:
         for stage in ("waiting_next_day", "done", "day_core_stop"):
             await set_post_action_user(uid, db_path, stage, rounds=1)
             map_msg = await send(uid, "🧭 Моя карта")
-            assert "Твоя карта" in last_text(map_msg), last_text(map_msg)
+            assert "Твоя карта" in last_text(map_msg) or "Коротко по карте сегодня" in last_text(map_msg), last_text(map_msg)
 
             # After opening the map, the same post-action menu must still work.
             note_msg = await send(uid, "📌 Что изменилось?")
@@ -141,7 +141,7 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         training_map_msg = await send(uid, "🧭 Моя карта")
-        assert "Твоя карта" in last_text(training_map_msg), last_text(training_map_msg)
+        assert "Твоя карта" in last_text(training_map_msg) or "Коротко по карте сегодня" in last_text(training_map_msg), last_text(training_map_msg)
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         skip_msg = await send(uid, "Пропустить")

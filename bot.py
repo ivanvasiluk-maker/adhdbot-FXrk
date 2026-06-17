@@ -216,6 +216,118 @@ ACTION_RELATED_STAGES = {
     "skip_options",
 }
 
+FREE_AFTER_DAY_3 = {
+    "daily_skills": 1,
+    "rounds_per_day": 3,
+    "downscales_per_day": 1,
+    "skill_replacements_per_day": 0,
+    "crisis": True,
+    "short_map": True,
+    "full_map": False,
+    "daily_summary": True,
+}
+
+kb_day_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Давай действие"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🆘 Кризис"), KeyboardButton(text="🔄 Сменить тренера")],
+        [KeyboardButton(text="🌙 Хватит на сегодня")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_short_map_repeat = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📖 Полная карта")],
+        [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="🌙 Закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_short_mode_main = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Давай действие"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🆘 Кризис"), KeyboardButton(text="💳 Что даёт полный режим")],
+    ],
+    resize_keyboard=True,
+)
+
+
+def is_free_after_day3(u: Dict[str, Any]) -> bool:
+    return int(u.get("free_mode") or 0) == 1 and calendar_program_day(u) >= 3 and not is_paid(u)
+
+
+def offer_shown_today(u: Dict[str, Any]) -> bool:
+    raw = u.get("last_offer_shown_at")
+    if not raw:
+        return False
+    try:
+        shown = dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        today = dt.datetime.now(ZoneInfo(str(u.get("timezone") or "Europe/Vilnius"))).date()
+        return shown.astimezone(ZoneInfo(str(u.get("timezone") or "Europe/Vilnius"))).date() == today
+    except Exception:
+        return False
+
+
+def short_daily_map_text(profile: Dict[str, Any]) -> str:
+    node = (
+        profile.get("main_hypothesis")
+        or profile.get("avoidance_trigger")
+        or profile.get("main_pattern")
+        or "страх ошибки / оценки"
+    )
+    helps = []
+    if int(profile.get("downscale_count") or 0):
+        helps.append("уменьшить вход")
+    if profile.get("best_skill") or profile.get("last_successful_skill"):
+        helps.append(f"начать через «{_skill_label(str(profile.get('best_skill') or profile.get('last_successful_skill')))}»")
+    helps.append("начать без требования качества")
+    helps.append("сделать первый шаг на 2 минуты")
+    helps = list(dict.fromkeys(helps))
+    next_test = "2 минуты плохого черновика"
+    return (
+        "🧭 Коротко по карте сегодня:\n\n"
+        "Главный узел:\n"
+        f"— {node}\n\n"
+        "Что помогает:\n"
+        f"— {helps[0]}\n"
+        f"— {helps[1] if len(helps) > 1 else helps[0]}\n\n"
+        "Следующий тест:\n"
+        f"— {next_test}\n\n"
+        "Показать полную карту?"
+    )
+
+
+async def send_user_map(m: Message, u: Dict[str, Any], source: str):
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    today = local_date_for_user(u)
+    already_shown = u.get("profile_map_shown_date") == today and int(u.get("profile_map_shown_count") or 0) > 0
+    full_requested = source == "full_map"
+    if is_free_after_day3(u) and full_requested:
+        await log_event(u["user_id"], u.get("stage", ""), "full_map_limited_in_free_mode", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(
+            m,
+            u,
+            short_daily_map_text(profile)
+            + "\n\nПолная динамическая карта доступна в полном режиме. Короткая карта остаётся бесплатной.",
+            kb_short_mode_main,
+            u.get("stage") or "training_main",
+        )
+        return
+    if already_shown and not full_requested:
+        txt = short_daily_map_text(profile)
+        markup = kb_short_map_repeat
+    else:
+        txt = render_short_user_map(profile, u.get("name"))
+        markup = kb_training_main
+    prev_date = u.get("profile_map_shown_date")
+    u["profile_map_shown_date"] = today
+    u["profile_map_shown_count"] = (int(u.get("profile_map_shown_count") or 0) + 1) if prev_date == today else 1
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], u.get("stage", ""), "profile_map_requested", {"source": source, "short": already_shown and not full_requested}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, txt, markup, u.get("stage") or "training_main")
+
 VOICE_FREE_TEXT_STAGES = {
     "ask_name",
     "await_trainer",
@@ -776,6 +888,7 @@ TRAINER_SWITCH_STAGES = {
     "skill_card",
     "done",
     "profile_map",
+    "day_menu",
 }
 
 
@@ -1202,7 +1315,8 @@ def crisis_skill_for_pattern(pattern: str) -> str:
 
 
 def crisis_paid_unlimited(u: Dict[str, Any]) -> bool:
-    return is_paid(u)
+    # Crisis support must remain available in every mode, including free mode.
+    return True
 
 
 def _crisis_tool_count_today(profile: Dict[str, Any], u: Dict[str, Any]) -> int:
@@ -1323,7 +1437,20 @@ async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
     u["pending_crisis_pattern"] = pattern
     u["pending_crisis_skill"] = skill
     await save_user(u, DB_PATH)
-    await m.answer(crisis_tool_text(pattern))
+    if len((reason_text or "").strip()) >= 40 and pattern in {"perfectionism", "anxiety_loop", "task_entry_block", "self_attack"}:
+        await m.answer(
+            "Я вижу: сейчас не просто прокрастинация, а тревога + стыд + избегание.\n\n"
+            "Не решаем статью целиком.\n"
+            "Следующие 2 минуты:\n\n"
+            "1. Открой документ.\n"
+            "2. Напиши заголовок: “Плохой черновик”.\n"
+            "3. Ниже напиши 3 тупых тезиса.\n"
+            "4. Не редактируй.\n\n"
+            "Цель — не качество.\n"
+            "Цель — разрушить заморозку."
+        )
+    else:
+        await m.answer(crisis_tool_text(pattern))
     await answer_with_keyboard(m, u, crisis_effect_prompt_text(), kb_crisis_effect, "crisis_effect")
 
 async def send_crisis_stabilize(m: Message, u: Dict[str, Any], source: str):
@@ -1857,30 +1984,21 @@ def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any])
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
     return (
         "🧭 За первые дни карта уже начала собираться.\n\n"
-        "Похоже, твой цикл сейчас такой:\n\n"
-        "важная задача → много вариантов → тревога/стыд → телефон или новости → "
-        "временное облегчение → вина → ещё тяжелее начать.\n\n"
-        "Что уже сработало:\n"
-        "✔ открыть задачу без требования работать\n"
-        "✔ убрать телефон на 3 минуты\n"
-        "✔ уменьшить шаг до одного слова\n"
-        "✔ не считать срыв концом дня\n\n"
-        "Дальше есть два режима.\n\n"
-        "Короткий режим:\n"
-        "— 1 общий навык в день\n"
-        "— без глубокой адаптации\n"
-        "— карта обновляется ограниченно\n\n"
+        "Дальше можно продолжить в двух режимах.\n\n"
+        "Бесплатный короткий режим:\n"
+        "— 1 базовый навык в день\n"
+        "— короткая карта\n"
+        "— кризисная помощь\n"
+        "— закрытие дня\n"
+        "— 1 упрощение шага, если застрял\n\n"
         "Полный режим:\n"
-        "— ежедневная персональная карта\n"
-        "— подбор шага под твои реакции\n"
+        "— больше адаптации\n"
         "— разбор залипаний\n"
         "— замена навыков\n"
-        "— выводы по паттернам\n"
-        "— план на следующие дни\n\n"
-        "Цель полного режима:\n"
-        "собрать твою личную инструкцию запуска:\n"
-        "как начинать важные задачи, когда мозг сопротивляется.\n\n"
-        "Цена: 14.98 €/месяц."
+        "— персональный план\n"
+        "— выводы по повторяющимся паттернам\n\n"
+        "Можно продолжить бесплатно.\n"
+        "Полный режим можно подключить позже."
     )
 
 
@@ -1981,6 +2099,8 @@ def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
         if is_paid(u) or int(u.get("free_mode") or 0) == 1:
             return False
         return True
+    if offer_shown_today(u):
+        return False
     state = dict(u)
     state["day"] = calendar_program_day(state)
     if not engine_should_show_offer(state):
@@ -2001,10 +2121,10 @@ def payment_month_url() -> str:
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text="💳 Продолжить за €14.98", url=payment_month_url())],
+        [InlineKeyboardButton(text="🔁 Продолжить бесплатно", callback_data="stay_free")],
+        [InlineKeyboardButton(text="💳 Полный режим за €14.98", url=payment_month_url())],
         [InlineKeyboardButton(text="📚 Что входит", callback_data="offer_details")],
         [InlineKeyboardButton(text="🧭 Моя карта", callback_data="show_map")],
-        [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data="stay_free")],
     ]
     if is_admin(user_id) and PAYMENT_TEST_URL:
         keyboard.append([InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL)])
@@ -2036,21 +2156,24 @@ def offer_details_full_mode_text() -> str:
         "— выводы по повторяющимся паттернам\n"
         "— план следующих проверок\n"
         "— больше гибкости, чем в коротком режиме\n\n"
-        "Короткий режим оставляет только 1 базовый навык в день.\n"
-        "Полный режим собирает твою личную систему запуска."
+        "Короткий режим остаётся рабочим: 1 навык, короткая карта, кризис и закрытие дня.\n"
+        "Полный режим не открывает «доступ к боту», а усиливает персонализацию."
     )
 
 
 def stay_free_text() -> str:
     return (
-        "Ок. Оставляю короткий режим.\n\n"
-        "В нём будет:\n"
+        "Ок. Продолжаем в коротком режиме.\n\n"
+        "Он остаётся рабочим:\n"
         "— один навык в день\n"
-        "— базовая тренировка\n"
-        "— короткие выводы\n\n"
-        "Без полного режима я не буду глубоко собирать карту, "
-        "сравнивать паттерны и подбирать систему запуска по твоим реакциям.\n\n"
-        "Вернуться к полному режиму можно позже."
+        "— короткая карта\n"
+        "— помощь, если шаг слишком большой\n"
+        "— кризисный режим\n"
+        "— закрытие дня\n\n"
+        "Полный режим нужен не для “доступа к боту”,\n"
+        "а для более точной персонализации:\n"
+        "разборов, замен навыков, паттернов и плана на следующие дни.\n\n"
+        "Сегодня продолжаем без оплаты."
     )
 
 
@@ -2771,7 +2894,7 @@ def detects_body_doubling_signal(text: str) -> bool:
 async def ask_today_action(m: Message, u: Dict[str, Any]):
     day = sync_calendar_day(u)
     await save_user(u, DB_PATH)
-    if day > 3 and not is_paid(u) and not day_core_test_mode_enabled(u) and not TEST_MODE:
+    if day > 3 and not is_paid(u) and int(u.get("free_mode") or 0) != 1 and not day_core_test_mode_enabled(u) and not TEST_MODE and not offer_shown_today(u):
         await log_event(u["user_id"], "offer", "paywall_after_trial", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
         await show_day3_offer(m, u, "paywall_after_trial")
         return
@@ -2873,6 +2996,30 @@ def failed_reason_explanation(reason: str, u: Dict[str, Any]) -> str:
 
 async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
     """Показать причино-специфичный маленький action-step внутри текущего loop."""
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    if is_free_after_day3(u) and int(profile.get("downscale_count_today") or 0) >= FREE_AFTER_DAY_3["downscales_per_day"]:
+        await log_event(u["user_id"], "training", "free_downscale_limit_reached", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(
+            m,
+            u,
+            "На сегодня в коротком режиме достаточно.\n\n"
+            "Ты уже сделал базовую тренировку.\n"
+            "Сейчас лучше не собирать новые техники, а закрепить один вход.\n\n"
+            "Можно:\n"
+            "— закрыть день\n"
+            "— посмотреть карту\n"
+            "— продолжить в полном режиме",
+            ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="🌙 Закрыть день")],
+                    [KeyboardButton(text="🧭 Моя карта")],
+                    [KeyboardButton(text="💳 Полный режим")],
+                ],
+                resize_keyboard=True,
+            ),
+            "waiting_next_day",
+        )
+        return
     skill_id, config = failed_reason_skill(reason)
     skill = dict(SKILLS_DB.get(skill_id) or SKILLS_DB[DOWNSCALE_PRIMARY_SKILL])
     skill.setdefault("skill_id", skill_id)
@@ -2885,7 +3032,6 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
     u["stage"] = "downscale_action"
     await save_user(u, DB_PATH)
 
-    profile = await get_user_profile(u["user_id"], DB_PATH)
     downscale_count = int(profile.get("downscale_count") or 0) + 1
     signal_patch = {
         "avoidance_pattern": config.get("avoidance_pattern"),
@@ -2987,15 +3133,34 @@ async def main_flow(m: Message):
         text = voice_text.strip()
         low = text.lower()
 
-    if text == "🧭 Моя карта" or "моя карта" in low:
-        profile = await get_user_profile(u["user_id"], DB_PATH)
-        txt = render_short_user_map(profile, u.get("name"))
-        await log_event(u["user_id"], u.get("stage", ""), "profile_map_requested", {"source": "persistent_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(m, u, txt, kb_training_main, u.get("stage") or "training_main")
+    if text in {"📖 Полная карта", "🧭 Моя карта"} or "моя карта" in low or "полная карта" in low:
+        await send_user_map(m, u, "full_map" if text == "📖 Полная карта" or "полная карта" in low else "persistent_button")
+        return
+
+    if text in {"💳 Полный режим", "💳 Что даёт полный режим"} or "полный режим" in low and "плат" not in low:
+        await log_event(u["user_id"], u.get("stage", ""), "offer_details_requested", {"source": "persistent_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(offer_details_full_mode_text(), reply_markup=offer_details_inline_keyboard(u["user_id"]))
         return
 
     if u.get("stage") == "trainer_switch":
         await handle_trainer_switch_choice(m, u, text)
+        return
+
+    if u.get("stage") == "day_menu":
+        if text == "💪 Давай действие" or "давай действие" in low:
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await ask_today_action(m, u)
+            return
+        if text in {"🌙 Хватит на сегодня", "🌙 Закрыть день"} or "хватит" in low or "закрыть день" in low:
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок. Закрываем день. Минимальный шаг уже считается данными.", kb_done, "waiting_next_day")
+            return
+        if text == "🔄 Сменить тренера" or "сменить тренера" in low:
+            await open_trainer_switch(m, u, "day_menu")
+            return
+        await answer_with_keyboard(m, u, "Что сейчас сделать?", kb_day_menu, "day_menu")
         return
 
     if text == "🔄 Сменить тренера" or "сменить тренера" in low or "другой тренер" in low or "режим" in low and "трен" in low:
@@ -3428,11 +3593,8 @@ async def main_flow(m: Message):
     # попадали в общий fallback "Выбери действие", хотя кнопки были валидными.
     if u.get("stage") in {"waiting_next_day", "done", "day_core_stop"}:
         trainer_key = u.get("trainer_key") or "marsha"
-        if text == "🧭 Моя карта" or "моя карта" in low:
-            profile = await get_user_profile(u["user_id"], DB_PATH)
-            txt = render_short_user_map(profile, u.get("name"))
-            await log_event(u["user_id"], "training", "profile_map_requested", {"source": "day_core_stop"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, txt, kb_done, "waiting_next_day")
+        if text in {"📖 Полная карта", "🧭 Моя карта"} or "моя карта" in low or "полная карта" in low:
+            await send_user_map(m, u, "full_map" if text == "📖 Полная карта" or "полная карта" in low else "day_core_stop")
             return
         if text == "📚 Почему это работает" or "почему это работает" in low:
             await log_event(u["user_id"], "training", "day_lock_why_opened", {"day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -3451,6 +3613,29 @@ async def main_flow(m: Message):
             return
         if text == "🔁 Ещё круг" or "еще круг" in low or "ещё круг" in low:
             profile = await get_user_profile(u["user_id"], DB_PATH)
+            if is_free_after_day3(u) and int(u.get("day_core_round_count") or 0) >= FREE_AFTER_DAY_3["rounds_per_day"]:
+                await log_event(u["user_id"], "training", "free_round_limit_reached", {"rounds": int(u.get("day_core_round_count") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await answer_with_keyboard(
+                    m,
+                    u,
+                    "На сегодня в коротком режиме достаточно.\n\n"
+                    "Ты уже сделал базовую тренировку.\n"
+                    "Сейчас лучше не собирать новые техники, а закрепить один вход.\n\n"
+                    "Можно:\n"
+                    "— закрыть день\n"
+                    "— посмотреть карту\n"
+                    "— продолжить в полном режиме",
+                    ReplyKeyboardMarkup(
+                        keyboard=[
+                            [KeyboardButton(text="🌙 Закрыть день")],
+                            [KeyboardButton(text="🧭 Моя карта")],
+                            [KeyboardButton(text="💳 Полный режим")],
+                        ],
+                        resize_keyboard=True,
+                    ),
+                    "day_core_stop",
+                )
+                return
             if int(u.get("day_core_round_count") or 0) >= 3 and not day_core_test_mode_enabled(u):
                 await log_event(u["user_id"], "training", "daily_progression_stop_suggested", {"rounds": int(u.get("day_core_round_count") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await answer_with_keyboard(m, u, today_progress_text(u, profile), kb_day_core_stop, "day_core_stop")
@@ -3916,19 +4101,42 @@ async def main_flow(m: Message):
             safe_prompt = stored_analysis_user_text(u)
             comp = normalize_analysis(comp, safe_prompt)
             comp.pop("user_text", None)
-            comp["useful_signal"] = "ленивость исключена из модели; смотрим на вход в действие"
+            comp["specific_pattern"] = "страх оценки / стыд / цена ошибки"
+            comp["avoidance_behavior"] = "заморозка перед безопасным черновиком"
+            comp["useful_signal"] = "ленивость исключена из модели; проверяем не внимание, а безопасный черновик"
+            comp["selected_skill"] = "bad_first_draft" if "bad_first_draft" in SKILLS_DB else comp.get("selected_skill")
             comp.update(safe_analysis_memory(safe_prompt, comp))
             u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
             source = misunderstood_context(u).get("source") or "analysis"
             u["pending_plan_change"] = None
             u["stage"] = "confirm_analysis" if source == "confirm_analysis" else "waiting_next_day"
             await save_user(u, DB_PATH)
-            patch = {"not_laziness_confirmed": True, "last_misunderstood_reason": reason}
+            patch = {
+                "not_laziness_confirmed": True,
+                "last_misunderstood_reason": reason,
+                "main_hypothesis": "страх оценки / стыд / цена ошибки",
+                "main_pattern": "fear_of_evaluation",
+                "avoidance_trigger": "цена ошибки",
+                "avoidance_pattern": "shame_or_evaluation_freeze",
+                "attention_pattern": "",
+            }
             await update_user_profile(u["user_id"], patch, DB_PATH)
             await log_event(u["user_id"], "analysis", "analysis_rebuilt", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
             await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "misunderstood", **patch}, DB_PATH, SHEETS_WEBHOOK_URL)
             markup = kb_analysis_confirm if u["stage"] == "confirm_analysis" else kb_training_main
-            await answer_with_keyboard(m, u, "Да. Убираю лень из модели.\n\n" + format_comprehensive_analysis(comp), markup, "analysis_rebuilt")
+            await answer_with_keyboard(
+                m,
+                u,
+                "Ок. Исправляю карту.\n\n"
+                "Старую гипотезу убираю.\n"
+                "Новая гипотеза:\n"
+                "— страх оценки / стыд / цена ошибки\n\n"
+                "Сегодня проверяем не внимание,\n"
+                "а безопасный черновик.\n\n"
+                + format_comprehensive_analysis(comp),
+                markup,
+                "analysis_rebuilt",
+            )
             return
         if text.startswith("5") or "объяснить иначе" in low or "по-другому" in low or "по другому" in low:
             reason = "explain_differently"
@@ -4069,11 +4277,8 @@ async def main_flow(m: Message):
             await answer_with_keyboard(m, u, "Ещё действия:", kb_more_actions, "more_actions")
             return
 
-        if text == "🧭 Моя карта" or "моя карта" in low:
-            profile = await get_user_profile(u["user_id"], DB_PATH)
-            txt = render_short_user_map(profile, u.get("name"))
-            await log_event(u["user_id"], "training", "profile_map_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, txt, ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="💪 Давай действие")],[KeyboardButton(text="📚 Что это значит")],[KeyboardButton(text="⬅️ Назад")]], resize_keyboard=True), "profile_map")
+        if text in {"📖 Полная карта", "🧭 Моя карта"} or "моя карта" in low or "полная карта" in low:
+            await send_user_map(m, u, "full_map" if text == "📖 Полная карта" or "полная карта" in low else "training")
             return
 
         if text == "📚 Что это значит" or "что это значит" in low:
@@ -4175,7 +4380,7 @@ async def main_flow(m: Message):
                 await show_route(m, u, "day3_summary")
                 await show_day3_offer(m, u, "day3_auto")
                 return
-            if not TEST_MODE and day >= 7 and u.get("trial_phase") in ("trial3", "trial7", None):
+            if not TEST_MODE and day >= 7 and u.get("trial_phase") in ("trial3", "trial7", None) and not offer_shown_today(u):
                 await show_day3_offer(m, u, "trial_paywall_after_return")
                 return
             await answer_with_keyboard(m, u, "Что дальше?", kb_done, "done")
@@ -4418,7 +4623,7 @@ async def main_flow(m: Message):
             u["payment_status"] = "free_mode"
             u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
-            await m.answer(stay_free_text(), reply_markup=stay_free_inline_keyboard(u["user_id"]))
+            await m.answer(stay_free_text(), reply_markup=kb_short_mode_main)
             return
         if text in {"📚 Что входит", "📚 Подробнее о карте", "📚 Что будет дальше"} or "что входит" in low or "подробнее" in low or "что будет дальше" in low:
             await log_event(u["user_id"], "offer", "profile_map_details_opened", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -4437,10 +4642,27 @@ async def main_flow(m: Message):
         await m.answer("Выбирай кнопкой 👇", reply_markup=offer_inline_keyboard(u["user_id"]))
         return
 
-    # Если дошли до сюда — неизвестный этап, выводим stage для отладки
-    stage = str(u.get('stage')).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[').replace(']', '\\]').replace('`', '\\`')
-    if stage != "post_done_reflection":
-        await m.answer(f"Неизвестный этап (stage): {stage}. Напиши /start чтобы начать заново или обратись к поддержке.", parse_mode=None)
+    # Если дошли до сюда — неизвестный этап. Не сбрасываем пользователя в /start:
+    # возвращаем к безопасному меню текущего дня.
+    raw_stage = str(u.get("stage") or "")
+    if raw_stage != "post_done_reflection":
+        await log_event(
+            u["user_id"],
+            raw_stage,
+            "unknown_stage_recovered",
+            {"stage": raw_stage, "message_text": text or ""},
+            DB_PATH,
+            SHEETS_WEBHOOK_URL,
+        )
+        u["stage"] = "day_menu"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Кажется, я потерял место в маршруте. Возвращаю тебя к текущему дню.\n\nЧто сейчас сделать?",
+            kb_day_menu,
+            "day_menu",
+        )
 
 # ============================================================
 # CALLBACKS
@@ -4472,14 +4694,14 @@ async def on_offer_callbacks(c: CallbackQuery):
         u["payment_status"] = "free_mode"
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
-        await c.message.answer(stay_free_text(), reply_markup=stay_free_inline_keyboard(uid))
+        await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
         await c.answer()
         return
 
     if data == "continue_free":
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
-        await c.message.answer("Ок. Продолжаем короткий режим.", reply_markup=kb_training_main)
+        await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
         await c.answer()
         return
 
