@@ -424,12 +424,60 @@ def replace_day_core_skill(u: Dict[str, Any], skill_id: str):
 
 def clear_day_core_lock(u: Dict[str, Any]):
     """Admin/test helper: allow a new core skill without waiting for local midnight."""
-    u["day_core_skill_id"] = None
-    u["day_core_skill_date"] = None
-    u["day_core_round_count"] = 0
-    u["current_core_skill_id"] = None
-    u["current_skill_variant_id"] = None
-    u["current_core_skill_date"] = None
+    for key in (
+        "day_core_skill_id",
+        "day_core_skill_date",
+        "current_core_skill_id",
+        "current_skill_variant_id",
+        "current_core_skill_date",
+        "pending_skill_id",
+        "pending_skill_day",
+        "last_offer_shown_at",
+    ):
+        u[key] = None
+    for key in (
+        "day_core_round_count",
+        "current_skill_completed_count",
+        "daily_replacement_count",
+        "daily_skill_done",
+        "today_closed",
+        "offer_shown_today",
+        "skill_limit_reached",
+        "crisis_free_count",
+    ):
+        u[key] = 0
+
+
+def set_last_explanation_context(u: Dict[str, Any], ctx_type: str, title: str, reason: str, evidence: Optional[List[str]] = None, next_step: str = ""):
+    u["last_explanation_context"] = json.dumps({
+        "type": ctx_type,
+        "title": title,
+        "reason": reason,
+        "evidence": evidence or [],
+        "next_step": next_step,
+    }, ensure_ascii=False)
+
+
+def render_last_explanation_context(u: Dict[str, Any]) -> str:
+    raw = u.get("last_explanation_context") or ""
+    try:
+        ctx = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        ctx = {}
+    if not ctx:
+        return (
+            "Пока нечего раскрывать: сначала выбери действие, навык, карту или кризисный разбор — "
+            "и я объясню именно последний контекст."
+        )
+    lines = [f"📚 Подробнее: {ctx.get('title') or 'последний шаг'}"]
+    if ctx.get("reason"):
+        lines += ["", str(ctx.get("reason"))]
+    evidence = ctx.get("evidence") or []
+    if evidence:
+        lines += ["", "Почему так:"] + [f"— {x}" for x in evidence if x]
+    if ctx.get("next_step"):
+        lines += ["", f"Следующий шаг: {ctx.get('next_step')}"]
+    return "\n".join(lines)
 
 
 def _skill_label(skill_id: Optional[str], fallback: str = "маленький вход") -> str:
@@ -1279,6 +1327,10 @@ async def record_return_after_disruption_if_needed(u: Dict[str, Any], profile: D
 
 def crisis_pattern_from_text(text: str) -> str:
     low = (text or "").lower().strip()
+    if any(x in low for x in ("навредить себе", "не уверен, что остановлюсь", "лучше бы меня не было", "есть план", "покончить", "суицид", "самоуб")):
+        return "high_risk"
+    if any(x in low for x in ("меня не понимают", "я один", "я одна", "никому не нужен", "никому не нужна", "кому написать", "меня бросят", "один дома")):
+        return "social_pain"
     if text.startswith("1") or "не могу начать" in low or "не могу заставить" in low or "смотрю на задачу" in low or "откладываю старт" in low or "начать" in low:
         return "task_entry_block"
     if text.startswith("2") or any(x in low for x in ("залип", "ютуб", "youtube", "tiktok", "тик ток", "telegram", "телеграм", "соцсет", "соцсети", "отвлёк", "отвлек", "вкладк", "видео", "лента", "скрол", "телефон")):
@@ -1294,6 +1346,77 @@ def crisis_pattern_from_text(text: str) -> str:
     if text.startswith("7") or any(x in low for x in ("тревог", "вдруг", "а если", "пережива", "накруч")):
         return "anxiety_loop"
     return "unknown"
+
+
+CRISIS_BUTTON_PATTERNS = {
+    "не могу начать": "task_entry_block",
+    "залип": "attention_escape",
+    "боюсь ошибки": "perfectionism",
+    "всё слишком большое": "overwhelm",
+    "все слишком большое": "overwhelm",
+    "нет сил": "low_energy",
+    "сам себя сжираю": "self_attack",
+    "тревога": "anxiety_loop",
+    "другое": "unknown",
+}
+
+
+def _selected_crisis_patterns(u: Dict[str, Any]) -> List[str]:
+    try:
+        data = json.loads(u.get("pending_plan_change") or "{}")
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or data.get("type") != "crisis_multiselect":
+        return []
+    return [str(x) for x in data.get("patterns") or [] if x]
+
+
+def _save_selected_crisis_patterns(u: Dict[str, Any], patterns: List[str]) -> None:
+    u["pending_plan_change"] = json.dumps({"type": "crisis_multiselect", "patterns": patterns}, ensure_ascii=False)
+
+
+def _crisis_pattern_from_button(text: str) -> Optional[str]:
+    low = (text or "").lower().replace("⬜", "").replace("✅", "").strip()
+    low = re.sub(r"^[0-9️⃣\s.:-]+", "", low).strip()
+    return CRISIS_BUTTON_PATTERNS.get(low)
+
+
+def crisis_multiselect_keyboard(selected: List[str]) -> ReplyKeyboardMarkup:
+    labels = [
+        ("task_entry_block", "Не могу начать"),
+        ("attention_escape", "Залип"),
+        ("perfectionism", "Боюсь ошибки"),
+        ("overwhelm", "Всё слишком большое"),
+        ("low_energy", "Нет сил"),
+        ("self_attack", "Сам себя сжираю"),
+        ("anxiety_loop", "Тревога"),
+        ("unknown", "Другое"),
+    ]
+    buttons = []
+    for code, label in labels:
+        mark = "✅" if code in selected else "⬜"
+        buttons.append(KeyboardButton(text=f"{mark} {label}"))
+    return ReplyKeyboardMarkup(keyboard=[buttons[0:2], buttons[2:4], buttons[4:6], buttons[6:8], [KeyboardButton(text="✅ Всё выбрал")]], resize_keyboard=True)
+
+
+def combined_crisis_tool_text(patterns: List[str]) -> str:
+    patterns = list(dict.fromkeys(patterns or []))
+    if "high_risk" in patterns:
+        return crisis_tool_text("high_risk")
+    if {"attention_escape", "anxiety_loop", "perfectionism"}.issubset(set(patterns)):
+        return (
+            "Вижу связку: тревога → страх ошибки → уход в залипание.\n\n"
+            "Значит, не начинаем с “работай”. Сначала стабилизируем тело, потом убираем стимул, потом делаем безопасный черновой шаг.\n\n"
+            "Дальше:\n"
+            "1. Один длинный выдох.\n"
+            "2. Телефон дальше руки.\n"
+            "3. Открыть документ.\n"
+            "4. Написать заголовок: “Плохой черновик”.\n"
+            "5. Написать 3 тупых тезиса.\n\n"
+            "Минимум: открыть документ и написать “плохой черновик”."
+        )
+    parts = [crisis_tool_text(p) for p in patterns[:3] if p != "unknown"]
+    return "\n\n———\n\n".join(parts) if parts else crisis_tool_text("unknown")
 
 
 crisis_tool_reason_from_text = crisis_pattern_from_text
@@ -1363,7 +1486,7 @@ def crisis_effect_code(text: str) -> str:
 
 
 async def classify_crisis_pattern(reason_text: str) -> str:
-    allowed = {"attention_escape", "task_entry_block", "perfectionism", "overwhelm", "low_energy", "self_attack", "anxiety_loop", "unknown"}
+    allowed = {"attention_escape", "task_entry_block", "perfectionism", "overwhelm", "low_energy", "self_attack", "anxiety_loop", "social_pain", "high_risk", "unknown"}
     if (reason_text or "").strip() in allowed:
         return (reason_text or "").strip()
     fallback = crisis_pattern_from_text(reason_text)
@@ -1372,7 +1495,7 @@ async def classify_crisis_pattern(reason_text: str) -> str:
     try:
         prompt = (
             "Classify this crisis message into exactly one code: "
-            "attention_escape, task_entry_block, perfectionism, overwhelm, low_energy, self_attack, anxiety_loop, unknown. "
+            "attention_escape, task_entry_block, perfectionism, overwhelm, low_energy, self_attack, anxiety_loop, social_pain, high_risk, unknown. "
             "Return only the code. Do not quote the user.\n\n"
             f"Message: {reason_text[:500]}"
         )
@@ -1398,9 +1521,10 @@ async def show_crisis_entry(m: Message, u: Dict[str, Any], source: str):
 
 async def show_crisis_tool_prompt(m: Message, u: Dict[str, Any]):
     u["stage"] = "crisis_tool_select"
+    _save_selected_crisis_patterns(u, _selected_crisis_patterns(u))
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "crisis", "crisis_tool_prompt_shown", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await m.answer(crisis_tool_prompt_text(), reply_markup=kb_crisis_tool_select)
+    await m.answer(crisis_tool_prompt_text(), reply_markup=crisis_multiselect_keyboard(_selected_crisis_patterns(u)))
 
 
 async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
@@ -1436,8 +1560,21 @@ async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
     u["crisis_count"] = crisis_count
     u["pending_crisis_pattern"] = pattern
     u["pending_crisis_skill"] = skill
+    set_last_explanation_context(
+        u,
+        "crisis",
+        skill,
+        "Я сопоставил текст/выбор с кризисным стеком и сначала отсекаю высокий риск, а уже потом даю продуктивный шаг.",
+        [f"распознанный паттерн: {pattern}", "кризисный режим не возвращает в тренировку, пока не станет безопаснее"],
+        "Сделай минимум из блока и отметь, стало ли легче хотя бы на 5%.",
+    )
     await save_user(u, DB_PATH)
-    if len((reason_text or "").strip()) >= 40 and pattern in {"perfectionism", "anxiety_loop", "task_entry_block", "self_attack"}:
+    if pattern == "high_risk":
+        u["stage"] = "crisis_text"
+        await save_user(u, DB_PATH)
+        await m.answer(crisis_tool_text(pattern))
+        return
+    elif len((reason_text or "").strip()) >= 40 and pattern in {"perfectionism", "anxiety_loop", "task_entry_block", "self_attack"}:
         await m.answer(
             "Я вижу: сейчас не просто прокрастинация, а тревога + стыд + избегание.\n\n"
             "Не решаем статью целиком.\n"
@@ -1451,7 +1588,9 @@ async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
         )
     else:
         await m.answer(crisis_tool_text(pattern))
-    await answer_with_keyboard(m, u, crisis_effect_prompt_text(), kb_crisis_effect, "crisis_effect")
+    u["stage"] = "crisis_action_await"
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, "Сделай минимум из блока и отметь, что получилось.", kb_crisis_action, "crisis_action")
 
 async def send_crisis_stabilize(m: Message, u: Dict[str, Any], source: str):
     u["stage"] = "crisis_stabilize"
@@ -1982,23 +2121,45 @@ def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any])
 
 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    points = _day3_offer_profile_points(summary, profile)
+    points_text = "\n".join(f"✔ {p}" for p in points[:5]) or "✔ уже появились первые данные о том, что помогает входить в действие"
     return (
         "🧭 За первые дни карта уже начала собираться.\n\n"
-        "Дальше можно продолжить в двух режимах.\n\n"
-        "Бесплатный короткий режим:\n"
-        "— 1 базовый навык в день\n"
-        "— короткая карта\n"
-        "— кризисная помощь\n"
-        "— закрытие дня\n"
-        "— 1 упрощение шага, если застрял\n\n"
-        "Полный режим:\n"
-        "— больше адаптации\n"
-        "— разбор залипаний\n"
-        "— замена навыков\n"
-        "— персональный план\n"
-        "— выводы по повторяющимся паттернам\n\n"
-        "Можно продолжить бесплатно.\n"
-        "Полный режим можно подключить позже."
+        "Я вижу не просто “ты прокрастинируешь”.\n"
+        "Вижу твой цикл:\n"
+        "важная задача → тревога/стыд → задача кажется слишком большой → уход в быстрый стимул → временное облегчение → вина → ещё сложнее вернуться.\n\n"
+        "Что уже получилось:\n"
+        f"{points_text}\n\n"
+        "Что будем делать дальше:\n"
+        "не давать тебе случайные советы,\n"
+        "а собирать твою личную систему запуска:\n"
+        "— какие шаги реально работают;\n"
+        "— какие состояния ломают вход;\n"
+        "— какой формат поддержки подходит;\n"
+        "— когда нужен плохой черновик;\n"
+        "— когда сначала нужно успокоить тело;\n"
+        "— когда нужен внешний старт;\n"
+        "— как возвращаться после срыва.\n\n"
+        "Бесплатный режим остаётся:\n"
+        "— 1 базовый навык в день;\n"
+        "— короткая карта;\n"
+        "— кризисная самопомощь;\n"
+        "— закрытие дня.\n\n"
+        "Полный режим — это не “ещё набор техник”.\n"
+        "Это адаптивная система:\n"
+        "— ежедневная персональная карта;\n"
+        "— разбор залипаний;\n"
+        "— подбор шага под твои реакции;\n"
+        "— замена навыков, если текущий не подходит;\n"
+        "— еженедельный новый стек навыков;\n"
+        "— выводы по повторяющимся паттернам;\n"
+        "— план на следующую неделю;\n"
+        "— больше обратной связи после действий.\n\n"
+        "Цель:\n"
+        "не просто знать техники,\n"
+        "а иметь систему, которая помогает делать, когда мозг сопротивляется.\n\n"
+        "Цена: 14.98 €/месяц.\n\n"
+        "Можно остаться в коротком режиме без стыда — карта всё равно сохранится."
     )
 
 
@@ -2121,10 +2282,10 @@ def payment_month_url() -> str:
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text="🔁 Продолжить бесплатно", callback_data="stay_free")],
-        [InlineKeyboardButton(text="💳 Полный режим за €14.98", url=payment_month_url())],
+        [InlineKeyboardButton(text="💳 Подключить полный режим за €14.98", url=payment_month_url())],
         [InlineKeyboardButton(text="📚 Что входит", callback_data="offer_details")],
-        [InlineKeyboardButton(text="🧭 Моя карта", callback_data="show_map")],
+        [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
+        [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data="stay_free")],
     ]
     if is_admin(user_id) and PAYMENT_TEST_URL:
         keyboard.append([InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL)])
@@ -2456,8 +2617,8 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str):
     u["is_test_user"] = 1
     u["fast_forward_enabled"] = 1
     u["free_mode"] = 0
-    u["payment_status"] = "trial"
-    u["trial_phase"] = "trial3"
+    u["payment_status"] = "test"
+    u["trial_phase"] = "paid"
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], u.get("stage", ""), "test_cheat_activated", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
     await m.answer(
@@ -2495,6 +2656,33 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         else:
             await log_event(uid, u.get("stage", ""), "test_cheat_failed", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer("Код не подошёл.")
+        return True
+
+    if command == "/testmode_on":
+        code = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) == 2 else ""
+        if code and code.lower() in {TEST_CHEAT_CODE.lower(), "skiller_test"}:
+            await activate_test_cheat(m, u, "testmode_on_code")
+        else:
+            await log_event(uid, u.get("stage", ""), "testmode_on_failed", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Код не подошёл. Формат: /testmode_on КОД")
+        return True
+
+    if command == "/testmode_off":
+        u["is_test_user"] = 0
+        u["fast_forward_enabled"] = 0
+        if u.get("payment_status") == "test":
+            u["payment_status"] = "trial"
+        await save_user(u, DB_PATH)
+        await log_event(uid, u.get("stage", ""), "testmode_off", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Тестовый режим выключен.")
+        return True
+
+    if command in {"/my_card", "/card"}:
+        profile = await get_user_profile(uid, DB_PATH)
+        await log_event(uid, u.get("stage", ""), "my_card_requested", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        set_last_explanation_context(u, "map", "Моя карта", "Карта собирается из действий, срывов, кризисных обращений и рабочих навыков.", ["это гипотезы, не диагноз", "срыв = информация, не наказание"], "Проверь, что из карты похоже на правду.")
+        await save_user(u, DB_PATH)
+        await m.answer(render_short_user_map(profile, u.get("name")))
         return True
 
     if command == "/help":
@@ -2549,7 +2737,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     admin_commands = {
         "/testmode_on", "/testmode_off", "/set_day", "/force_next_day",
         "/reset", "/reset_me", "/debug_map", "/debug_user", "/test_payment",
-        "/whoami", "/health", "/mark_paid", "/mark_free", "/sync_sheets", "/stats",
+        "/whoami", "/health", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
+        "/simulate_paid", "/simulate_unpaid", "/payment_status", "/sync_sheets", "/stats",
     }
     if command not in admin_commands:
         return False
@@ -2560,6 +2749,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     if command == "/testmode_on":
         u["is_test_user"] = 1
         u["fast_forward_enabled"] = 1
+        u["payment_status"] = "test"
+        u["trial_phase"] = "paid"
         await save_user(u, DB_PATH)
         await log_event(uid, u.get("stage", ""), "testmode_on", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("""Тестовый режим включён.
@@ -2655,13 +2846,16 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"bucket: {u.get('bucket')}\n"
             f"pending_skill_id: {u.get('pending_skill_id')}\n"
             f"today_target: {u.get('today_target')}\n"
-            f"payment_status: {u.get('payment_status')}\n"
+            f"plan/payment_status: {u.get('payment_status')}\n"
             f"trial_phase: {u.get('trial_phase')}\n"
             f"free_mode: {u.get('free_mode')}\n"
             f"is_test_user: {u.get('is_test_user')}\n"
             f"fast_forward_enabled: {u.get('fast_forward_enabled')}\n"
             f"paid_until: {u.get('paid_until')}\n"
             f"last_payment_click: {u.get('last_payment_click')}\n"
+            f"daily_skill_done: {u.get('daily_skill_done')}\n"
+            f"current_skill: {sid}\n"
+            f"last_explanation_context: {u.get('last_explanation_context')}\n"
             f"last_offer_shown_at: {u.get('last_offer_shown_at')}\n"
             f"last_active: {u.get('last_active')}\n"
             f"profile_json_present: {str(bool(u.get('profile_json'))).lower()}\n"
@@ -2740,6 +2934,41 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await save_user(target, DB_PATH)
         await log_event(target_id, target.get("stage", ""), "free_mode_started", {"source": "admin_mark_free", "admin_id": uid}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(f"✅ user_id {target_id} переведён в free mode.")
+        return True
+
+    if command in {"/grant_full", "/simulate_paid"}:
+        days = 30
+        parts = text.split()
+        if command == "/grant_full" and len(parts) >= 2 and parts[1].isdigit():
+            days = int(parts[1])
+        u["payment_status"] = "paid"
+        u["trial_phase"] = "paid"
+        u["free_mode"] = 0
+        u["paid_until"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=days)).isoformat()
+        await save_user(u, DB_PATH)
+        await log_event(uid, "admin", "full_access_granted", {"days": days, "command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(f"Полный режим включён на {days} дней.")
+        return True
+
+    if command in {"/revoke_full", "/simulate_unpaid"}:
+        u["payment_status"] = "free_mode"
+        u["trial_phase"] = "trial3"
+        u["paid_until"] = None
+        u["free_mode"] = 1
+        await save_user(u, DB_PATH)
+        await log_event(uid, "admin", "full_access_revoked", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Полный режим выключен.")
+        return True
+
+    if command == "/payment_status":
+        await m.answer(
+            "PAYMENT STATUS\n"
+            f"payment_status: {u.get('payment_status')}\n"
+            f"trial_phase: {u.get('trial_phase')}\n"
+            f"is_test_user: {u.get('is_test_user')}\n"
+            f"paid_until: {u.get('paid_until')}\n"
+            f"has_full_access: {str(is_paid(u)).lower()}"
+        )
         return True
 
     return False
@@ -3684,6 +3913,13 @@ async def main_flow(m: Message):
 
 
     if (
+        text in {"📚 Подробнее", "🤔 Зачем это?"} or "подробнее" in (text or "").lower()
+    ) and u.get("stage") not in {"confirm_analysis", "analysis_" + "contract", "analysis_next_step", "analysis_details", "offer"} and not bool(u.get("micro_habit_json")):
+        await log_event(u["user_id"], u.get("stage", ""), "last_explanation_context_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(render_last_explanation_context(u))
+        return
+
+    if (
         text in {"📚 Подробнее", "🤔 Зачем это?"}
         and u.get("stage") not in {"confirm_analysis", "analysis_" + "contract", "analysis_next_step", "offer"}
         and bool(u.get("micro_habit_json"))
@@ -4441,12 +4677,36 @@ async def main_flow(m: Message):
         if m.voice:
             t = await whisper_transcribe(m)
             if not t:
-                await m.answer("Не смог разобрать голос. Выбери пункт или напиши текстом.")
+                await m.answer("Я не смог разобрать голос. Напиши 1–2 фразы или выбери кнопками, что ближе.", reply_markup=crisis_multiselect_keyboard(_selected_crisis_patterns(u)))
                 return
             await send_crisis_tool(m, u, t)
             return
         if not text:
-            await m.answer(crisis_tool_prompt_text(), reply_markup=kb_crisis_tool_select)
+            await m.answer(crisis_tool_prompt_text(), reply_markup=crisis_multiselect_keyboard(_selected_crisis_patterns(u)))
+            return
+        if text == "✅ Всё выбрал" or "всё выбрал" in (text or "").lower() or "все выбрал" in (text or "").lower():
+            selected = _selected_crisis_patterns(u)
+            if not selected:
+                await m.answer("Выбери хотя бы одно состояние или напиши 1–2 фразы.", reply_markup=crisis_multiselect_keyboard(selected))
+                return
+            u["pending_plan_change"] = None
+            set_last_explanation_context(u, "crisis", "Комбинированный кризисный стек", "Ты выбрал несколько состояний, поэтому я собираю порядок: стабилизация → убрать стимул/перегруз → микро-шаг.", selected, "Сделай самый маленький пункт из комбинированного стека.")
+            await save_user(u, DB_PATH)
+            u["stage"] = "crisis_action_await"
+            await save_user(u, DB_PATH)
+            await m.answer(combined_crisis_tool_text(selected))
+            await answer_with_keyboard(m, u, "Сделай минимум из блока и отметь, что получилось.", kb_crisis_action, "crisis_action")
+            return
+        button_pattern = _crisis_pattern_from_button(text)
+        if button_pattern:
+            selected = _selected_crisis_patterns(u)
+            if button_pattern in selected:
+                selected = [x for x in selected if x != button_pattern]
+            else:
+                selected.append(button_pattern)
+            _save_selected_crisis_patterns(u, selected)
+            await save_user(u, DB_PATH)
+            await m.answer("Отметил. Можно выбрать ещё или нажать ✅ Всё выбрал.", reply_markup=crisis_multiselect_keyboard(selected))
             return
         await send_crisis_tool(m, u, text)
         return
@@ -4460,13 +4720,12 @@ async def main_flow(m: Message):
             await m.answer("Слушаю голосовое и перевожу в текст…")
             t = await whisper_transcribe(m)
             if t:
-                pattern = await classify_crisis_pattern(t)
-                u["pending_plan_change"] = json.dumps({"type": "crisis_voice_pattern", "pattern": pattern}, ensure_ascii=False)
-                await save_user(u, DB_PATH)
                 await m.answer(f"Распознал: {clamp_str(t, 700)}")
-                await send_crisis_stabilize(m, u, "voice_entry")
+                await send_crisis_tool(m, u, t)
                 return
-            await m.answer("Не смог разобрать голос. Выбери голосом/текстом кнопкой.")
+            await m.answer("Я не смог разобрать голос. Напиши 1–2 фразы или выбери кнопками, что ближе.", reply_markup=crisis_multiselect_keyboard([]))
+            u["stage"] = "crisis_tool_select"
+            await save_user(u, DB_PATH)
             return
 
         if text == "⬅️ Назад" or "назад" in low:
@@ -4476,18 +4735,26 @@ async def main_flow(m: Message):
             return
         if text in {"🎙 Голосом", "🎙 Кризис голосом"} or "голос" in low:
             u["crisis_input_mode"] = "voice"
+            u["stage"] = "crisis_text"
             await save_user(u, DB_PATH)
-            await send_crisis_stabilize(m, u, "voice_entry")
+            await m.answer("Пришли голосовое. Я переведу его в текст и разберу тем же кризисным анализатором.")
             return
         if text in {"✍️ Текстом", "✍️ Кризис текстом"} or "текст" in low:
             u["crisis_input_mode"] = "text"
+            u["stage"] = "crisis_text"
             await save_user(u, DB_PATH)
-            await send_crisis_stabilize(m, u, "text_entry")
+            await m.answer("Напиши 1–3 предложения: что происходит прямо сейчас?")
+            return
+        if "выбрать" in low or "кноп" in low:
+            _save_selected_crisis_patterns(u, [])
+            u["stage"] = "crisis_tool_select"
+            await save_user(u, DB_PATH)
+            await m.answer(crisis_tool_prompt_text(), reply_markup=crisis_multiselect_keyboard([]))
             return
         if text:
             u["crisis_input_mode"] = "text"
             await save_user(u, DB_PATH)
-            await send_crisis_stabilize(m, u, "text_entry")
+            await send_crisis_tool(m, u, text)
             return
         await answer_with_keyboard(m, u, crisis_entry_text(), kb_crisis_mode, "crisis_mode")
         return
@@ -4531,6 +4798,76 @@ async def main_flow(m: Message):
         await send_crisis_tool(m, u, t)
         return
 
+    if u.get("stage") == "social_support_await":
+        value = (text or "").strip()
+        if not value:
+            await answer_with_keyboard(m, u, social_support_prompt_text(), kb_social_support, "social_support")
+            return
+        no_support = "нет опоры" in value.lower()
+        patch = {
+            "social_support_choice": value,
+            "social_support_available": 0 if no_support else 1,
+            "social_support_notes": value,
+            "social_support_prompt_shown": 1,
+        }
+        await update_user_profile(u["user_id"], patch, DB_PATH, source="social_support")
+        await log_event(u["user_id"], "social_support", "social_support_recorded", patch, DB_PATH, SHEETS_WEBHOOK_URL)
+        u["stage"] = "waiting_next_day"
+        await save_user(u, DB_PATH)
+        if no_support:
+            await answer_with_keyboard(
+                m,
+                u,
+                "Ок. Тогда пока не строим план на поддержке других людей. Будем искать автономные опоры: среда, таймер, маленький шаг, ритуал старта.",
+                kb_training_main,
+                "training_main",
+            )
+        else:
+            await answer_with_keyboard(
+                m,
+                u,
+                "Записал в карту: будем учитывать, кому можно написать, помогает ли присутствие других людей и нужен ли внешний старт.",
+                kb_training_main,
+                "training_main",
+            )
+        return
+
+    if u.get("stage") == "crisis_action_await":
+        low = (text or "").lower().strip()
+        pattern = u.get("pending_crisis_pattern") or "unknown"
+        if text in {"✅ Сделал", "✅ Написал"} or "сделал" in low or "написал" in low or "вернулся" in low:
+            u["stage"] = "crisis_effect_await"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, crisis_effect_prompt_text(), kb_crisis_effect, "crisis_effect")
+            return
+        if text == "😣 Не могу" or "не могу" in low:
+            await log_event(u["user_id"], "crisis", "crisis_action_blocked", {"pattern": pattern}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(
+                m,
+                u,
+                "Ок. Тогда не давим. Сделай только минимум: один выдох / один клик / открыть чат / сесть и глоток воды. Потом нажми ✅ Сделал.",
+                kb_crisis_action,
+                "crisis_action",
+            )
+            return
+        if text == "🧩 Ещё меньше" or "ещё меньше" in low or "еще меньше" in low:
+            await log_event(u["user_id"], "crisis", "crisis_downscale_requested", {"pattern": pattern}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(
+                m,
+                u,
+                "Ещё меньше: не решай задачу. Только один телесный или физический микрошаг: выдох, глоток воды, свернуть экран, открыть файл или открыть чат.",
+                kb_crisis_action,
+                "crisis_action",
+            )
+            return
+        if text == "🆘 Мне всё ещё плохо" or "всё ещё плохо" in low or "все еще плохо" in low:
+            u["stage"] = "crisis_stabilize"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
+            return
+        await answer_with_keyboard(m, u, "Выбери кнопку: ✅ Сделал / 😣 Не могу / 🧩 Ещё меньше / 🆘 Мне всё ещё плохо", kb_crisis_action, "crisis_action")
+        return
+
     if u.get("stage") == "crisis_effect_await":
         effect = crisis_effect_code(text)
         profile = await get_user_profile(u["user_id"], DB_PATH)
@@ -4560,6 +4897,15 @@ async def main_flow(m: Message):
             u["pending_crisis_skill"] = None
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, crisis_still_bad_text(), kb_crisis_stabilize, "crisis_stabilize")
+            return
+        profile_after = await get_user_profile(u["user_id"], DB_PATH)
+        if not profile_after.get("social_support_prompt_shown"):
+            u["stage"] = "social_support_await"
+            u["pending_crisis_pattern"] = None
+            u["pending_crisis_skill"] = None
+            await update_user_profile(u["user_id"], {"social_support_prompt_shown": 1}, DB_PATH, source="social_support_prompt")
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, social_support_prompt_text(), kb_social_support, "social_support")
             return
         u["stage"] = "waiting_next_day"
         u["pending_crisis_pattern"] = None

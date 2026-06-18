@@ -112,12 +112,12 @@ async def run():
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
-        has_adaptive_payment = any("€14.98" in t and ("Продолжить" in t or "Полный режим" in t) for t in kb_texts)
+        has_adaptive_payment = any("€14.98" in t and ("Подключить" in t or "Полный режим" in t) for t in kb_texts)
         has_primary_map = "🧭 Первичная карта" in offer_text or "🧭 За первые дни карта уже начала собираться." in offer_text
-        has_day3_conclusion = "📌 ПОЛНОЕ ЗАКЛЮЧЕНИЕ ПОСЛЕ 3 ДНЕЙ" in offer_text or "Дальше можно продолжить в двух режимах." in offer_text
-        has_personal_offer = ("ТВОЙ ПРОФИЛЬ" in offer_text or "Полный режим:" in offer_text) and "Можно продолжить бесплатно" in offer_text
-        has_model_value = ("Мы продаём не навыки" in offer_text and "персональной модели" in offer_text) or "более точной персонализации" in offer_text or "персональный план" in offer_text
-        has_selling_specifics = ("какие навыки реально работают" in offer_text and "какую сложность выдерживает" in offer_text) or ("больше адаптации" in offer_text and "разбор залипаний" in offer_text)
+        has_day3_conclusion = "📌 ПОЛНОЕ ЗАКЛЮЧЕНИЕ ПОСЛЕ 3 ДНЕЙ" in offer_text or "Я вижу не просто" in offer_text
+        has_personal_offer = "Полный режим — это не “ещё набор техник”." in offer_text and "Остаться" in " ".join(kb_texts)
+        has_model_value = "личную систему запуска" in offer_text or "адаптивная система" in offer_text
+        has_selling_specifics = "какие шаги реально работают" in offer_text and "разбор залипаний" in offer_text
         assert int(task_start.get("value") or 0) > 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
         assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map

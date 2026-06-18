@@ -1183,6 +1183,7 @@ USER_FIELDS = [
     "current_core_skill_date",
     "profile_map_shown_date",
     "profile_map_shown_count",
+    "last_explanation_context",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1293,6 +1294,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "analysis_retry_count": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
         "last_offer_shown_at": None,
+        "last_explanation_context": None,
         "profile_json": default_user_profile(trainer_key="marsha"),
         "last_micro_habit_id": None,
         "last_micro_habit_date": None,
@@ -1457,6 +1459,7 @@ EXTRA_USER_COLS = {
     "pending_skill_day": "INTEGER",
     "today_target": "TEXT",
     "last_offer_shown_at": "TEXT",
+    "last_explanation_context": "TEXT",
     "profile_json": "TEXT DEFAULT '{}'",
     "last_micro_habit_id": "TEXT",
     "last_micro_habit_date": "TEXT",
@@ -1689,10 +1692,24 @@ def gamify_apply(u: dict, delta_points: int, reason: str):
     u["last_active"] = now
 
 def is_paid(u: dict) -> bool:
-    """Проверить, платит ли пользователь"""
+    """Проверить, есть ли полный доступ: paid, testmode или активная дата paid_until."""
     if TEST_MODE:
         return True
-    return u.get("payment_status") == "paid" or u.get("trial_phase") == "paid"
+    if int(u.get("is_test_user") or 0) == 1 or str(u.get("payment_status") or "").lower() in {"paid", "test", "full"}:
+        return True
+    if u.get("trial_phase") == "paid":
+        return True
+    paid_until = u.get("paid_until")
+    if paid_until:
+        try:
+            text = str(paid_until).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt > datetime.now(timezone.utc)
+        except Exception:
+            return False
+    return False
 
 def should_ping(u: dict, hours: int) -> bool:
     """Проверить, нужно ли пинговать пользователя"""
