@@ -399,6 +399,50 @@ async def transcribe_voice_for_current_prompt(m: Message, u: Dict[str, Any]) -> 
     return voice_text
 
 
+DIAGNOSIS_INPUT_STAGES = {
+    "await_input_mode",
+    "choose_input_mode",
+    "await_problem_text",
+    "await_problem_voice",
+    "taking_test",
+    "run_analysis",
+    "analysis_need_more",
+}
+
+ACTIVE_CRISIS_STAGES = {
+    "crisis_stabilize",
+    "crisis_choose_mode",
+    "crisis_voice",
+    "crisis_text",
+    "crisis_plan_confirm",
+    "crisis_tool_select",
+    "crisis_action_await",
+    "crisis_effect_await",
+}
+
+
+def should_open_global_crisis(text: str, stage: str) -> bool:
+    """Open crisis globally only for explicit crisis requests, without hijacking diagnosis text.
+
+    A long diagnosis/product message can mention the word "кризис" while asking for analysis.
+    That must stay in the analysis route instead of being converted into crisis mode.
+    """
+    low = (text or "").lower().strip()
+    if stage in ACTIVE_CRISIS_STAGES or stage in DIAGNOSIS_INPUT_STAGES:
+        return False
+    if text == "🆘 Кризис" or low == "/crisis":
+        return True
+    explicit_phrases = (
+        "открой кризис",
+        "включи кризис",
+        "мне нужен кризис",
+        "мне нужен кризисный режим",
+        "кризисный режим",
+        "у меня кризис",
+    )
+    return any(phrase in low for phrase in explicit_phrases)
+
+
 def user_is_in_action_loop(u: Dict[str, Any]) -> bool:
     """Пользователь уже после первой карты и находится в тренировочном loop."""
     return bool(u.get("analysis_json") or u.get("plan_json") or u.get("has_started_training")) and u.get("stage") in ACTION_RELATED_STAGES
@@ -3488,8 +3532,9 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
         return
 
-    # Глобальный хук: кризис доступен из любого состояния, но не перебиваем активный кризис-флоу
-    if (text == "🆘 Кризис" or "кризис" in low) and u.get("stage") not in {"crisis_stabilize", "crisis_choose_mode", "crisis_voice", "crisis_text", "crisis_plan_confirm", "crisis_tool_select", "crisis_effect_await"}:
+    # Глобальный хук: кризис доступен из любого состояния, но не перехватывает диагностику
+    # и длинные сообщения, где слово "кризис" используется как часть запроса/разбора.
+    if should_open_global_crisis(text, u.get("stage") or ""):
         await show_crisis_entry(m, u, "global")
         return
 
@@ -4679,6 +4724,8 @@ async def main_flow(m: Message):
             if not t:
                 await m.answer("Я не смог разобрать голос. Напиши 1–2 фразы или выбери кнопками, что ближе.", reply_markup=crisis_multiselect_keyboard(_selected_crisis_patterns(u)))
                 return
+            u["crisis_text"] = t
+            await save_user(u, DB_PATH)
             await send_crisis_tool(m, u, t)
             return
         if not text:
@@ -4708,6 +4755,8 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer("Отметил. Можно выбрать ещё или нажать ✅ Всё выбрал.", reply_markup=crisis_multiselect_keyboard(selected))
             return
+        u["crisis_text"] = text
+        await save_user(u, DB_PATH)
         await send_crisis_tool(m, u, text)
         return
 
@@ -4720,6 +4769,8 @@ async def main_flow(m: Message):
             await m.answer("Слушаю голосовое и перевожу в текст…")
             t = await whisper_transcribe(m)
             if t:
+                u["crisis_text"] = t
+                await save_user(u, DB_PATH)
                 await m.answer(f"Распознал: {clamp_str(t, 700)}")
                 await send_crisis_tool(m, u, t)
                 return
@@ -4753,6 +4804,7 @@ async def main_flow(m: Message):
             return
         if text:
             u["crisis_input_mode"] = "text"
+            u["crisis_text"] = text
             await save_user(u, DB_PATH)
             await send_crisis_tool(m, u, text)
             return
@@ -4768,6 +4820,8 @@ async def main_flow(m: Message):
                 return
             text = t.strip()
             low = text.lower()
+            u["crisis_text"] = text
+            await save_user(u, DB_PATH)
             await m.answer(f"Распознал: {clamp_str(text, 700)}")
         if text and text.lower().strip() in {"⬅️ назад", "назад"}:
             u["stage"] = "waiting_next_day"
@@ -4777,6 +4831,8 @@ async def main_flow(m: Message):
         if not text:
             await m.answer("Напиши 1–3 предложения или пришли голосовое.")
             return
+        u["crisis_text"] = text
+        await save_user(u, DB_PATH)
         await send_crisis_tool(m, u, text)
         return
 
@@ -4795,6 +4851,8 @@ async def main_flow(m: Message):
             u["stage"] = "crisis_text"
             await save_user(u, DB_PATH)
             return
+        u["crisis_text"] = t
+        await save_user(u, DB_PATH)
         await send_crisis_tool(m, u, t)
         return
 

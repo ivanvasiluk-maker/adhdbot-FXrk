@@ -112,6 +112,11 @@ async def main() -> None:
         assert button_text in support_buttons
     assert "Ещё один кусок карты — опоры" in social_support_prompt_text()
 
+    assert bot.should_open_global_crisis("🆘 Кризис", "waiting_next_day") is True
+    assert bot.should_open_global_crisis("у меня кризис", "training") is True
+    assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "await_problem_text") is False
+    assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "run_analysis") is False
+
     assert bot.crisis_pattern_from_text("могу навредить себе, есть план") == "high_risk"
     assert bot.crisis_pattern_from_text("меня не понимают и я один") == "social_pain"
     assert await bot.classify_crisis_pattern("high_risk") == "high_risk"
