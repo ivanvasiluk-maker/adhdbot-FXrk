@@ -498,7 +498,7 @@ def detect_live_analysis_pattern(user_text: str) -> str:
     text = (user_text or "").lower()
     if any(x in text for x in ("ленив", "безволь", "нормальные люди", "со мной что-то не так")):
         return "shame_self_attack"
-    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен", "выглядеть глупо", "глупо", "стыдно", "критика")) or ("боюсь" in text and any(x in text for x in ("плохо", "ошиб", "глуп", "оцен", "письм", "результ"))):
+    if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен", "осуждени", "редактор", "слабый автор", "кажется тупым", "тупым", "выглядеть глупо", "глупо", "стыдно", "критика")) or ("боюсь" in text and any(x in text for x in ("плохо", "ошиб", "глуп", "оцен", "осуж", "письм", "стать", "текст", "результ"))):
         return "perfectionism_visibility_fear"
     if any(x in text for x in ("залип", "ютуб", "youtube", "сообщения", "почта", "на минуту", "лента", "скрол")):
         return "attention_escape"
@@ -533,6 +533,15 @@ def extract_analysis_signals(user_text: str) -> Dict[str, Any]:
 
     if any(x in text for x in ("письмо", "письма", "письм")):
         signals["task"] = "письмо"
+    if any(x in text for x in ("статья", "статью", "текст", "материал")):
+        signals["task"] = "статья / текст"
+        add_fact("статью нужно сдать сегодня" if "сегодня" in text else "важный текст ждёт первого черновика")
+    if any(x in text for x in ("завис", "застрял", "открываю документ", "закрываю")):
+        add_fact("документ открывается, но текст не начинается")
+    if any(x in text for x in ("паника", "панич", "страшно")):
+        add_fact("перед стартом поднимается паника")
+    if any(x in text for x in ("слабый автор", "боюсь осуждения", "осуждени", "редактор", "зачем мы вообще")):
+        add_fact("страх оценки делает каждое предложение опасным")
     if "третий день" in text or "3 день" in text or "три дня" in text:
         signals["delay"] = "письмо стоит третий день"
         add_fact("письмо стоит третий день")
@@ -647,6 +656,33 @@ def _recommended_skill_for_pattern(pattern: str) -> Dict[str, str]:
 
 def _primary_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str) -> Dict[str, str]:
     if pattern == "perfectionism_visibility_fear":
+        if any("стать" in item or "текст" in item or "автор" in item for item in evidence):
+            facts = "\n".join(f"— {x}" for x in evidence[:5])
+            return {
+                "skinny": (
+                    f"Что вижу.\n\n{facts}\n\n"
+                    "Механизм: задача не просто написать текст. Старт стал моментом, где тебя будто можно оценить как автора. "
+                    "Поэтому мозг выбирает безопасное зависание: документ открыт, но предложения не появляются.\n\n"
+                    "Как справляемся: не пишем хорошую статью. Делаем плохой черновой вход, который пока никто не увидит.\n\n"
+                    "Первый тест: открыть документ и написать заголовок “Плохой черновик”, потом 3 сырых тезиса. "
+                    "Если напряжение снизится — нашли главный узел. Если нет — карта покажет другой вход."
+                ),
+                "beck": (
+                    f"Коротко, что вижу.\n\n{facts}\n\n"
+                    "Моя гипотеза: проблема не в теме и не в отсутствии способностей. "
+                    "Проблема в цене оценки: каждое предложение ощущается как доказательство, хороший ты автор или нет.\n\n"
+                    "Механизм такой: пока текст не написан, его нельзя раскритиковать. Поэтому зависание временно снижает риск, но усиливает дедлайн и стыд.\n\n"
+                    "Как справляемся: отделяем черновик от оценки. Первый навык — плохой черновик без отправки. "
+                    "Сегодня проверяем не качество текста, а возможность войти в него на 2 минуты."
+                ),
+                "marsha": (
+                    f"Ок. Давай аккуратно.\n\n{facts}\n\n"
+                    "Похоже, тяжело не потому, что ты не знаешь тему. Тяжело приблизиться к месту, где текст могут оценить.\n\n"
+                    "Механизм: страх оценки делает каждое предложение слишком дорогим. Поэтому мозг удерживает тебя рядом с задачей, но не пускает в текст.\n\n"
+                    "Как справляемся: разрешаем плохой, безопасный черновик. Не финальный материал. Только вход. "
+                    "Минимум — одно плохое предложение или 3 сырых тезиса."
+                ),
+            }
         return {
             "skinny": (
                 "Ок. Смотрю вход.\n\n"
@@ -724,6 +760,21 @@ def _primary_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis
 
 def _detailed_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str) -> Dict[str, str]:
     if pattern == "perfectionism_visibility_fear":
+        if any("стать" in item or "текст" in item or "автор" in item for item in evidence):
+            facts = "\n".join(f"— {x}" for x in evidence[:6]) or "— есть страх оценки текста"
+            text = (
+                "Почему такая гипотеза?\n\n"
+                f"Я опираюсь на:\n{facts}\n\n"
+                "Связка выглядит так:\n"
+                "важный текст → риск оценки → каждое предложение кажется опасным → документ открывается и закрывается → временное облегчение → давление растёт.\n\n"
+                "Механизм: мозг не саботирует работу, а пытается не попасть в оценку. Пока черновика нет, его нельзя раскритиковать. Но дедлайн и стыд растут.\n\n"
+                "Что проверяем:\n"
+                "□ плохой черновик без отправки\n"
+                "□ 3 сырых тезиса вместо хорошего текста\n"
+                "□ один вход на 2 минуты без редактуры\n\n"
+                "Если это сработает, главный узел — страх оценки. Если нет, будем смотреть перегруз, энергию или среду."
+            )
+            return {"skinny": text, "beck": text, "marsha": text}
         return {
             "skinny": (
                 "Разбор по фактам.\n\n"
@@ -939,7 +990,9 @@ def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str
     data = dict(comp or {})
     signals = data.get("analysis_signals") if isinstance(data.get("analysis_signals"), dict) else extract_analysis_signals(user_text)
     evidence = [str(x) for x in signals.get("facts", []) if x]
-    pattern = str(data.get("live_pattern") or detect_live_analysis_pattern(user_text) or "default_start_block")
+    detected_pattern = detect_live_analysis_pattern(user_text)
+    stored_pattern = str(data.get("live_pattern") or "")
+    pattern = stored_pattern if stored_pattern and stored_pattern != "default_start_block" else (detected_pattern or "default_start_block")
     core_hypothesis = _analysis_result_core_hypothesis(pattern)
     secondary = [
         "помогает ли плохой черновик" if pattern == "perfectionism_visibility_fear" else "какой минимальный шаг помогает начать",
@@ -980,6 +1033,19 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
         )
 
     if pattern == "perfectionism_visibility_fear":
+        if any("стать" in item or "текст" in item or "автор" in item for item in evidence):
+            facts = "\n".join(f"— {x}" for x in evidence[:6]) or "— есть страх оценки текста"
+            return (
+                "Почему такая гипотеза?\n\n"
+                f"Я опираюсь на:\n{facts}\n\n"
+                "Связка выглядит так:\n"
+                "важный текст → риск оценки → каждое предложение кажется опасным → документ открывается и закрывается → временное облегчение → давление растёт.\n\n"
+                "Что проверяем:\n"
+                "□ плохой черновик без отправки\n"
+                "□ 3 сырых тезиса вместо хорошего текста\n"
+                "□ один вход на 2 минуты без редактуры\n\n"
+                "Если это сработает, главный узел — страх оценки. Если нет, будем смотреть перегруз, энергию или среду."
+            )
         if trainer_key == "skinny":
             return (
                 "Почему такая гипотеза?\n\n"
