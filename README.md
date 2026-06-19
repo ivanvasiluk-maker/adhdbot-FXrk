@@ -41,6 +41,9 @@ DB_PATH=bot.db
 PAYMENT_URL=
 PAYMENT_URL_DISCOUNT=
 PAYMENT_URL_FULL=
+PAYMENT_URL_MONTH_1498=
+PAYMENT_TEST_URL=
+PAYMENT_ACCEPT_ANY=0
 SHEETS_WEBHOOK_URL=
 TEST_MODE=0
 TEST_CHEAT_CODE=SKILLER_TEST_1498
@@ -48,6 +51,7 @@ TEST_CHEAT_CODE=SKILLER_TEST_1498
 Notes:
 - Leave `OPENAI_API_KEY` empty to run without AI features.
 - Set `TEST_MODE=1` to skip paywalls and unlock full flow during testing.
+- For cheap payment-link QA, set `PAYMENT_TEST_URL` to the €1 link and `PAYMENT_ACCEPT_ANY=1`. In this mode the offer uses the test link when available, and `/confirm_payment` or the “✅ Я оплатил(а) — тест” button manually marks the user as paid for 30 days. There is no automatic provider-side payment verification without a payment webhook. Turn `PAYMENT_ACCEPT_ANY` off before production.
 - Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables per-user QA helpers, including `/force_next_day` and `/set_day 3` (both immediately open that day’s training) plus `/show_offer`. Destructive/admin operations such as payment marking, stats, and Sheets sync stay ADMIN-only.
 - `DB_PATH` points to the SQLite file; it is auto-created/migrated on start.
 
