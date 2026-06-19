@@ -460,7 +460,7 @@ async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE
         payment_events = [e for e in events if _event_name(e) in PAYMENT_EVENTS]
         synced_ids: List[int] = []
         failures: List[str] = []
-        supplemental_failures: List[str] = []
+        supplemental_warnings: List[str] = []
 
         if normal_events:
             rows = [event_to_sheet_row(e, users.get(int(e["user_id"] or 0), {})) for e in normal_events]
@@ -485,29 +485,32 @@ async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE
             rows = [payment_to_sheet_row(e, users.get(int(e["user_id"] or 0), {})) for e in payment_events]
             ok, msg = await post_rows(rows, sheet="payments")
             if not ok:
-                supplemental_failures.append(f"payments: {msg}")
+                supplemental_warnings.append(f"payments: {msg}")
 
         if users:
             rows = [user_to_sheet_row(user) for user in users.values()]
             ok, msg = await post_rows(rows, sheet="users")
             if not ok:
-                supplemental_failures.append(f"users: {msg}")
+                supplemental_warnings.append(f"users: {msg}")
 
         today = datetime.utcnow().date().isoformat()
         ok, msg = await post_rows([daily_summary_to_sheet_row(today, all_users, all_events)], sheet="daily_summary")
         if not ok:
-            supplemental_failures.append(f"daily_summary: {msg}")
+            supplemental_warnings.append(f"daily_summary: {msg}")
 
         if synced_ids:
             await _mark_events_synced(db, synced_ids)
         await db.commit()
 
         failed = len(event_ids) - len(synced_ids)
-        all_failures = failures + supplemental_failures
-        if all_failures:
-            msg = "; ".join(all_failures)[:500]
+        if failures:
+            msg = "; ".join(failures)[:500]
             log.error("Sheets sync failed: %s", msg)
             return {"synced": len(synced_ids), "failed": failed, "error": msg}
+        if supplemental_warnings:
+            warning = "; ".join(supplemental_warnings)[:500]
+            log.warning("Sheets optional tab sync skipped: %s", warning)
+            return {"synced": len(synced_ids), "failed": 0, "error": "", "warning": warning}
         return {"synced": len(synced_ids), "failed": 0, "error": ""}
 
 
