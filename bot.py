@@ -81,6 +81,10 @@ load_dotenv(override=True)
 # CONFIG
 # ============================================================
 
+def env_bool(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on", "debug", "check"}
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
@@ -92,14 +96,15 @@ PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
 PAYMENT_MONTH_URL = os.getenv("PAYMENT_MONTH_URL", "").strip()
 PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
-ENABLE_PAYMENTS = os.getenv("ENABLE_PAYMENTS", "").lower() in {"1", "true", "yes", "on"}
+PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
+ENABLE_PAYMENTS = env_bool("ENABLE_PAYMENTS")
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
 # Unlock full flow while testing (set TEST_MODE=1)
-TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
+TEST_MODE = env_bool("TEST_MODE")
 IS_TEST_MODE = TEST_MODE
 TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
-STARTUP_CHECK = os.getenv("BOT_STARTUP_CHECK", "").lower() in {"1", "true", "yes", "on", "check"}
+STARTUP_CHECK = env_bool("BOT_STARTUP_CHECK")
 MAX_CRISIS_MATCHES_PER_DAY = 3
 
 AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
@@ -110,6 +115,10 @@ log = logging.getLogger("bot")
 
 log.info("BOT_TOKEN configured: %s", bool(BOT_TOKEN))
 log.info("DB_PATH: %s", DB_PATH)
+if PAYMENT_ACCEPT_ANY:
+    log.warning("PAYMENT_ACCEPT_ANY is enabled: test payment confirmations can grant paid access; disable it before production.")
+if STARTUP_CHECK:
+    log.info("BOT_STARTUP_CHECK is enabled: startup will validate init and exit before Telegram polling.")
 
 # OpenAI client
 openai = None
@@ -2321,7 +2330,44 @@ def is_admin(user_id: int) -> bool:
 
 
 def payment_month_url() -> str:
+    if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
+        return PAYMENT_TEST_URL
     return PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL or "https://your-payment-link"
+
+
+def paid_access_until(days: int = 30, existing_until: Optional[str] = None) -> str:
+    now = dt.datetime.now(dt.timezone.utc)
+    base = now
+    if existing_until:
+        try:
+            parsed = dt.datetime.fromisoformat(str(existing_until).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=dt.timezone.utc)
+            if parsed > now:
+                base = parsed
+        except (TypeError, ValueError):
+            base = now
+    return (base + dt.timedelta(days=days)).isoformat()
+
+
+def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил(а) — включить тестовый доступ", callback_data="confirm_test_payment")],
+    ])
+
+
+async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[str, Any]] = None) -> None:
+    meta = dict(meta or {})
+    meta.setdefault("days", 30)
+    meta.setdefault("amount", 1 if PAYMENT_ACCEPT_ANY else 14.98)
+    u["payment_status"] = "paid"
+    u["trial_phase"] = "paid"
+    u["free_mode"] = 0
+    u["paid_until"] = paid_access_until(30, u.get("paid_until"))
+    u["last_payment_click"] = u.get("last_payment_click") or source
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], u.get("stage", ""), "payment_completed", {"source": source, **meta}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], u.get("stage", ""), "paid_mode_started", {"source": source, **meta}, DB_PATH, SHEETS_WEBHOOK_URL)
 
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -2331,6 +2377,8 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
         [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data="stay_free")],
     ]
+    if PAYMENT_ACCEPT_ANY:
+        keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data="confirm_test_payment")])
     if is_admin(user_id) and PAYMENT_TEST_URL:
         keyboard.append([InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL)])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -2451,9 +2499,10 @@ def _today_iso(u: Optional[Dict[str, Any]] = None):
     return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 def should_show_micro_habit(u: Dict[str, Any], source: str = "done") -> bool:
-    # System of Day is shown only after the training day is closed.
-    # It is not a second skill, not progress, and not a streak action.
-    allowed_sources = {"day_closed", "day_core_stop", "done_enough_today"}
+    # System of Day can be shown after the user names today's target
+    # or when the training day is closed. It is not a second skill,
+    # not progress, and not a streak action.
+    allowed_sources = {"day_start", "day_closed", "day_core_stop", "done_enough_today"}
     if source not in allowed_sources:
         return False
     if (u.get("last_micro_habit_date") or "") == _today_iso(u):
@@ -2684,6 +2733,14 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return False
     uid = m.from_user.id
     command = text.split(maxsplit=1)[0].lower()
+
+    if command == "/confirm_payment":
+        if PAYMENT_ACCEPT_ANY:
+            await grant_paid_access(u, "test_confirm_command", {"accept_any_payment": True})
+            await m.answer("✅ Тестовая оплата засчитана. Полный режим включён на 30 дней.", reply_markup=kb_training_main)
+        else:
+            await m.answer("Автоподтверждение оплаты выключено. Нужен PAYMENT_ACCEPT_ANY=1 или админская /mark_paid.")
+        return True
 
     if command == "/show_offer":
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -2928,6 +2985,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"Sheets sync enabled {str(bool(SHEETS_SYNC_ENABLED)).lower()}\n"
             f"Sheets interval {SHEETS_SYNC_INTERVAL_SECONDS}s batch {SHEETS_SYNC_BATCH_SIZE}\n"
             f"Payments configured {str(bool(ENABLE_PAYMENTS or PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)).lower()}\n"
+            f"Payment test url configured {str(bool(PAYMENT_TEST_URL)).lower()}\n"
+            f"Payment accept any {str(bool(PAYMENT_ACCEPT_ANY)).lower()}\n"
             f"Testmode {str(bool(TEST_MODE or int(u.get('is_test_user') or 0))).lower()}"
         )
         return True
@@ -2954,13 +3013,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             return True
         target_id = int(parts[1])
         target = await get_user(target_id, DB_PATH)
-        target["payment_status"] = "paid"
-        target["trial_phase"] = "paid"
-        target["free_mode"] = 0
-        target["last_payment_click"] = target.get("last_payment_click") or "admin_mark_paid"
-        await save_user(target, DB_PATH)
-        await log_event(target_id, target.get("stage", ""), "payment_completed", {"source": "admin_mark_paid", "admin_id": uid}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(target_id, target.get("stage", ""), "paid_mode_started", {"source": "admin_mark_paid"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await grant_paid_access(target, "admin_mark_paid", {"admin_id": uid, "amount": 14.98})
         await m.answer(f"✅ user_id {target_id} помечен как paid.")
         return True
 
@@ -2988,7 +3041,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["payment_status"] = "paid"
         u["trial_phase"] = "paid"
         u["free_mode"] = 0
-        u["paid_until"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=days)).isoformat()
+        u["paid_until"] = paid_access_until(days, u.get("paid_until"))
         await save_user(u, DB_PATH)
         await log_event(uid, "admin", "full_access_granted", {"days": days, "command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(f"Полный режим включён на {days} дней.")
@@ -5015,6 +5068,8 @@ async def main_flow(m: Message):
             if pay_url:
                 await m.answer(f"{payment_intro}\n\nНажми кнопку ниже для оплаты.")
                 await m.answer(" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💳 Продолжить за €14.98", url=pay_url)]]))
+                if PAYMENT_ACCEPT_ANY:
+                    await m.answer("Для теста: после любой успешной оплаты по ссылке нажми подтверждение ниже — я засчитаю её как правильную.", reply_markup=test_payment_confirm_keyboard())
             else:
                 await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await log_event(u["user_id"], "offer", "payment_stub_shown", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -5072,7 +5127,7 @@ async def main_flow(m: Message):
 # CALLBACKS
 # ============================================================
 
-@router.callback_query(F.data.in_({"offer_details", "show_map", "stay_free", "continue_free", "test_payment"}))
+@router.callback_query(F.data.in_({"offer_details", "show_map", "stay_free", "continue_free", "test_payment", "confirm_test_payment"}))
 async def on_offer_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
@@ -5106,6 +5161,15 @@ async def on_offer_callbacks(c: CallbackQuery):
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
+        await c.answer()
+        return
+
+    if data == "confirm_test_payment":
+        if PAYMENT_ACCEPT_ANY:
+            await grant_paid_access(u, "test_payment_confirm_button", {"accept_any_payment": True})
+            await c.message.answer("✅ Тестовая оплата засчитана. Полный режим включён на 30 дней.", reply_markup=kb_training_main)
+        else:
+            await c.message.answer("Автоподтверждение оплаты выключено. Нужен PAYMENT_ACCEPT_ANY=1 или админская /mark_paid.")
         await c.answer()
         return
 

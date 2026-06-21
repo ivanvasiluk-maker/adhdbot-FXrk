@@ -85,3 +85,8 @@ ADMIN_IDS=123456789,987654321
 ```
 
 Do not commit the real webhook URL. Store it only in Railway/env.
+
+## Troubleshooting
+
+- `TelegramConflictError: Conflict: terminated by other getUpdates request` means the same `BOT_TOKEN` is already being polled by another running bot process. Stop the duplicate local/Railway/container instance and leave only one active deployment.
+- `Sheet not found: daily_summary` means the optional analytics tab is missing. Core `events` sync can still work; create the `daily_summary` tab with the headers above if you want daily aggregate rows.
