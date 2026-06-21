@@ -42,17 +42,25 @@ PAYMENT_URL=
 PAYMENT_URL_DISCOUNT=
 PAYMENT_URL_FULL=
 PAYMENT_URL_MONTH_1498=
+PAYMENT_MONTH_URL=
 PAYMENT_TEST_URL=
 PAYMENT_ACCEPT_ANY=0
+ENABLE_PAYMENTS=0
 SHEETS_WEBHOOK_URL=
+SHEETS_SYNC_ENABLED=true
+SHEETS_SYNC_INTERVAL_SECONDS=60
+SHEETS_SYNC_BATCH_SIZE=50
 TEST_MODE=0
 TEST_CHEAT_CODE=SKILLER_TEST_1498
+BOT_STARTUP_CHECK=0
+ADMIN_IDS=
 ```
 Notes:
 - Leave `OPENAI_API_KEY` empty to run without AI features.
 - Set `TEST_MODE=1` to skip paywalls and unlock full flow during testing.
 - For cheap payment-link QA, set `PAYMENT_TEST_URL` to the €1 link and `PAYMENT_ACCEPT_ANY=1`. In this mode the offer uses the test link when available, and `/confirm_payment` or the “✅ Я оплатил(а) — тест” button manually marks the user as paid for 30 days. There is no automatic provider-side payment verification without a payment webhook. Turn `PAYMENT_ACCEPT_ANY` off before production.
 - Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables per-user QA helpers, including `/force_next_day` and `/set_day 3` (both immediately open that day’s training) plus `/show_offer`. Destructive/admin operations such as payment marking, stats, and Sheets sync stay ADMIN-only.
+- Set `BOT_STARTUP_CHECK=1` only for deploy/build sanity checks; in this mode the bot initializes and exits without starting Telegram polling.
 - `DB_PATH` points to the SQLite file; it is auto-created/migrated on start.
 
 ## Docker
@@ -73,3 +81,6 @@ docker run --env-file .env adhd-bot
 - If `BOT_TOKEN` is missing, startup raises a runtime error.
 - If OpenAI import fails, the bot logs a warning and continues without AI features.
 - Ensure `.env` is in the working directory you run from; `load_dotenv(override=True)` is called early in [bot.py](bot.py).
+- Do not test paid flows while `TelegramConflictError: terminated by other getUpdates request` appears. It means another process is already polling the same Telegram bot token, so this instance may stop or miss messages. Stop duplicate Railway/local/container runs and keep exactly one active polling process before clicking any payment link.
+- For payment QA, first verify the bot responds normally to `/start` or `/show_offer`, then use the €1 `PAYMENT_TEST_URL`, and only after payment press “✅ Я оплатил(а) — тест” or send `/confirm_payment`.
+- If the “✅ Я оплатил(а) — тест” button is missing from the offer, check Railway variables: `PAYMENT_ACCEPT_ANY` must be truthy (`1`, `true`, `yes`, `on`, or `debug`) and the bot must be redeployed after changing env vars.

@@ -81,6 +81,10 @@ load_dotenv(override=True)
 # CONFIG
 # ============================================================
 
+def env_bool(name: str, default: str = "") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on", "debug", "check"}
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
@@ -92,15 +96,15 @@ PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
 PAYMENT_MONTH_URL = os.getenv("PAYMENT_MONTH_URL", "").strip()
 PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
-PAYMENT_ACCEPT_ANY = os.getenv("PAYMENT_ACCEPT_ANY", "").lower() in {"1", "true", "yes", "on", "debug"}
-ENABLE_PAYMENTS = os.getenv("ENABLE_PAYMENTS", "").lower() in {"1", "true", "yes", "on"}
+PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
+ENABLE_PAYMENTS = env_bool("ENABLE_PAYMENTS")
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
 
 # Unlock full flow while testing (set TEST_MODE=1)
-TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
+TEST_MODE = env_bool("TEST_MODE")
 IS_TEST_MODE = TEST_MODE
 TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
-STARTUP_CHECK = os.getenv("BOT_STARTUP_CHECK", "").lower() in {"1", "true", "yes", "on", "check"}
+STARTUP_CHECK = env_bool("BOT_STARTUP_CHECK")
 MAX_CRISIS_MATCHES_PER_DAY = 3
 
 AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
@@ -111,6 +115,10 @@ log = logging.getLogger("bot")
 
 log.info("BOT_TOKEN configured: %s", bool(BOT_TOKEN))
 log.info("DB_PATH: %s", DB_PATH)
+if PAYMENT_ACCEPT_ANY:
+    log.warning("PAYMENT_ACCEPT_ANY is enabled: test payment confirmations can grant paid access; disable it before production.")
+if STARTUP_CHECK:
+    log.info("BOT_STARTUP_CHECK is enabled: startup will validate init and exit before Telegram polling.")
 
 # OpenAI client
 openai = None
@@ -2977,6 +2985,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"Sheets sync enabled {str(bool(SHEETS_SYNC_ENABLED)).lower()}\n"
             f"Sheets interval {SHEETS_SYNC_INTERVAL_SECONDS}s batch {SHEETS_SYNC_BATCH_SIZE}\n"
             f"Payments configured {str(bool(ENABLE_PAYMENTS or PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)).lower()}\n"
+            f"Payment test url configured {str(bool(PAYMENT_TEST_URL)).lower()}\n"
+            f"Payment accept any {str(bool(PAYMENT_ACCEPT_ANY)).lower()}\n"
             f"Testmode {str(bool(TEST_MODE or int(u.get('is_test_user') or 0))).lower()}"
         )
         return True
