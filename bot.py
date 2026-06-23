@@ -52,6 +52,8 @@ from db import (
     get_user_profile, update_user_profile, render_short_user_map, label, SKILL_LABELS,
     record_development_avatar_event, development_map_event_patch,
     render_development_mirror_reports,
+    ensure_user_day, close_user_day, create_skill_attempt, attempt_count_for_day,
+    record_action_event, get_action_metrics, save_current_task, update_current_task_step,
 )
 from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
@@ -107,6 +109,23 @@ TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
 STARTUP_CHECK = env_bool("BOT_STARTUP_CHECK")
 MAX_CRISIS_MATCHES_PER_DAY = 3
 CRISIS_WAITING_INPUT = "crisis_waiting_input"
+SAFETY_MODES = {"none", "triage", "urgent", "support"}
+SAFETY_RISK_VALUES = {"unknown", "no", "yes", "uncertain"}
+SAFETY_CONTACT_VALUES = {"not_asked", "offered", "sent_message", "called", "unavailable"}
+DEFAULT_EMERGENCY_NUMBER_BY_COUNTRY = {
+    "US": "911",
+    "USA": "911",
+    "LT": "112",
+    "LITHUANIA": "112",
+    "EU": "112",
+}
+try:
+    EMERGENCY_NUMBER_BY_COUNTRY = {
+        **DEFAULT_EMERGENCY_NUMBER_BY_COUNTRY,
+        **json.loads(os.getenv("EMERGENCY_NUMBER_BY_COUNTRY", "{}") or "{}"),
+    }
+except Exception:
+    EMERGENCY_NUMBER_BY_COUNTRY = DEFAULT_EMERGENCY_NUMBER_BY_COUNTRY
 
 AI_ANALYSIS_ENABLED = bool(OPENAI_API_KEY)
 
@@ -263,6 +282,14 @@ kb_short_mode_main = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_day_pause_confirm = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Закрыть день")],
+        [KeyboardButton(text="⏸ Просто пауза"), KeyboardButton(text="↩️ Вернуться к навыку")],
+    ],
+    resize_keyboard=True,
+)
+
 
 def is_free_after_day3(u: Dict[str, Any]) -> bool:
     return int(u.get("free_mode") or 0) == 1 and calendar_program_day(u) >= 3 and not is_paid(u)
@@ -285,7 +312,7 @@ def short_daily_map_text(profile: Dict[str, Any]) -> str:
         profile.get("main_hypothesis")
         or profile.get("avoidance_trigger")
         or profile.get("main_pattern")
-        or "страх ошибки / оценки"
+        or "данных пока мало — проверяем маленький вход"
     )
     helps = []
     if int(profile.get("downscale_count") or 0):
@@ -432,6 +459,300 @@ ACTIVE_CRISIS_STAGES = {
 }
 
 
+
+kb_safety_triage = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🟥 Да"), KeyboardButton(text="🟨 Не уверен(а)"), KeyboardButton(text="🟩 Нет")],
+        [KeyboardButton(text="👤 Да, один(одна)"), KeyboardButton(text="👥 Рядом есть люди")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_safety_urgent = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🟦 Написать человеку сейчас"), KeyboardButton(text="📞 Позвонить человеку")],
+        [KeyboardButton(text="🚶 Перейти туда, где есть люди"), KeyboardButton(text="🧹 Убрать опасные предметы подальше")],
+        [KeyboardButton(text="🚨 Связаться с экстренной помощью"), KeyboardButton(text="🟨 Я не знаю, кому написать")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_safety_message_sent = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Да, отправил(а)"), KeyboardButton(text="⏳ Отправляю сейчас")],
+        [KeyboardButton(text="❌ Не могу")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_safety_contact_choices = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Близкий человек"), KeyboardButton(text="Партнёр")],
+        [KeyboardButton(text="Коллега"), KeyboardButton(text="Сосед")],
+        [KeyboardButton(text="Родственник"), KeyboardButton(text="Кризисная / экстренная служба")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_safety_support_check = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="Да"), KeyboardButton(text="Нет"), KeyboardButton(text="Не знаю")]],
+    resize_keyboard=True,
+)
+
+kb_safety_aftercare = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🛑 На сегодня достаточно")],
+        [KeyboardButton(text="💬 Остаться в поддержке")],
+        [KeyboardButton(text="↩️ Вернуться к задаче позже")],
+    ],
+    resize_keyboard=True,
+)
+
+SAFETY_TRIAGE_TEXT = (
+    "Сейчас не режим продуктивности. Я хочу помочь тебе сделать ближайший безопасный шаг.\n\n"
+    "Ответь кнопкой:\n"
+    "1. Есть риск, что ты можешь навредить себе в ближайшие минуты?\n"
+    "🟥 Да\n"
+    "🟨 Не уверен(а)\n"
+    "🟩 Нет\n\n"
+    "2. Ты сейчас один(одна)?\n"
+    "👤 Да, один(одна)\n"
+    "👥 Рядом есть люди\n\n"
+    "Я не заменяю экстренную или живую помощь. Если риск высокий или ты не уверен(а), пожалуйста, "
+    "перейди туда, где есть люди, отойди от средств, которыми можно себе навредить, и свяжись с живым человеком или экстренной помощью."
+)
+
+SAFETY_MESSAGE_TEMPLATE = (
+    "Мне сейчас очень плохо и страшно оставаться одному(одной). Можешь побыть со мной на связи или "
+    "позвонить мне в ближайшие 10 минут? Мне не нужен совет, мне важно не быть одному(одной)."
+)
+
+SAFETY_SUPPORT_PROTOCOL = (
+    "Короткий протокол на 10 минут:\n\n"
+    "1. Поставь обе ноги на пол.\n"
+    "2. Сделай три медленных выдоха, длиннее вдоха.\n"
+    "3. Назови 5 предметов вокруг.\n"
+    "4. Выпей воды, если можешь.\n"
+    "5. Выбери одного живого человека, которому можно написать.\n"
+    "6. Не принимай сейчас решений о себе, работе, отношениях или будущем.\n\n"
+    "Стало хотя бы на 5% безопаснее или спокойнее?"
+)
+
+
+def safety_mode(u: Dict[str, Any]) -> str:
+    mode = str(u.get("safety_mode") or "none")
+    return mode if mode in SAFETY_MODES else "none"
+
+
+def emergency_number_for_user(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> str:
+    profile = profile or {}
+    country = str(u.get("country") or profile.get("country") or profile.get("user_country") or "").strip().upper()
+    return EMERGENCY_NUMBER_BY_COUNTRY.get(country) or "местный экстренный номер"
+
+
+def safety_resume_snapshot(u: Dict[str, Any], source: str) -> str:
+    return json.dumps({
+        "source": source,
+        "stage": u.get("stage"),
+        "current_step": u.get("current_step"),
+        "today_target": u.get("today_target"),
+        "current_skill": u.get("current_skill"),
+        "pending_skill_id": u.get("pending_skill_id"),
+        "pending_skill_day": u.get("pending_skill_day"),
+        "day": u.get("day"),
+        "day_core_skill_id": u.get("day_core_skill_id"),
+    }, ensure_ascii=False)
+
+
+def safety_signal_details(text: str, explicit: bool = False) -> Dict[str, Any]:
+    low = (text or "").lower().strip()
+    high_markers = (
+        "хочу умереть", "хочу покончить", "покончить с собой", "сделаю с собой", "наврежу себе",
+        "навредить себе", "не хочу жить", "лучше бы меня не было", "не вижу выхода",
+        "не могу оставаться один", "не могу оставаться одна", "боюсь, что сорвусь", "боюсь что сорвусь",
+        "есть план", "таблет", "нож", "оруж", "сейчас сделаю", "прощайте", "суицид", "самоуб",
+    )
+    acute_markers = (
+        "мне очень плохо", "не справляюсь", "отчаяние", "паника", "паническая", "ничего не ел",
+        "ничего не ела", "не ел", "не ела", "не спал", "не спала", "не могу остановиться",
+        "страшно одному", "страшно одной", "страшно оставаться одному", "страшно оставаться одной", "всё навалилось", "все навалилось", "накрывает",
+        "не могу дышать",
+    )
+    loneliness = any(x in low for x in ("один", "одна", "одному", "одной", "никого рядом", "страшно одному", "страшно одной"))
+    no_sleep_food = any(x in low for x in ("не спал", "не спала", "не ел", "не ела", "ничего не ел", "ничего не ела"))
+    despair = any(x in low for x in ("отчаяние", "не вижу выхода", "лучше бы меня не было"))
+    self_harm = crisis_safety_check(low).get("self_harm") or any(x in low for x in high_markers)
+    acute = any(x in low for x in acute_markers)
+    high = bool(self_harm and (loneliness or no_sleep_food or despair or crisis_safety_check(low).get("means_plan_intent"))) or any(x in low for x in high_markers)
+    triggered = explicit or high or acute or bool(self_harm)
+    return {"triggered": triggered, "high": high, "acute": acute, "self_harm": bool(self_harm), "loneliness": loneliness, "no_sleep_food": no_sleep_food, "despair": despair}
+
+
+def has_crisis_safety_signal(text: str, stage: str) -> bool:
+    """Global safety detector before any productivity/action routing."""
+    low = (text or "").lower().strip()
+    if text == "🆘 Кризис" or low == "/crisis":
+        return True
+    if safety_signal_details(text).get("triggered"):
+        return True
+    return should_open_global_crisis(text, stage)
+
+
+async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, source: str, explicit: bool = False) -> bool:
+    details = safety_signal_details(text, explicit=explicit)
+    if not details.get("triggered"):
+        return False
+    if safety_mode(u) == "none":
+        u["safety_resume_context"] = safety_resume_snapshot(u, source)
+    u["safety_mode"] = "urgent" if details.get("high") else "triage"
+    u["safety_last_risk"] = "yes" if details.get("high") else "unknown"
+    u["safety_contact_status"] = u.get("safety_contact_status") or "not_asked"
+    u["stage"] = "safety_mode"
+    await save_user(u, DB_PATH)
+    await bot_record_action_event(u, "crisis_started", metadata={"source": source, **details})
+    await log_event(u["user_id"], "safety", "safety_interceptor_started", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
+    if details.get("high"):
+        await m.answer("Пока считаем риск высоким. Выбери ближайший безопасный шаг:", reply_markup=kb_safety_urgent)
+    return True
+
+
+async def show_safety_urgent(m: Message, u: Dict[str, Any], reason: str = ""):
+    u["safety_mode"] = "urgent"
+    if u.get("safety_last_risk") != "no":
+        u["safety_last_risk"] = "yes" if reason != "uncertain" else "uncertain"
+    u["stage"] = "safety_mode"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "safety", "safety_urgent_shown", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer("Сейчас только безопасность. Выбери один ближайший шаг:", reply_markup=kb_safety_urgent)
+
+
+async def show_safety_support(m: Message, u: Dict[str, Any], reason: str = ""):
+    u["safety_mode"] = "support"
+    u["safety_last_risk"] = "no"
+    u["stage"] = "safety_mode"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "safety", "safety_support_shown", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer(SAFETY_SUPPORT_PROTOCOL, reply_markup=kb_safety_support_check)
+
+
+async def complete_safety_day(m: Message, u: Dict[str, Any]):
+    await mark_day_closed(u, "safety_aftercare_done")
+    u["safety_mode"] = "none"
+    u["safety_resume_context"] = None
+    u["stage"] = "waiting_next_day"
+    await save_user(u, DB_PATH)
+    await bot_record_action_event(u, "crisis_resolved_or_paused", metadata={"source": "safety_day_closed"})
+    await log_event(u["user_id"], "safety", "safety_day_closed", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, "Ок. На сегодня достаточно. Никаких новых навыков сейчас.", kb_day_core_stop, "waiting_next_day")
+
+
+async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
+    mode = safety_mode(u)
+    if mode == "none":
+        return False
+    low = (text or "").lower().strip()
+    # Old productivity buttons are intentionally swallowed while safety mode is active.
+    if should_route_action_request(text, low, u) or "полный режим" in low or "моя карта" in low:
+        await log_event(u["user_id"], "safety", "safety_blocked_productivity_button", {"text": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if mode == "urgent":
+            await show_safety_urgent(m, u, "blocked_productivity")
+        elif mode == "support":
+            await m.answer("Сейчас ещё режим поддержки, не продуктивности.", reply_markup=kb_safety_aftercare)
+        else:
+            await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
+        return True
+
+    if mode == "triage":
+        if text == "🟥 Да":
+            await show_safety_urgent(m, u, "risk_yes")
+            return True
+        if text == "🟨 Не уверен(а)":
+            await show_safety_urgent(m, u, "uncertain")
+            return True
+        if text == "🟩 Нет":
+            await show_safety_support(m, u, "risk_no")
+            return True
+        if text == "👤 Да, один(одна)":
+            u["safety_last_risk"] = "uncertain"
+            await show_safety_urgent(m, u, "alone")
+            return True
+        if text == "👥 Рядом есть люди":
+            await m.answer("Хорошо. Оставайся ближе к людям и ответь на вопрос про риск.", reply_markup=kb_safety_triage)
+            return True
+        await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
+        return True
+
+    if mode == "urgent":
+        if text == "🟦 Написать человеку сейчас":
+            u["safety_contact_status"] = "offered"
+            await save_user(u, DB_PATH)
+            await m.answer(f"Скопируй и отправь:\n\n{SAFETY_MESSAGE_TEMPLATE}")
+            await m.answer("Удалось отправить сообщение?", reply_markup=kb_safety_message_sent)
+            return True
+        if text == "📞 Позвонить человеку":
+            u["safety_contact_status"] = "called"
+            await save_user(u, DB_PATH)
+            await m.answer("Позвони живому человеку сейчас. Если не отвечает — выбирай другого или экстренную службу.", reply_markup=kb_safety_contact_choices)
+            return True
+        if text == "🚶 Перейти туда, где есть люди":
+            await m.answer("Перейди в место, где рядом есть люди: кухня, подъезд, улица, ресепшен, сосед, магазин. Потом выбери следующий безопасный шаг.", reply_markup=kb_safety_urgent)
+            return True
+        if text == "🧹 Убрать опасные предметы подальше":
+            await m.answer("Отойди от опасных предметов или положи их за дверь / в другую комнату / рядом с другим человеком. Потом выбери контакт с живым человеком.", reply_markup=kb_safety_urgent)
+            return True
+        if text == "🚨 Связаться с экстренной помощью":
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            number = emergency_number_for_user(u, profile)
+            await m.answer(f"Свяжись с экстренной помощью: {number}. Если можешь, делай это там, где рядом есть люди.", reply_markup=kb_safety_urgent)
+            return True
+        if text == "🟨 Я не знаю, кому написать" or text == "❌ Не могу":
+            u["safety_contact_status"] = "unavailable"
+            await save_user(u, DB_PATH)
+            await m.answer("Выбери самый доступный вариант. Не нужен идеальный человек — нужен живой контакт.", reply_markup=kb_safety_contact_choices)
+            return True
+        if text == "✅ Да, отправил(а)":
+            u["safety_contact_status"] = "sent_message"
+            await save_user(u, DB_PATH)
+            await show_safety_support(m, u, "message_sent")
+            return True
+        if text == "⏳ Отправляю сейчас":
+            await m.answer("Ок. Отправь сейчас. Я подожду здесь. Потом нажми ✅ Да, отправил(а).", reply_markup=kb_safety_message_sent)
+            return True
+        if text in {"Близкий человек", "Партнёр", "Коллега", "Сосед", "Родственник", "Кризисная / экстренная служба"}:
+            await m.answer(f"Да. Выбери: {text}. Напиши или позвони сейчас.\n\n{SAFETY_MESSAGE_TEMPLATE}", reply_markup=kb_safety_message_sent)
+            return True
+        await show_safety_urgent(m, u, "urgent_repeat")
+        return True
+
+    if mode == "support":
+        if text in {"Да", "Нет", "Не знаю"}:
+            if text == "Да":
+                await m.answer("Хорошо. Не возвращаемся автоматически к задаче. Выбери, что безопаснее дальше.", reply_markup=kb_safety_aftercare)
+            else:
+                await m.answer("Тогда остаёмся в поддержке. Повтори протокол ещё 10 минут или выбери живой контакт.", reply_markup=kb_safety_aftercare)
+            return True
+        if text == "🛑 На сегодня достаточно":
+            await complete_safety_day(m, u)
+            return True
+        if text == "💬 Остаться в поддержке":
+            await show_safety_support(m, u, "stay_support")
+            return True
+        if text == "↩️ Вернуться к задаче позже":
+            if u.get("safety_last_risk") != "no":
+                await m.answer("Пока не возвращаемся к задаче: риск не отмечен как 'нет'. Остаёмся в поддержке.", reply_markup=kb_safety_aftercare)
+                return True
+            u["safety_mode"] = "none"
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_user_chose_resume_later", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Вернуться можно позже явным действием. Сейчас без давления.", kb_training_main, "training_main")
+            return True
+        await m.answer(SAFETY_SUPPORT_PROTOCOL, reply_markup=kb_safety_support_check)
+        return True
+    return False
+
+
 def should_open_global_crisis(text: str, stage: str) -> bool:
     """Open crisis globally only for explicit crisis requests, without hijacking diagnosis text.
 
@@ -457,6 +778,8 @@ def should_open_global_crisis(text: str, stage: str) -> bool:
 def user_is_in_action_loop(u: Dict[str, Any]) -> bool:
     """Пользователь уже после первой карты и находится в тренировочном loop."""
     return bool(u.get("analysis_json") or u.get("plan_json") or u.get("has_started_training")) and u.get("stage") in ACTION_RELATED_STAGES
+
+
 
 
 
@@ -1143,7 +1466,7 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
         sid = current_skill_id(u) or "open_only"
         skill = dict(SKILLS_DB.get(sid) or SKILLS_DB.get("open_only") or next(iter(SKILLS_DB.values())))
         skill.setdefault("skill_id", sid)
-        await answer_with_keyboard(m, u, format_skill_card(u, skill, u.get("today_target") or "сегодняшняя задача"), kb_skill_card, "skill_card")
+        await answer_with_keyboard(m, u, format_skill_card(u, skill, current_task_label(u)), kb_skill_card, "skill_card")
         return
     if return_stage == "done":
         await answer_with_keyboard(m, u, "Ок. Режим обновлён. Что дальше?", kb_done, "done")
@@ -1203,14 +1526,14 @@ async def handle_trainer_switch_choice(m: Message, u: Dict[str, Any], text: str)
     await return_after_trainer_switch(m, u, return_stage, switched=True)
 
 
+def trainer_template(trainer_key: str, template_key: str) -> str:
+    trainer = TRAINERS.get(trainer_key or "marsha", TRAINERS["marsha"])
+    templates = trainer.get("response_templates") or {}
+    return templates.get(template_key) or TRAINERS["marsha"].get("response_templates", {}).get(template_key) or "Смотрим, что происходит."
+
+
 def analysis_loading_text(trainer_key: str) -> str:
-    if trainer_key == "skinny":
-        return "Ок. Смотрю, где ломается вход."
-    if trainer_key == "beck":
-        return "Ок. Смотрю механизм."
-    if trainer_key == "marsha":
-        return "Ок. Давай аккуратно посмотрим, где стало тяжело."
-    return "Ок. Смотрю паттерн…"
+    return trainer_template(trainer_key, "check_barrier")
 
 
 def should_show_today_progress(u: Dict[str, Any], profile: Dict[str, Any]) -> bool:
@@ -1232,114 +1555,112 @@ async def record_today_progress_shown(u: Dict[str, Any], profile: Dict[str, Any]
         source="daily_progress",
     )
 
+
+
+def current_task_title(u: Dict[str, Any], fallback: str = "сегодняшняя задача") -> str:
+    title = str(u.get("current_task_title") or u.get("today_target") or "").strip()
+    if not title or title == "__target_not_selected__":
+        return fallback
+    return title
+
+
+def current_task_label(u: Dict[str, Any]) -> str:
+    return current_task_title(u, "сегодняшняя задача")
+
+
+def task_needs_physical_step(title: str) -> bool:
+    low = (title or "").lower().strip()
+    if not low or low == "пропустить":
+        return False
+    action_verbs = ("открыть", "написать", "собрать", "проверить", "создать", "исправить", "прочитать", "отправить", "позвонить")
+    if any(low.startswith(v) for v in action_verbs):
+        return False
+    return len(low.split()) <= 3
+
+
+def returning_to_task_text(u: Dict[str, Any]) -> str:
+    title = current_task_title(u, "задаче")
+    step = str(u.get("current_next_physical_step") or "").strip()
+    if step:
+        return f"Возвращаемся к {title}.\nВ прошлый раз ты выбрал минимальный вход:\n“{step}”."
+    return f"Возвращаемся к {title}."
+
+def _metrics_from_profile(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+    raw = profile.get("_action_metrics") if isinstance(profile, dict) else None
+    if isinstance(raw, dict) and "today" in raw and "period" in raw:
+        return raw
+    return {
+        "today": {
+            "micro_approaches": int(profile.get("action_done_count_today") or u.get("day_core_round_count") or 0),
+            "slips": int(profile.get("slip_count_today") or profile.get("failed_reason_count_today") or 0),
+            "returns_after_slip": int(profile.get("return_count_today") or 0),
+            "step_reductions": int(profile.get("downscale_count_today") or 0),
+        },
+        "period": {
+            "micro_approaches": int(profile.get("action_done_count") or u.get("done_count") or 0),
+            "slips": int(profile.get("slip_count") or profile.get("failed_reason_count") or 0),
+            "returns_after_slip": int(profile.get("return_count") or u.get("return_count") or 0),
+            "step_reductions": int(profile.get("downscale_count") or 0),
+        },
+    }
+
+
+def action_metrics_text(metrics: Dict[str, Dict[str, int]]) -> str:
+    today = metrics.get("today", {})
+    period = metrics.get("period", {})
+    return (
+        "Сегодня:\n"
+        f"— микро-подходов: {int(today.get('micro_approaches') or 0)}\n"
+        f"— отмеченных залипаний: {int(today.get('slips') or 0)}\n"
+        f"— возвратов после залипания: {int(today.get('returns_after_slip') or 0)}\n"
+        f"— упрощений шага: {int(today.get('step_reductions') or 0)}\n\n"
+        "За период:\n"
+        f"— микро-подходов: {int(period.get('micro_approaches') or 0)}\n"
+        f"— отмеченных залипаний: {int(period.get('slips') or 0)}\n"
+        f"— возвратов после залипания: {int(period.get('returns_after_slip') or 0)}\n"
+        f"— упрощений шага: {int(period.get('step_reductions') or 0)}\n\n"
+        "Это не оценка твоей продуктивности. Это отметки о том, как ты пробовал(а) входить в задачу."
+    )
+
 def done_flow_text(include_system_line: bool = False, u: Optional[Dict[str, Any]] = None, profile: Optional[Dict[str, Any]] = None) -> str:
-    text = "Есть.\n\nПодход засчитан."
+    text = "Есть.\n\nМикро-подход засчитан."
     if u is not None:
         profile = profile or {}
-        today_starts = int(u.get("day_core_round_count") or profile.get("action_done_count_today") or 0)
-        today_stucks = int(profile.get("failed_reason_count_today") or profile.get("action_failed_count_today") or 0)
-        today_returns = int(profile.get("return_count_today") or 0)
-        today_downscales = int(profile.get("downscale_count_today") or 0)
-        total_starts = int(profile.get("action_done_count") or u.get("done_count") or 0)
-        total_stucks = int(profile.get("failed_reason_count") or profile.get("action_failed_count") or 0)
-        total_returns = int(u.get("return_count") or profile.get("return_count") or 0)
-        total_downscales = int(profile.get("downscale_count") or 0)
-        text += (
-            "\n\nСегодня:\n"
-            f"— запусков: {today_starts}\n"
-            f"— залипаний/сбоев: {today_stucks}\n"
-            f"— возвратов после залипания: {today_returns}\n"
-            f"— уменьшений шага: {today_downscales}\n\n"
-            "Всего за период:\n"
-            f"— запусков: {total_starts}\n"
-            f"— залипаний/сбоев: {total_stucks}\n"
-            f"— возвратов после залипания: {total_returns}\n"
-            f"— уменьшений шага: {total_downscales}"
-        )
+        text += "\n\n" + action_metrics_text(_metrics_from_profile(u, profile))
     if include_system_line:
         text += "\n\nЭто данные."
     return text
 
 
 def today_progress_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    today_starts = int(u.get("day_core_round_count") or profile.get("action_done_count_today") or 0)
-    today_stucks = int(profile.get("failed_reason_count_today") or profile.get("action_failed_count_today") or 0)
-    today_returns = int(profile.get("return_count_today") or 0)
-    today_downscales = int(profile.get("downscale_count_today") or 0)
-    total_starts = int(profile.get("action_done_count") or u.get("done_count") or 0)
-    total_stucks = int(profile.get("failed_reason_count") or profile.get("action_failed_count") or 0)
-    total_returns = int(u.get("return_count") or profile.get("return_count") or 0)
-    total_downscales = int(profile.get("downscale_count") or 0)
-    return (
-        "Сегодня:\n"
-        f"— запусков: {today_starts}\n"
-        f"— залипаний/сбоев: {today_stucks}\n"
-        f"— возвратов после залипания: {today_returns}\n"
-        f"— уменьшений шага: {today_downscales}\n\n"
-        "Всего за период:\n"
-        f"— запусков: {total_starts}\n"
-        f"— залипаний/сбоев: {total_stucks}\n"
-        f"— возвратов после залипания: {total_returns}\n"
-        f"— уменьшений шага: {total_downscales}\n\n"
-        "Это уже тренировка, а не “ничего не сделал”."
-    )
+    return action_metrics_text(_metrics_from_profile(u, profile))
 
 
 def day_finish_summary_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    starts = int(u.get("day_core_round_count") or profile.get("action_done_count_today") or 0)
-    returns = int(profile.get("return_count_today") or 0)
-    downscales = int(profile.get("downscale_count_today") or 0)
-    fails = int(profile.get("failed_reason_count_today") or profile.get("action_failed_count_today") or 0)
-    total_starts = int(profile.get("action_done_count") or u.get("done_count") or 0)
-    total_stucks = int(profile.get("failed_reason_count") or profile.get("action_failed_count") or 0)
-    total_returns = int(u.get("return_count") or profile.get("return_count") or 0)
-    total_downscales = int(profile.get("downscale_count") or 0)
+    metrics = _metrics_from_profile(u, profile)
+    today = metrics.get("today", {})
+    starts = int(today.get("micro_approaches") or 0)
+    returns = int(today.get("returns_after_slip") or 0)
+    downscales = int(today.get("step_reductions") or 0)
+    slips = int(today.get("slips") or 0)
 
-    task = str(u.get("today_target") or "сегодняшняя задача").strip()
-    if task == "__target_not_selected__":
-        task = "сегодняшняя задача"
-
-    if downscales:
-        main_insight = f"когда задача «{task}» становится большой, тебе помогает не мотивация, а уменьшение входа."
-    elif returns:
-        main_insight = "после сбоя день не обязан заканчиваться: возврат уже становится отдельным навыком."
-    elif fails:
-        main_insight = "сбой показал место сопротивления: следующий вход лучше делать меньше и конкретнее."
-    else:
-        main_insight = "сегодня сохранился главный маршрут входа: начать с маленького управляемого шага."
-
-    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        best_signal = "телефон лучше убрать до начала, а не после залипания."
-        next_test = "помогает ли заранее убрать телефон или лишние вкладки до старта."
+    if downscales <= 2:
+        best_signal = "Пока есть 1–2 сигнала, что уменьшение шага может помогать. Нужно ещё несколько попыток, чтобы это проверить."
     elif downscales:
-        best_signal = "уменьшение шага снижает сопротивление лучше, чем давление на себя."
-        next_test = "помогает ли заранее выбранный первый физический шаг."
+        best_signal = "Есть несколько отметок, что упрощение шага помогает входить в задачу мягче."
     elif returns:
-        best_signal = "возврат после залипания важнее идеального выполнения без сбоев."
-        next_test = "помогает ли заранее выбранный маршрут возврата после сбоя."
+        best_signal = "Возврат после залипания важнее идеального выполнения без сбоев."
+    elif slips:
+        best_signal = "Залипание отмечено как место, где нужен маршрут возврата, а не самокритика."
     else:
-        best_signal = "данных пока немного, но сама попытка уже уточняет карту."
-        next_test = "какой самый маленький вход в задачу держится легче."
+        best_signal = "Данных пока немного: сегодняшние отметки только начинают уточнять карту."
 
     return (
         "🌙 День закрыт.\n\n"
-        "Сегодня получилось:\n"
-        f"✔ запусков: {starts}\n"
-        f"✔ залипаний/сбоев: {fails}\n"
-        f"✔ возвратов после залипания: {returns}\n"
-        f"✔ уменьшений шага: {downscales}\n\n"
-        "Всего за период:\n"
-        f"— запусков: {total_starts}\n"
-        f"— залипаний/сбоев: {total_stucks}\n"
-        f"— возвратов после залипания: {total_returns}\n"
-        f"— уменьшений шага: {total_downscales}\n\n"
-        "Сегодня карта стала точнее на один шаг:\n\n"
-        f"{main_insight}\n\n"
+        f"{action_metrics_text(metrics)}\n\n"
         "Самый полезный сигнал:\n"
         f"{best_signal}\n\n"
-        "Завтра не будем начинать с нуля.\n"
-        "Продолжим проверять:\n"
-        f"{next_test}"
+        "До завтра. Новый навык откроется после смены календарного дня."
     )
 
 
@@ -2126,6 +2447,35 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
     return current_sid if current_sid in SKILLS_DB else ("open_only" if "open_only" in SKILLS_DB else next(iter(SKILLS_DB.keys())))
 
 
+
+async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt_id: Optional[int] = None, skill_id: str = "", metadata: Optional[Dict[str, Any]] = None):
+    await record_action_event(
+        u["user_id"],
+        DB_PATH,
+        event_type,
+        day_id=str(u.get("current_day_id") or ""),
+        attempt_id=attempt_id,
+        skill_id=skill_id or current_skill_for_action(u),
+        task_id=str(u.get("current_task_id") or u.get("today_target") or ""),
+        metadata=metadata or {},
+    )
+
+
+async def record_return_after_slip_action_event_if_needed(u: Dict[str, Any], source: str):
+    if u.get("last_event") == "stuck" or u.get("pending_return_reason") == "stuck_phone":
+        await bot_record_action_event(u, "returned_after_slip", metadata={"source": source})
+
+def replacement_reason_code(reason: str) -> str:
+    low = (reason or "").lower()
+    if "сложно" in low or "hard" in low:
+        return "слишком сложно"
+    if "не подходит" in low or "не работает" in low or "другой" in low or "replace" in low:
+        return "не подходит"
+    if "нет сил" in low or "устал" in low:
+        return "нет сил"
+    return "другое"
+
+
 async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], reason: str) -> bool:
     profile = await get_user_profile(u["user_id"], DB_PATH)
     today = local_date_for_user(u)
@@ -2145,7 +2495,7 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
             u,
             "Сегодня основной навык не меняю.\n\n"
             "Это и есть тренировка: не искать новую технику, а уменьшить вход в текущую.\n\n"
-            f"Вариация текущего навыка:\n\n{format_skill_card(u, skill, u.get('today_target') or 'сегодняшняя задача')}",
+            f"Вариация текущего навыка:\n\n{format_skill_card(u, skill, current_task_label(u))}",
             kb_skill_card,
             "skill_card",
         )
@@ -2189,7 +2539,12 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
     u["current_skill_variant"] = new_sid
     u["pending_skill_id"] = new_sid
     u["pending_skill_day"] = day
+    u["daily_skill_id"] = new_sid
+    u["daily_skill_name"] = (SKILLS_DB.get(new_sid) or {}).get("name") or new_sid
+    u["daily_skill_status"] = "active"
     replace_day_core_skill(u, new_sid)
+    await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=new_sid, skill_name=u["daily_skill_name"])
+    await bot_record_action_event(u, "skill_changed", skill_id=new_sid, metadata={"reason": replacement_reason_code(reason), "raw_reason": reason})
     await save_user(u, DB_PATH)
 
     seen_today.append(new_sid)
@@ -2198,19 +2553,22 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
         "skill_replace_count_today": count + 1,
         "skill_replace_seen_today": seen_today[-MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS:],
         "last_replacement_skill": new_sid,
+        "last_replacement_reason": replacement_reason_code(reason),
     }, source="skill_replace")
     await log_event(u["user_id"], "training", "skill_replaced", {
         "skill_id": new_sid,
         "count": count + 1,
         "max_count": MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS,
         "reason": reason,
+        "reason_code": replacement_reason_code(reason),
+        "day_id": u.get("current_day_id"),
     }, DB_PATH, SHEETS_WEBHOOK_URL)
 
     skill = dict(SKILLS_DB[new_sid])
     skill.setdefault("skill_id", new_sid)
     text = (
         f"Ок. Предлагаю другой навык. Замена {count + 1}/{MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS}.\n\n"
-        f"{format_skill_card(u, skill, u.get('today_target') or 'сегодняшняя задача')}"
+        f"{format_skill_card(u, skill, current_task_label(u))}"
     )
     await answer_with_keyboard(m, u, text, kb_skill_card, "skill_card")
     return True
@@ -2555,6 +2913,17 @@ def is_admin(user_id: int) -> bool:
     return str(user_id) in [x.strip() for x in ids.split(",") if x.strip()]
 
 
+
+
+def qa_command_allowed(user_id: int, u: Dict[str, Any]) -> bool:
+    """Allow QA navigation commands for admins, global TEST_MODE, or users who enabled test access."""
+    return (
+        is_admin(user_id)
+        or TEST_MODE
+        or int(u.get("is_test_user") or 0) == 1
+        or int(u.get("fast_forward_enabled") or 0) == 1
+    )
+
 def payment_month_url() -> str:
     if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
         return PAYMENT_TEST_URL
@@ -2576,6 +2945,96 @@ def paid_access_until(days: int = 30, existing_until: Optional[str] = None) -> s
     return (base + dt.timedelta(days=days)).isoformat()
 
 
+
+
+kb_full_mode_experiment = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📩 Скопировать текст")],
+        [KeyboardButton(text="✅ Отправил(а)"), KeyboardButton(text="↩️ Хочу другой шаг")],
+    ],
+    resize_keyboard=True,
+)
+
+
+def _profile_list_values(value: Any, limit: int = 4) -> List[str]:
+    if isinstance(value, list):
+        return [str(x) for x in value if x][:limit]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed if x][:limit]
+        except Exception:
+            return [value.strip()]
+    return []
+
+
+def build_full_mode_plan(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
+    facts = _profile_list_values(profile.get("confirmed_signals"), 4)
+    if u.get("current_task_title"):
+        facts.insert(0, f"текущая задача: {u.get('current_task_title')}")
+    facts = list(dict.fromkeys(facts))[:4]
+    hypotheses = []
+    if profile.get("main_hypothesis"):
+        hypotheses.append(str(profile.get("main_hypothesis")))
+    hypotheses.extend(_profile_list_values(profile.get("secondary_hypotheses"), 3))
+    hypotheses = list(dict.fromkeys([x for x in hypotheses if x]))[:4]
+    task = current_task_title(u, "текущей задаче")
+    step = str(u.get("current_next_physical_step") or "").strip()
+    if not facts:
+        facts = ["пока данных мало: есть только первые ответы и нажатия"]
+    if not hypotheses:
+        hypotheses = ["есть первые признаки цикла входа в задачу, но мы ещё не знаем, что главное"]
+    experiments = [
+        "Что возникает раньше: напряжение перед оценкой, неопределённость первого шага или потеря смысла.",
+        "Помогает ли внешний контакт: коротко сообщить живому человеку, что ты начинаешь маленький тест.",
+        "Что легче сегодня: открыть задачу или сделать плохой черновик 2 минуты.",
+    ]
+    message = (
+        f"Я сажусь на 10 минут работать над задачей: {task}. "
+        "Через 15 минут напишу, начал(а) ли. Мне не нужен совет — только короткая отметка присутствия."
+    )
+    first_experiment = step or f"открыть место, где лежит задача «{task}», на 10 секунд"
+    return {
+        "facts": facts,
+        "hypotheses": hypotheses,
+        "experiments": experiments,
+        "first_experiment": first_experiment,
+        "copy_text": message,
+        "low_data": facts == ["пока данных мало: есть только первые ответы и нажатия"],
+    }
+
+
+def full_mode_welcome_text(plan: Dict[str, Any]) -> str:
+    facts = "\n".join(f"— {x}" for x in plan["facts"])
+    hypotheses = "\n".join(f"— {x}" for x in plan["hypotheses"])
+    experiments = "\n".join(f"{i + 1}. {x}" for i, x in enumerate(plan["experiments"][:3]))
+    low_data = "\n\nПока данных мало. Полный режим поможет их собрать, а не будет делать вид, что уже знает тебя полностью." if plan.get("low_data") else ""
+    return (
+        "Полный режим включён.\n\n"
+        "Теперь я не просто буду давать один навык в день.\n"
+        "Я буду проверять твой цикл и подбирать следующий шаг по твоим реакциям.\n\n"
+        "Сейчас у нас есть:\n\n"
+        "Что ты описал:\n"
+        f"{facts}\n\n"
+        "Что пока гипотеза:\n"
+        f"{hypotheses}\n\n"
+        "На ближайшие 3 дня мы проверим:\n"
+        f"{experiments}\n\n"
+        "Первый персональный эксперимент на сегодня:\n"
+        f"{plan['first_experiment']}\n\n"
+        "Не нужно делать всё сразу. Нужен только первый тест."
+        f"{low_data}"
+    )
+
+
+async def send_full_mode_welcome(m: Message, u: Dict[str, Any]):
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    plan = build_full_mode_plan(u, profile)
+    u["full_mode_plan_json"] = json.dumps(plan, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    await m.answer(full_mode_welcome_text(plan), reply_markup=kb_full_mode_experiment)
+
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я оплатил(а) — включить тестовый доступ", callback_data="confirm_test_payment")],
@@ -2586,10 +3045,16 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
     meta = dict(meta or {})
     meta.setdefault("days", 30)
     meta.setdefault("amount", 1 if PAYMENT_ACCEPT_ANY else 14.98)
+    days = int(meta.get("days") or 30)
     u["payment_status"] = "paid"
     u["trial_phase"] = "paid"
     u["free_mode"] = 0
-    u["paid_until"] = paid_access_until(30, u.get("paid_until"))
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    until = paid_access_until(days, u.get("paid_until"))
+    u["paid_until"] = until
+    u["full_mode"] = 1
+    u["full_mode_started_at"] = u.get("full_mode_started_at") or now_iso
+    u["full_mode_until"] = until
     u["last_payment_click"] = u.get("last_payment_click") or source
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], u.get("stage", ""), "payment_completed", {"source": source, **meta}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -2673,7 +3138,7 @@ def day_core_test_mode_enabled(u: Dict[str, Any]) -> bool:
         uid = int(u.get("user_id") or 0)
     except (TypeError, ValueError):
         uid = 0
-    return is_admin(uid) and (int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1)
+    return qa_command_allowed(uid, u)
 
 
 def _parse_iso_date(value: str):
@@ -2829,13 +3294,17 @@ def new_day_insights_text(profile: Dict[str, Any]) -> str:
         insights.append("залипание усиливается, когда телефон рядом")
     if not insights:
         insights = [
-            "большой вход тормозит старт",
-            "уменьшение шага помогает",
-            "залипание усиливается, когда телефон рядом",
+            "данных пока мало, поэтому не делаем выводов о причине",
+            "сегодня проверяем один маленький вход",
+            "эффект навыка запишем как сигнал, а не как диагноз",
         ]
+    cautious_fallback = [
+        "данных пока мало, поэтому гипотезы проверяем действием",
+        "маленький шаг безопаснее, чем попытка резко собраться",
+        "важен факт попытки, а не идеальный результат",
+    ]
     while len(insights) < 3:
-        fallback = ["большой вход тормозит старт", "уменьшение шага помогает", "залипание усиливается, когда телефон рядом"]
-        for item in fallback:
+        for item in cautious_fallback:
             if item not in insights:
                 insights.append(item)
                 break
@@ -2970,6 +3439,26 @@ def build_new_day_intro(u: Dict[str, Any], skill: Dict[str, Any], profile: Optio
     return new_day_skill_text(skill, profile or {})
 
 
+def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optional[Dict[str, Any]] = None) -> str:
+    skill_name = skill.get("name") or "навык дня"
+    steps = skill.get("simple") or skill.get("steps") or []
+    if isinstance(steps, list) and steps:
+        step_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(steps[:3]))
+    else:
+        step_text = skill.get("how") or skill.get("how_more") or "Сделай самый маленький вход в задачу 60–120 секунд."
+    minimum = skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу"
+    head = f"{prefix}\n\n" if prefix else ""
+    task_line = f"📌 Дело: {current_task_label(u)}\n\n" if u else ""
+    return (
+        f"{head}"
+        f"{task_line}"
+        f"🧩 Навык дня: {skill_name}\n\n"
+        f"Попробуй:\n{step_text}\n\n"
+        f"Минимум:\n{minimum}\n\n"
+        "Что получилось?"
+    )
+
+
 def action_keyboard() -> ReplyKeyboardMarkup:
     return kb_new_day_skill
 
@@ -2991,8 +3480,13 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     u["current_skill_variant"] = skill.get("variant") or sid
     u["pending_skill_id"] = sid
     u["pending_skill_day"] = day
-    u["today_target"] = None
+    u["daily_skill_id"] = sid
+    u["daily_skill_name"] = skill.get("name") or sid
+    u["daily_skill_status"] = "active"
+    if not u.get("current_task_title"):
+        u["today_target"] = None
     replace_day_core_skill(u, sid)
+    await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=sid, skill_name=skill.get("name") or sid)
     set_last_explanation_context(
         u,
         "skill",
@@ -3067,6 +3561,11 @@ def enough_for_today_text() -> str:
 
 async def mark_day_closed(u: Dict[str, Any], source: str):
     today = local_date_for_user(u)
+    if not u.get("current_day_id"):
+        sid = current_skill_for_action(u)
+        await ensure_user_day(u, DB_PATH, calendar_date=today, skill_id=sid, skill_name=(SKILLS_DB.get(sid) or {}).get("name") or sid)
+    await close_user_day(u, DB_PATH)
+    await bot_record_action_event(u, "day_closed", metadata={"source": source})
     u["day_closed"] = 1
     u["today_closed"] = 1
     u["last_day_closed_at"] = today
@@ -3094,20 +3593,22 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
     user["stage"] = "training"
     user["has_started_training"] = 1
     user["today_started"] = 1
-    user["day_closed"] = 0
-    user["today_closed"] = 0
     user["current_skill"] = sid
     user["current_skill_variant"] = skill.get("variant") or sid
     user["pending_skill_id"] = sid
     user["pending_skill_day"] = int(user.get("day") or 1)
+    user["daily_skill_id"] = sid
+    user["daily_skill_name"] = skill.get("name") or sid
+    user["daily_skill_status"] = "active"
     if user.get("day_core_skill_id") != sid:
         replace_day_core_skill(user, sid)
+    await ensure_user_day(user, DB_PATH, calendar_date=local_date_for_user(user), skill_id=sid, skill_name=skill.get("name") or sid)
     await save_user(user, DB_PATH)
-    await log_event(user_id, "training", "current_skill_resent", {"skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await answer_with_keyboard(message, user, build_new_day_intro(user, skill, profile), action_keyboard(), "new_day_skill")
+    await log_event(user_id, "training", "current_skill_resent", {"skill_id": sid, "day_id": user.get("current_day_id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(message, user, build_current_skill_text(skill, u=user), action_keyboard(), "new_day_skill")
 
 
-async def handle_action_request(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None):
+async def handle_action_request(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None, *, repeat: bool = False):
     user = user or await get_user(user_id, DB_PATH)
     profile = await get_user_profile(user_id, DB_PATH)
     if day_closed_today(user, profile):
@@ -3115,6 +3616,18 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
         return
     if not current_skill_for_action(user):
         await start_new_day(user_id, message, user, "action_request_no_current_skill")
+        return
+    if repeat:
+        sid = current_skill_for_action(user)
+        await ensure_user_day(user, DB_PATH, calendar_date=local_date_for_user(user), skill_id=sid, skill_name=(SKILLS_DB.get(sid) or {}).get("name") or sid)
+        attempt_id = await create_skill_attempt(user, DB_PATH, skill_id=sid, task_id=str(user.get("current_task_id") or user.get("today_target") or ""), result="started")
+        await record_return_after_slip_action_event_if_needed(user, "repeat_attempt")
+        user["skill_attempts_today"] = int(user.get("skill_attempts_today") or 0) + 1
+        await save_user(user, DB_PATH)
+        skill = dict(SKILLS_DB[sid])
+        skill.setdefault("skill_id", sid)
+        await log_event(user_id, "training", "skill_attempt_started", {"attempt_id": attempt_id, "day_id": user.get("current_day_id"), "skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(message, user, build_current_skill_text(skill, "Ещё одна попытка сегодня. Продолжаем тот же навык.", user), action_keyboard(), "new_day_skill")
         return
     await send_current_skill(user_id, message, user)
 
@@ -3245,9 +3758,66 @@ async def build_admin_stats_text(db_path: str) -> str:
 async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
     fresh = default_user(uid)
     fresh["chat_id"] = chat_id
-    fresh["stage"] = "ask_name"
+    # Keep reset as a true pre-start state: /start must rebuild onboarding,
+    # not resume a stale/default skill card.
+    fresh["stage"] = "start"
+    fresh["current_step"] = "start"
     await save_user(fresh, DB_PATH)
     return fresh
+
+
+async def recent_user_events_text(user_id: int, limit: int = 20) -> str:
+    """Render a compact admin-only tail of the event log for QA."""
+    rows = []
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                event_name TEXT,
+                event_data TEXT,
+                stage TEXT,
+                created_at TEXT,
+                event TEXT,
+                meta TEXT
+            )
+            """
+        )
+        cur = await db.execute(
+            """
+            SELECT created_at, COALESCE(event_name, event), COALESCE(stage, ''), COALESCE(event_data, meta, '{}')
+            FROM events
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        rows = await cur.fetchall()
+    if not rows:
+        return "DEBUG EVENTS\nпоследних событий пока нет"
+    lines = ["DEBUG EVENTS", f"last: {len(rows)}"]
+    for created_at, event_name, stage, event_data in rows:
+        meta = str(event_data or "{}")
+        if len(meta) > 160:
+            meta = meta[:157] + "..."
+        lines.append(f"- {created_at or '-'} | {stage or '-'} | {event_name or '-'} | {meta}")
+    return "\n".join(lines)
+
+
+def debug_state_text(u: Dict[str, Any]) -> str:
+    """Render the minimum QA state requested before manual testing."""
+    sid = current_skill_id(u)
+    return (
+        "DEBUG STATE\n"
+        f"FSM-state: {u.get('stage') or '-'}\n"
+        f"day_id: {u.get('current_day_id') or '-'}\n"
+        f"current_task: {current_task_title(u, '-')}\n"
+        f"current_skill: {sid or u.get('daily_skill_id') or '-'}\n"
+        f"safety_mode: {safety_mode(u)}\n"
+        f"full_mode: {int(u.get('full_mode') or 0)}"
+    )
 
 
 async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str, days: int = 30):
@@ -3266,8 +3836,10 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str, days: 
         "/force_next_day — перейти на следующий день\n"
         "/set_day 3 — прыгнуть на день 3\n"
         "/show_offer — показать offer вручную\n"
-        "/debug_user\n"
-        "/reset_me\n"
+        "/debug_state\n"
+        "/debug_events\n"
+        "/reset_test_user\n"
+        "/simulate_payment\n"
         "/testmode_off\n\n"
         "Админские команды оплаты, статистики и синка по-прежнему закрыты."
     )
@@ -3283,20 +3855,20 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     if command == "/confirm_payment":
         if PAYMENT_ACCEPT_ANY:
             await grant_paid_access(u, "test_confirm_command", {"accept_any_payment": True})
-            await m.answer("✅ Тестовая оплата засчитана. Полный режим включён на 30 дней.", reply_markup=kb_training_main)
+            await send_full_mode_welcome(m, u)
         else:
             await m.answer("Автоподтверждение оплаты выключено. Нужен PAYMENT_ACCEPT_ANY=1 или админская /mark_paid.")
         return True
 
     if command == "/show_offer":
+        if not qa_command_allowed(uid, u):
+            await m.answer("Команда доступна в QA-режиме. Отправь /test_access <код> или попроси добавить твой Telegram ID в ADMIN_IDS.")
+            return True
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
         await show_day3_offer(m, u, "manual_command")
         return True
 
     if command == "/test_access":
-        if not is_admin(uid):
-            await answer_with_keyboard(m, u, "Выбери действие 👇", kb_training_main, u.get("stage") or "training_main")
-            return True
         code = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) == 2 else ""
         if TEST_CHEAT_CODE and code == TEST_CHEAT_CODE:
             await activate_test_cheat(m, u, "command")
@@ -3380,7 +3952,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/crisis":
         await log_event(uid, u.get("stage", ""), "crisis_clicked", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await show_crisis_entry(m, u, "command")
+        await start_safety_interceptor(m, u, command, "command", explicit=True)
         return True
 
     return False
@@ -3390,16 +3962,54 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     """Handle admin-only test commands. Returns True when command was consumed."""
     uid = m.from_user.id
     command = (text.split(maxsplit=1)[0] if text else "").lower()
-    admin_commands = {
-        "/testmode_on", "/testmode_off", "/set_day", "/force_next_day",
-        "/reset", "/reset_me", "/debug_map", "/debug_user", "/test_payment",
-        "/whoami", "/health", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
-        "/simulate_paid", "/simulate_unpaid", "/payment_status", "/sync_sheets", "/stats",
+    qa_commands = {
+        "/debug_state", "/debug_events", "/show_offer", "/simulate_payment", "/reset_test_user",
+        "/testmode_on", "/testmode_off", "/set_day", "/force_next_day", "/debug_map", "/debug_user",
+        "/whoami", "/health", "/payment_status",
     }
-    if command not in admin_commands:
+    admin_only_commands = {
+        "/reset", "/test_payment", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
+        "/simulate_paid", "/simulate_unpaid", "/sync_sheets", "/stats",
+    }
+    if command not in qa_commands and command not in admin_only_commands:
         return False
-    if not is_admin(uid):
-        await answer_with_keyboard(m, u, "Выбери действие 👇", kb_training_main, u.get("stage") or "training_main")
+    if command == "/testmode_on" and not qa_command_allowed(uid, u):
+        # Let the user-command handler validate /testmode_on <code> for non-admin testers.
+        return False
+    if command in qa_commands and not qa_command_allowed(uid, u):
+        await m.answer("QA-команда недоступна. Отправь /test_access <код> или добавь свой Telegram ID в ADMIN_IDS.")
+        return True
+    if command in admin_only_commands and not is_admin(uid):
+        await m.answer("Админская команда недоступна для этого пользователя.")
+        return True
+
+    if command == "/debug_state":
+        await m.answer(debug_state_text(u))
+        return True
+
+    if command == "/debug_events":
+        await m.answer(await recent_user_events_text(uid, 20))
+        return True
+
+    if command == "/show_offer":
+        await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await show_day3_offer(m, u, "admin_command")
+        return True
+
+    if command == "/simulate_payment":
+        u["is_test_user"] = 1
+        u["fast_forward_enabled"] = 1
+        await grant_paid_access(u, "admin_simulate_payment", {"days": 30, "test_user_only": True})
+        await send_full_mode_welcome(m, u)
+        return True
+
+    if command == "/reset_test_user":
+        if not (TEST_MODE or int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1):
+            await m.answer("Сначала включи тестовый режим для этого пользователя: /testmode_on 30. Боевые данные не трогаю.")
+            return True
+        await reset_current_user(uid, m.chat.id)
+        await log_event(uid, "admin", "admin_reset_test_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Тестовые данные этого пользователя очищены. Боевые пользователи не затронуты. Напиши /start.")
         return True
 
     if command == "/testmode_on":
@@ -3460,9 +4070,16 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     if command == "/force_next_day":
         current_day = int(u.get("day") or u.get("current_day") or 1)
         next_day = min(current_day + 1, 28)
+        if not u.get("current_day_id"):
+            sid = current_skill_for_action(u)
+            await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=sid, skill_name=(SKILLS_DB.get(sid) or {}).get("name") or sid)
+        if not day_closed_today(u):
+            await mark_day_closed(u, "admin_force_next_day_close_previous")
+        old_day_id = u.get("current_day_id")
         u["day"] = next_day
         if "current_day" in u:
             u["current_day"] = next_day
+        u["current_day_id"] = None
         u["pending_skill_day"] = None
         clear_day_core_lock(u)
         u["day_closed"] = 0
@@ -3473,12 +4090,14 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["replacements_today"] = 0
         u["current_skill_completed_count"] = 0
         u["skill_attempts_today"] = 0
-        u["today_target"] = None
+        # Keep current_task_* across test day transitions; only clear the transient daily target.
+        u["today_target"] = u.get("current_task_title") or None
         u["current_task"] = None
         u["stage"] = "waiting_next_day"
         await update_user_profile(uid, {"day_closed": 0, "today_closed": 0, "last_day_closed_at": None}, DB_PATH, source="admin_force_next_day")
         await save_user(u, DB_PATH)
-        await log_event(uid, "training", "admin_force_next_day", {"from_day": current_day, "day": next_day}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "training", "admin_force_next_day", {"from_day": current_day, "day": next_day, "old_day_id": old_day_id}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(f"Тестовый переход выполнен. Открыт День {next_day}.")
         await start_new_day(uid, m, u, "admin_force_next_day")
         return True
 
@@ -3487,7 +4106,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await m.answer("Тестовая оплата", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL or payment_month_url())]]))
         return True
 
-    if command in {"/reset", "/reset_me"}:
+    if command == "/reset":
         fresh = await reset_current_user(uid, m.chat.id)
         await log_event(uid, "admin", "admin_reset_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("Твой тестовый профиль полностью сброшен. Напиши /start.")
@@ -3853,7 +4472,7 @@ def failed_reason_skill(reason: str) -> tuple[str, Dict[str, Any]]:
 
 
 def failed_reason_explanation(reason: str, u: Dict[str, Any]) -> str:
-    target = u.get("today_target") or "сегодняшняя задача"
+    target = current_task_label(u)
     if reason == "failed_stuck_phone":
         return (
             "Ок. Логика простая.\n\n"
@@ -3938,6 +4557,7 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
     }
     await record_profile_signal(u["user_id"], "training", signal_patch, source=f"downscale_{reason}")
     await record_development_avatar_event(u["user_id"], "downscale", DB_PATH, {"reason": reason, "skill_id": skill_id})
+    await bot_record_action_event(u, "step_reduced", skill_id=skill_id, metadata={"reason": reason})
     await log_event(
         u["user_id"],
         "training",
@@ -3957,9 +4577,144 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
 
     text = (
         f"{config.get('intro')}\n\n"
-        f"{format_skill_card(u, skill, u.get('today_target') or 'сегодняшняя задача')}"
+        f"{format_skill_card(u, skill, current_task_label(u))}"
     )
     await answer_with_keyboard(m, u, text, kb_downscale, "downscale")
+
+
+
+
+def global_button_kind(text: str, low: str) -> str:
+    if text == "🆘 Кризис" or low == "/crisis":
+        return "crisis"
+    if text in {"🧭 Моя карта", "📖 Полная карта"} or "моя карта" in low or "полная карта" in low:
+        return "map"
+    if text in {"💪 Давай действие", "💪 Дать сегодняшний навык"} or "давай действие" in low or "дать сегодняшний навык" in low:
+        return "action"
+    if text in {"🌙 Хватит на сегодня", "🌙 На сегодня хватит"} or "хватит" in low:
+        return "enough"
+    if text in {"🌙 Закрыть день", "✅ Закрыть день"} or "закрыть день" in low:
+        return "close_day"
+    if text == "🌙 До завтра" or "до завтра" in low:
+        return "tomorrow"
+    if text == "🔁 Ещё круг" or "ещё круг" in low or "еще круг" in low:
+        return "repeat"
+    if text == "🔁 Другой навык" or "другой навык" in low:
+        return "other_skill"
+    if text == "📚 Почему это работает" or "почему это работает" in low:
+        return "why"
+    if text in {"📚 Подробнее", "🤔 Зачем это?"} or low == "подробнее":
+        return "details"
+    if text == "Пропустить" or low == "пропустить":
+        return "skip"
+    return ""
+
+
+async def close_day_from_global_button(m: Message, u: Dict[str, Any], source: str):
+    current_day = sync_calendar_day(u)
+    await mark_day_closed(u, source)
+    u["stage"] = "day_core_stop"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "training", "day_closed_global_button", {"day": current_day, "day_id": u.get("current_day_id"), "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, "До завтра. Новый навык откроется после смены календарного дня.", kb_day_core_stop, "day_core_stop")
+
+
+
+async def handle_full_mode_buttons(m: Message, u: Dict[str, Any], text: str) -> bool:
+    if not int(u.get("full_mode") or 0):
+        return False
+    if text not in {"📩 Скопировать текст", "✅ Отправил(а)", "↩️ Хочу другой шаг"}:
+        return False
+    try:
+        plan = json.loads(u.get("full_mode_plan_json") or "{}")
+    except Exception:
+        plan = {}
+    if not plan:
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        plan = build_full_mode_plan(u, profile)
+        u["full_mode_plan_json"] = json.dumps(plan, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+    if text == "📩 Скопировать текст":
+        await m.answer(plan.get("copy_text") or "Напиши человеку: я начинаю маленький тест и отмечу результат через 15 минут.", reply_markup=kb_full_mode_experiment)
+        return True
+    if text == "✅ Отправил(а)":
+        await m.answer("Отлично. Первый эксперимент начался. Сейчас нужен только маленький тест, не весь результат.", reply_markup=kb_training_main)
+        return True
+    if text == "↩️ Хочу другой шаг":
+        await m.answer("Ок. Тогда выбираем другой маленький вход: открыть задачу на 10 секунд или написать 3 сырых слова без редактуры.", reply_markup=kb_full_mode_experiment)
+        return True
+    return False
+
+async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool:
+    low = (text or "").lower().strip()
+    kind = global_button_kind(text, low)
+    if not kind:
+        return False
+    if kind == "crisis":
+        await start_safety_interceptor(m, u, text, "global_button", explicit=True)
+        return True
+    if kind == "map":
+        await send_user_map(m, u, "full_map" if text == "📖 Полная карта" or "полная карта" in low else "global_button")
+        return True
+    if kind == "action":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        if day_closed_today(u, profile):
+            await answer_with_keyboard(m, u, "Сейчас день уже закрыт. Новый навык откроется завтра. Можно посмотреть карту или завершить чат на сегодня.", kb_day_core_stop, "day_core_stop")
+            return True
+        if u.get("current_next_physical_step"):
+            await m.answer(returning_to_task_text(u))
+        await handle_action_request(u["user_id"], m, u)
+        return True
+    if kind == "enough":
+        u["stage"] = "day_pause_confirm"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
+        return True
+    if kind in {"close_day", "tomorrow"}:
+        await close_day_from_global_button(m, u, f"global_{kind}")
+        return True
+    if kind == "repeat":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        if day_closed_today(u, profile):
+            await answer_with_keyboard(m, u, "Сейчас день уже закрыт. Новый навык откроется завтра. Можно посмотреть карту или завершить чат на сегодня.", kb_day_core_stop, "day_core_stop")
+            return True
+        await handle_action_request(u["user_id"], m, u, repeat=True)
+        return True
+    if kind == "other_skill":
+        await replace_skill_or_request_rediagnosis(m, u, "global_other_skill")
+        return True
+    if kind == "why":
+        await answer_with_keyboard(m, u, day_lock_why_text(), kb_day_core_stop if day_closed_today(u) else kb_training_main, u.get("stage") or "training")
+        return True
+    if kind == "details":
+        await m.answer(render_last_explanation_context(u))
+        return True
+    if kind == "skip":
+        if u.get("stage") in {"ask_name", "await_training_target"}:
+            return False
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        sid = current_skill_id(u) or current_skill_for_action(u)
+        skip_count = int(profile.get("action_skip_count") or 0) + 1
+        await bot_record_action_event(u, "skill_skipped", metadata={"source": "global_skip"})
+        await record_profile_signal(u["user_id"], "training", {"action_skip_count": skip_count, "last_skipped_skill": sid, "avoidance_pattern": "step_skipped", "avoidance_trigger": "шаг ощущается большим или не подходит"}, source="global_skill_skipped")
+        u["stage"] = "skip_options"
+        mark_pending_return_after_disruption(u, "skip")
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Пропуск записал как данные. Что дальше?", kb_skip_data, "skip_options")
+        return True
+    return False
+
+
+async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
+    target = current_task_title(u, str(u.get("today_target") or "сегодняшняя задача"))
+    screen = engine_get_next_screen(u, {"type": "target_submitted", "text": target})
+    apply_engine_updates(u, screen)
+    u["today_target"] = target
+    await save_user(u, DB_PATH)
+    await log_engine_events(u, screen)
+    await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
+    await maybe_show_micro_habit(m, u, "day_start")
+    await m.answer(gamify_status_line(u))
 
 
 @router.message(CommandStart())
@@ -3979,19 +4734,24 @@ async def cmd_start(m: Message):
     )
 
 
+    real_skill_state = bool(
+        u.get("current_skill")
+        or u.get("pending_skill_id")
+        or u.get("day_core_skill_id")
+        or u.get("daily_skill_id")
+        or u.get("current_core_skill_id")
+    )
     has_persistent_state = bool(
-        u.get("stage") not in {None, "", "start"}
+        u.get("stage") not in {None, "", "start", "ask_name"}
         or u.get("name")
         or u.get("first_start_date")
         or int(u.get("has_started_training") or 0) == 1
-        or u.get("current_skill")
-        or u.get("pending_skill_id")
-        or u.get("day_core_skill_id")
+        or real_skill_state
     )
     if has_persistent_state:
         await save_user(u, DB_PATH)
         await log_event(uid, "start_resume", {"stage": u.get("stage"), "day": u.get("day")}, db_path=DB_PATH)
-        if current_skill_for_action(u):
+        if real_skill_state and current_skill_for_action(u):
             await m.answer("Продолжаем с того места, где остановились.")
             await send_current_skill(uid, m, u)
         else:
@@ -4027,6 +4787,9 @@ async def main_flow(m: Message):
     text = (m.text or "").strip()
     low = text.lower()
 
+    if safety_mode(u) != "none" and await handle_safety_mode(m, u, text):
+        return
+
     if await handle_admin_command(m, u, text):
         return
     if await handle_user_command(m, u, text):
@@ -4045,6 +4808,28 @@ async def main_flow(m: Message):
     if voice_text:
         text = voice_text.strip()
         low = text.lower()
+    elif m.voice:
+        await m.answer("Слушаю голосовое и сначала проверяю безопасность…")
+        global_voice_text = await whisper_transcribe(m)
+        if not global_voice_text:
+            await m.answer("Не смог разобрать голосовое. Если тебе небезопасно — нажми 🆘 Кризис или напиши коротко текстом.")
+            return
+        text = global_voice_text.strip()
+        low = text.lower()
+        await log_event(u.get("user_id"), u.get("stage", ""), "global_voice_transcribed", {"len": len(text)}, DB_PATH, SHEETS_WEBHOOK_URL)
+
+    if await handle_safety_mode(m, u, text):
+        return
+
+    if text and has_crisis_safety_signal(text, u.get("stage") or ""):
+        await start_safety_interceptor(m, u, text, "global_text", explicit=(text == "🆘 Кризис" or low == "/crisis"))
+        return
+
+    if await handle_full_mode_buttons(m, u, text):
+        return
+
+    if await handle_global_button(m, u, text):
+        return
 
     if text in {"📖 Полная карта", "🧭 Моя карта"} or "моя карта" in low or "полная карта" in low:
         await send_user_map(m, u, "full_map" if text == "📖 Полная карта" or "полная карта" in low else "persistent_button")
@@ -4060,11 +4845,17 @@ async def main_flow(m: Message):
         return
 
     if should_route_action_request(text, low, u):
-        await handle_action_request(u["user_id"], m, u)
+        await handle_action_request(u["user_id"], m, u, repeat=("ещё круг" in low or "еще круг" in low or text == "🔁 Ещё круг"))
         return
 
     if text == "🔁 Другой навык" or "другой навык" in low:
         await replace_skill_or_request_rediagnosis(m, u, "route_other_skill")
+        return
+
+    if "сменить задачу" in low or "другая задача" in low or "новая задача" in low:
+        u["stage"] = "await_training_target"
+        await save_user(u, DB_PATH)
+        await m.answer("Ок. Какую новую задачу берём? Старая задача останется на паузе.")
         return
 
     if u.get("stage") == "day_menu":
@@ -4074,14 +4865,33 @@ async def main_flow(m: Message):
             await ask_today_action(m, u)
             return
         if text in {"🌙 Хватит на сегодня", "🌙 Закрыть день"} or "хватит" in low or "закрыть день" in low:
-            u["stage"] = "waiting_next_day"
+            u["stage"] = "day_pause_confirm"
             await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Ок. Закрываем день. Минимальный шаг уже считается данными.", kb_done, "waiting_next_day")
+            await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
             return
         if text == "🔄 Сменить тренера" or "сменить тренера" in low:
             await open_trainer_switch(m, u, "day_menu")
             return
         await answer_with_keyboard(m, u, "Что сейчас сделать?", kb_day_menu, "day_menu")
+        return
+
+    if u.get("stage") == "day_pause_confirm":
+        if text == "✅ Закрыть день" or text == "🌙 Закрыть день":
+            current_day = sync_calendar_day(u)
+            await mark_day_closed(u, "day_pause_confirm_closed")
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "training", "day_closed_confirmed", {"day": current_day, "day_id": u.get("current_day_id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "До завтра. Новый навык откроется после смены календарного дня.", kb_day_core_stop, "day_core_stop")
+            return
+        if text == "⏸ Просто пауза" or "пауза" in low:
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок. Это пауза, день не закрыт. Вернуться можно кнопкой «💪 Давай действие».", kb_training_main, "training_main")
+            return
+        if text == "↩️ Вернуться к навыку" or "вернуться" in low:
+            await handle_action_request(u["user_id"], m, u)
+            return
+        await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
         return
 
     if text == "🔄 Сменить тренера" or "сменить тренера" in low or "другой тренер" in low or "режим" in low and "трен" in low:
@@ -4183,7 +4993,7 @@ async def main_flow(m: Message):
     # Глобальный хук: кризис доступен из любого состояния, но не перехватывает диагностику
     # и длинные сообщения, где слово "кризис" используется как часть запроса/разбора.
     if should_open_global_crisis(text, u.get("stage") or ""):
-        await show_crisis_entry(m, u, "global")
+        await start_safety_interceptor(m, u, text, "global_crisis_button", explicit=True)
         return
 
     # "Ты меня не понял" is a rebuild flow, not a dead-end explanation.
@@ -4196,13 +5006,30 @@ async def main_flow(m: Message):
     # Pre-skill target prompt: "Пропустить" here means "no specific task",
     # not an action-loop skip/failure. Keep it before action-loop skip handling.
     if u.get("stage") == "await_training_target":
-        screen = engine_get_next_screen(u, {"type": "target_submitted", "text": text})
-        apply_engine_updates(u, screen)
+        target_text = (text or "").strip()
+        if target_text.lower() != "пропустить":
+            await save_current_task(u, DB_PATH, title=target_text)
+            await save_user(u, DB_PATH)
+            if task_needs_physical_step(target_text) and not u.get("current_next_physical_step"):
+                u["stage"] = "await_task_physical_step"
+                await save_user(u, DB_PATH)
+                await m.answer(
+                    "Чтобы не расплываться: какой следующий физический шаг по боту?\n"
+                    "Например: открыть файл с правками / написать пост / собрать форму / проверить оплату."
+                )
+                return
+        await show_skill_for_current_task(m, u)
+        return
+
+    if u.get("stage") == "await_task_physical_step":
+        step = (text or "").strip()
+        if not step:
+            await m.answer("Напиши один физический шаг: что открыть / написать / проверить первым?")
+            return
+        await update_current_task_step(u, DB_PATH, step)
         await save_user(u, DB_PATH)
-        await log_engine_events(u, screen)
-        await answer_with_keyboard(m, u, screen["text"], kb_skill_card, "skill_card")
-        await maybe_show_micro_habit(m, u, "day_start")
-        await m.answer(gamify_status_line(u))
+        await m.answer(returning_to_task_text(u))
+        await show_skill_for_current_task(m, u)
         return
 
     # Action-loop clarification/downscale: не запускаем повторную карту после старта тренировки
@@ -4211,6 +5038,7 @@ async def main_flow(m: Message):
             profile = await get_user_profile(u["user_id"], DB_PATH)
             sid = current_skill_id(u)
             skip_count = int(profile.get("action_skip_count") or 0) + 1
+            await bot_record_action_event(u, "skill_skipped", metadata={"source": "propustit"})
             await record_profile_signal(u["user_id"], "training", {
                 "action_skip_count": skip_count,
                 "last_skipped_skill": sid,
@@ -4248,18 +5076,9 @@ async def main_flow(m: Message):
                 await send_downscale(m, u, "skip_make_simpler")
                 return
             if text in {"🌙 На сегодня хватит", "🌙 Хватит на сегодня"} or "хватит" in low:
-                current_day = sync_calendar_day(u)
-                u["pending_skill_id"] = None
-                u["pending_skill_day"] = None
-                u["today_target"] = None
-                u["stage"] = "waiting_next_day"
-                clear_pending_return_after_disruption(u)
-                await mark_day_closed(u, "day_training_closed_after_skip")
+                u["stage"] = "day_pause_confirm"
                 await save_user(u, DB_PATH)
-                await log_event(u["user_id"], "training", "day_training_closed_after_skip", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
-                close_profile = await get_user_profile(u["user_id"], DB_PATH)
-                await answer_with_keyboard(m, u, day_finish_summary_text(u, close_profile), kb_day_core_stop, "day_core_stop")
-                await maybe_show_micro_habit(m, u, "day_closed")
+                await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
                 return
             await answer_with_keyboard(m, u, "Выбери, что делаем дальше:", kb_skip_data, "skip_options")
             return
@@ -4291,12 +5110,15 @@ async def main_flow(m: Message):
 
         if u.get("stage") == "failed_options":
             if text == "😣 Слишком сложно" or is_too_hard(text):
+                await bot_record_action_event(u, "too_hard_reported", metadata={"source": "failed_options"})
                 await send_downscale(m, u, "failed_too_hard")
                 return
             if text == "😵 Нет сил" or "нет сил" in low:
+                await bot_record_action_event(u, "no_energy_reported", metadata={"source": "failed_options"})
                 await send_downscale(m, u, "failed_no_energy")
                 return
             if text == "📱 Залип" or "залип" in low:
+                await bot_record_action_event(u, "slip_reported", metadata={"source": "failed_options"})
                 u["last_event"] = "stuck"
                 mark_pending_return_after_disruption(u, "stuck_phone")
                 await send_downscale(m, u, "failed_stuck_phone")
@@ -4536,72 +5358,12 @@ async def main_flow(m: Message):
             await m.answer("Напиши 1–5 слов или пришли голосовое: что изменилось после шага?")
             return
         if text == "🔁 Ещё круг" or "еще круг" in low or "ещё круг" in low:
-            profile = await get_user_profile(u["user_id"], DB_PATH)
-            if is_free_after_day3(u) and int(u.get("day_core_round_count") or 0) >= FREE_AFTER_DAY_3["rounds_per_day"]:
-                await log_event(u["user_id"], "training", "free_round_limit_reached", {"rounds": int(u.get("day_core_round_count") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await answer_with_keyboard(
-                    m,
-                    u,
-                    "На сегодня в коротком режиме достаточно.\n\n"
-                    "Ты уже сделал базовую тренировку.\n"
-                    "Сейчас лучше не собирать новые техники, а закрепить один вход.\n\n"
-                    "Можно:\n"
-                    "— закрыть день\n"
-                    "— посмотреть карту\n"
-                    "— продолжить в полном режиме",
-                    ReplyKeyboardMarkup(
-                        keyboard=[
-                            [KeyboardButton(text="🌙 Закрыть день")],
-                            [KeyboardButton(text="🧭 Моя карта")],
-                            [KeyboardButton(text="💳 Полный режим")],
-                        ],
-                        resize_keyboard=True,
-                    ),
-                    "day_core_stop",
-                )
-                return
-            if int(u.get("day_core_round_count") or 0) >= 3 and not day_core_test_mode_enabled(u):
-                await log_event(u["user_id"], "training", "daily_progression_stop_suggested", {"rounds": int(u.get("day_core_round_count") or 0)}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await answer_with_keyboard(m, u, today_progress_text(u, profile), kb_day_core_stop, "day_core_stop")
-                return
-            if should_show_today_progress(u, profile):
-                await m.answer(today_progress_text(u, profile))
-                await record_today_progress_shown(u, profile)
-            if not day_core_test_mode_enabled(u) and has_stale_day_core_lock(u):
-                previous_day = int(u.get("day") or 1)
-                sync_calendar_day(u)
-                await save_user(u, DB_PATH)
-                await log_event(u["user_id"], "training", "day_core_date_rollover", {"from_day": previous_day, "to_day": u.get("day")}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await ask_today_action(m, u)
-                return
-            screen = engine_get_next_screen(u, {"type": "repeat_skill_card"})
-            apply_engine_updates(u, screen)
-            await save_user(u, DB_PATH)
-            await log_engine_events(u, screen)
-            markup = kb_day_core_stop if screen.get("buttons") == ["🧭 Моя карта", "📚 Почему это работает", "🌙 До завтра"] else kb_skill_card
-            await answer_with_keyboard(m, u, screen["text"], markup, "day_core_stop" if markup is kb_day_core_stop else "skill_card")
+            await handle_action_request(u["user_id"], m, u, repeat=True)
             return
         if text in {"🌙 На сегодня хватит", "🌙 Хватит на сегодня"} or "хватит" in low:
-            current_day = sync_calendar_day(u)
-            u["pending_skill_id"] = None
-            u["pending_skill_day"] = None
-            u["today_target"] = None
-            u["stage"] = "waiting_next_day"
-            clear_pending_return_after_disruption(u)
-            await mark_day_closed(u, "day_training_closed")
+            u["stage"] = "day_pause_confirm"
             await save_user(u, DB_PATH)
-            await log_event(
-                u["user_id"],
-                "training",
-                "day_training_closed",
-                {"day": current_day, "day_core_skill_id": u.get("day_core_skill_id")},
-                DB_PATH,
-                SHEETS_WEBHOOK_URL,
-            )
-            await log_event(u["user_id"], "training", "done_enough_today", {"day": current_day}, DB_PATH, SHEETS_WEBHOOK_URL)
-            close_profile = await get_user_profile(u["user_id"], DB_PATH)
-            await answer_with_keyboard(m, u, day_finish_summary_text(u, close_profile), kb_day_core_stop, "day_core_stop")
-            await maybe_show_micro_habit(m, u, "day_closed")
+            await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
             return
         await answer_with_keyboard(m, u, "Выбери кнопкой 👇", kb_done, "done")
         return
@@ -5197,12 +5959,15 @@ async def main_flow(m: Message):
         day = int(u.get("day") or 1)
 
         if text == "😣 Слишком сложно" or is_too_hard(text):
+            await bot_record_action_event(u, "too_hard_reported", metadata={"source": "training"})
             await send_downscale(m, u, "new_day_too_hard")
             return
         if text == "😵 Нет сил" or "нет сил" in low:
+            await bot_record_action_event(u, "no_energy_reported", metadata={"source": "training"})
             await send_downscale(m, u, "new_day_no_energy")
             return
         if text == "📱 Залип" or "залип" in low:
+            await bot_record_action_event(u, "slip_reported", metadata={"source": "training"})
             u["last_event"] = "stuck"
             mark_pending_return_after_disruption(u, "stuck_phone")
             await send_downscale(m, u, "new_day_stuck_phone")
@@ -5280,7 +6045,7 @@ async def main_flow(m: Message):
             return
 
         if text == "🆘 Кризис" or "кризис" in low:
-            await show_crisis_entry(m, u, "training_main")
+            await start_safety_interceptor(m, u, text, "training_main", explicit=True)
             return
 
         if text in {"📊 Мой прогресс", "📊 Прогресс"} or "мой прогресс" in low or "прогресс" in low:
@@ -5296,11 +6061,13 @@ async def main_flow(m: Message):
             apply_engine_updates(u, screen)
             await save_user(u, DB_PATH)
             profile = await get_user_profile(u["user_id"], DB_PATH)
+            await record_return_after_slip_action_event_if_needed(u, "done")
             returned_after_disruption = await record_return_after_disruption_if_needed(u, profile, "done_after_disruption")
             if returned_after_disruption:
                 await save_user(u, DB_PATH)
                 profile = await get_user_profile(u["user_id"], DB_PATH)
             sid = current_skill_id(u)
+            await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "done_button"})
             done_count = int(profile.get("action_done_count") or 0) + 1
             preferred_activation = "body_doubling" if sid == "body_doubling_plan" else ("phone_away" if sid == "phone_far_3min" else "small_visible_step")
             await record_profile_signal(u["user_id"], "training", {
@@ -5316,7 +6083,8 @@ async def main_flow(m: Message):
             if should_show_day3_offer(u, day):
                 await show_day3_offer(m, u, "day3_auto")
                 return
-            progress_profile = {**profile, "action_done_count": done_count}
+            metrics = await get_action_metrics(u["user_id"], DB_PATH, day_id=str(u.get("current_day_id") or ""))
+            progress_profile = {**profile, "action_done_count": done_count, "_action_metrics": metrics}
             await answer_with_keyboard(m, u, done_flow_text(random.random() < 0.25, u, progress_profile), kb_done, "done")
             return
 
@@ -5386,10 +6154,14 @@ async def main_flow(m: Message):
             await show_crisis_tool_prompt(m, u)
             return
         if text == "↩️ Вернуться в тренировку" or "вернуться" in low:
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await log_event(u["user_id"], "crisis_stabilize", "crisis_return_training", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, "Ок. Только маленький шаг. Без героизма.", kb_training_main, "training_main")
+            await log_event(u["user_id"], "crisis_stabilize", "crisis_return_blocked_until_safety_done", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(
+                m,
+                u,
+                "Сначала завершим блок безопасности: сделай стабилизацию и нажми ✅ Сделал. После этого я спрошу эффект и только потом верну к тренировке.",
+                kb_crisis_stabilize,
+                "crisis_stabilize",
+            )
             return
         if text == "🆘 Мне всё ещё плохо" or "всё ещё плохо" in low or "все еще плохо" in low:
             await log_event(u["user_id"], "crisis_stabilize", "crisis_still_bad", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -5760,10 +6532,9 @@ async def main_flow(m: Message):
             await handle_action_request(u["user_id"], m, u)
             return
         if text in {"🌙 Хватит на сегодня", "🌙 Закрыть день"} or "хватит" in low:
-            await mark_day_closed(u, "short_mode_stop")
-            u["stage"] = "day_core_stop"
+            u["stage"] = "day_pause_confirm"
             await save_user(u, DB_PATH)
-            await m.answer(enough_for_today_text(), reply_markup=kb_day_core_stop)
+            await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
             return
         if text in {"🤔 Остаться в коротком режиме", "🤔 Подумаю"} or "коротком режиме" in low or "подумаю" in low:
             await log_event(u["user_id"], "offer", "payment_declined_soft", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -5857,7 +6628,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     if data == "confirm_test_payment":
         if PAYMENT_ACCEPT_ANY:
             await grant_paid_access(u, "test_payment_confirm_button", {"accept_any_payment": True})
-            await c.message.answer("✅ Тестовая оплата засчитана. Полный режим включён на 30 дней.", reply_markup=kb_training_main)
+            await send_full_mode_welcome(c.message, u)
         else:
             await c.message.answer("Автоподтверждение оплаты выключено. Нужен PAYMENT_ACCEPT_ANY=1 или админская /mark_paid.")
         await c.answer()
