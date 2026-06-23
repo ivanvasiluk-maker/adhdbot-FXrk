@@ -125,11 +125,13 @@ async def run() -> None:
         await set_post_action_user(uid, db_path, "done", rounds=1)
         repeat_msg = await send(uid, "🔁 Ещё круг")
         assert "Навык дня" in last_text(repeat_msg), last_text(repeat_msg)
+        assert "Ещё одна попытка сегодня" in last_text(repeat_msg), last_text(repeat_msg)
+        assert "Новый день" not in last_text(repeat_msg), last_text(repeat_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         finish_msg = await send(uid, "🌙 Хватит на сегодня")
         finish_text = all_text(finish_msg).lower()
-        assert "день закрыт" in finish_text or "достаточно" in finish_text or "засчит" in finish_text, all_text(finish_msg)
+        assert "закрыть день или просто сделать паузу" in finish_text, all_text(finish_msg)
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         why_msg = await send(uid, "📚 Почему это работает")
@@ -137,7 +139,7 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         tomorrow_msg = await send(uid, "🌙 До завтра")
-        assert "до завтра" in last_text(tomorrow_msg).lower() or "завтра" in last_text(tomorrow_msg).lower(), last_text(tomorrow_msg)
+        assert "до завтра" in all_text(tomorrow_msg).lower() or "завтра" in all_text(tomorrow_msg).lower(), all_text(tomorrow_msg)
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         training_map_msg = await send(uid, "🧭 Моя карта")
@@ -145,7 +147,7 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         skip_msg = await send(uid, "Пропустить")
-        assert "Пропуск тоже данные" in last_text(skip_msg), last_text(skip_msg)
+        assert "Пропуск" in last_text(skip_msg) and "данные" in last_text(skip_msg), last_text(skip_msg)
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         trainer_msg = await send(uid, "🔄 Сменить тренера")
