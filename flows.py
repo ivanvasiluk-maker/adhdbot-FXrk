@@ -25,6 +25,7 @@ from db import (
     get_user, save_user, log_event, USER_FIELDS, is_paid, update_user_profile,
     diagnosis_user_profile_patch, get_user_profile, render_development_avatar,
     render_development_mirror_report, daily_profile_explanation, determine_development_focus,
+    get_action_metrics,
 )
 
 # Logging
@@ -1596,8 +1597,12 @@ async def send_progress_report(m: Message, u: dict, db_path: str):
         rows = await cur.fetchall()
 
     counts = {e: c for e, c in rows}
-    done = counts.get("done", 0)
-    ret = counts.get("return", 0)
+    metrics = await get_action_metrics(uid, db_path, day_id=str(u.get("current_day_id") or ""))
+    period = metrics.get("period", {})
+    done = int(period.get("micro_approaches") or 0)
+    slips = int(period.get("slips") or 0)
+    ret = int(period.get("returns_after_slip") or 0)
+    downscales = int(period.get("step_reductions") or 0)
     crisis = counts.get("crisis_message", 0)
 
     plan = get_current_plan(u)
@@ -1612,10 +1617,13 @@ async def send_progress_report(m: Message, u: dict, db_path: str):
     mirror_text = render_development_mirror_report(profile, period_days=7)
 
     msg = (
-        "📊 Твой прогресс за 7 дней:\n"
-        f"✅ выполнено: {done}\n"
-        f"↩️ возвратов: {ret}\n"
+        "📊 Твои отметки за период:\n"
+        f"— микро-подходов: {done}\n"
+        f"— отмеченных залипаний: {slips}\n"
+        f"— возвратов после залипания: {ret}\n"
+        f"— упрощений шага: {downscales}\n"
         f"🆘 кризис-обращений: {crisis}\n\n"
+        "Это не оценка твоей продуктивности. Это отметки о том, как ты пробовал(а) входить в задачу.\n\n"
         f"{avatar_text}\n\n"
         "🏆 Достижения развития:\n"
         f"{achievements_text}\n\n"

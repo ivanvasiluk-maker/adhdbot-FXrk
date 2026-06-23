@@ -1196,6 +1196,25 @@ USER_FIELDS = [
     "profile_map_shown_date",
     "profile_map_shown_count",
     "last_explanation_context",
+    "safety_mode",
+    "safety_last_risk",
+    "safety_contact_status",
+    "safety_resume_context",
+    "current_day_id",
+    "current_session_id",
+    "daily_skill_id",
+    "daily_skill_name",
+    "daily_skill_status",
+    "current_task_id",
+    "current_task_title",
+    "current_task_description",
+    "current_task_context",
+    "current_next_physical_step",
+    "current_task_status",
+    "full_mode",
+    "full_mode_started_at",
+    "full_mode_until",
+    "full_mode_plan_json",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1327,6 +1346,25 @@ def default_user(uid: int) -> Dict[str, Any]:
         "current_core_skill_date": None,
         "profile_map_shown_date": None,
         "profile_map_shown_count": 0,
+        "safety_mode": "none",
+        "safety_last_risk": "unknown",
+        "safety_contact_status": "not_asked",
+        "safety_resume_context": None,
+        "current_day_id": None,
+        "current_session_id": None,
+        "daily_skill_id": None,
+        "daily_skill_name": None,
+        "daily_skill_status": None,
+        "current_task_id": None,
+        "current_task_title": None,
+        "current_task_description": None,
+        "current_task_context": None,
+        "current_next_physical_step": None,
+        "current_task_status": None,
+        "full_mode": 0,
+        "full_mode_started_at": None,
+        "full_mode_until": None,
+        "full_mode_plan_json": None,
     }
 
 async def init_db(db_path: str):
@@ -1395,10 +1433,106 @@ async def init_db(db_path: str):
                 current_skill_variant_id TEXT,
                 current_core_skill_date TEXT,
                 profile_map_shown_date TEXT,
-                profile_map_shown_count INTEGER DEFAULT 0
+                profile_map_shown_count INTEGER DEFAULT 0,
+                safety_mode TEXT DEFAULT 'none',
+                safety_last_risk TEXT DEFAULT 'unknown',
+                safety_contact_status TEXT DEFAULT 'not_asked',
+                safety_resume_context TEXT,
+                current_day_id TEXT,
+                current_session_id TEXT,
+                daily_skill_id TEXT,
+                daily_skill_name TEXT,
+                daily_skill_status TEXT,
+                current_task_id TEXT,
+                current_task_title TEXT,
+                current_task_description TEXT,
+                current_task_context TEXT,
+                current_next_physical_step TEXT,
+                current_task_status TEXT,
+                full_mode INTEGER DEFAULT 0,
+                full_mode_started_at TEXT,
+                full_mode_until TEXT,
+                full_mode_plan_json TEXT
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_days (
+                day_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                day_number INTEGER NOT NULL,
+                calendar_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                daily_skill_id TEXT,
+                daily_skill_name TEXT,
+                daily_skill_status TEXT,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_attempts (
+                attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                skill_id TEXT,
+                task_id TEXT,
+                result TEXT,
+                barrier TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS action_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                day_id TEXT,
+                attempt_id INTEGER,
+                event_type TEXT NOT NULL,
+                skill_id TEXT,
+                task_id TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_tasks (
+                task_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                context TEXT,
+                next_physical_step TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                opened_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                current_screen TEXT
+            )
+            """
+        )
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_user_days_user ON user_days(user_id, day_number)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_day ON skill_attempts(day_id, attempt_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_action_events_user_day ON action_events(user_id, day_id, event_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_user_tasks_user ON user_tasks(user_id, status, updated_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id, last_activity_at)")
+
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1444,6 +1578,9 @@ def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
     u["input_mode"] = mode_value
     u["mode"] = mode_value
     u["schema_version"] = max(int(u.get("schema_version") or 0), USER_STATE_SCHEMA_VERSION)
+    u["safety_mode"] = u.get("safety_mode") or "none"
+    u["safety_last_risk"] = u.get("safety_last_risk") or "unknown"
+    u["safety_contact_status"] = u.get("safety_contact_status") or "not_asked"
     if not u.get("updated_at"):
         u["updated_at"] = _utc_iso()
     return u
@@ -1557,7 +1694,26 @@ EXTRA_USER_COLS = {
     "current_skill_variant_id": "TEXT",
     "current_core_skill_date": "TEXT",
     "profile_map_shown_date": "TEXT",
-    "profile_map_shown_count": "INTEGER DEFAULT 0"
+    "profile_map_shown_count": "INTEGER DEFAULT 0",
+    "safety_mode": "TEXT DEFAULT 'none'",
+    "safety_last_risk": "TEXT DEFAULT 'unknown'",
+    "safety_contact_status": "TEXT DEFAULT 'not_asked'",
+    "safety_resume_context": "TEXT",
+    "current_day_id": "TEXT",
+    "current_session_id": "TEXT",
+    "daily_skill_id": "TEXT",
+    "daily_skill_name": "TEXT",
+    "daily_skill_status": "TEXT",
+    "current_task_id": "TEXT",
+    "current_task_title": "TEXT",
+    "current_task_description": "TEXT",
+    "current_task_context": "TEXT",
+    "current_next_physical_step": "TEXT",
+    "current_task_status": "TEXT",
+    "full_mode": "INTEGER DEFAULT 0",
+    "full_mode_started_at": "TEXT",
+    "full_mode_until": "TEXT",
+    "full_mode_plan_json": "TEXT"
 }
 
 async def migrate_db(db_path: str):
@@ -1582,6 +1738,83 @@ async def migrate_db(db_path: str):
         await db.execute("UPDATE users SET schema_version = ? WHERE schema_version IS NULL OR schema_version < ?", (USER_STATE_SCHEMA_VERSION, USER_STATE_SCHEMA_VERSION))
         await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at)")
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_days (
+                day_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                day_number INTEGER NOT NULL,
+                calendar_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                daily_skill_id TEXT,
+                daily_skill_name TEXT,
+                daily_skill_status TEXT,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_attempts (
+                attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                skill_id TEXT,
+                task_id TEXT,
+                result TEXT,
+                barrier TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS action_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                day_id TEXT,
+                attempt_id INTEGER,
+                event_type TEXT NOT NULL,
+                skill_id TEXT,
+                task_id TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_tasks (
+                task_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                context TEXT,
+                next_physical_step TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                opened_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                current_screen TEXT
+            )
+            """
+        )
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_user_days_user ON user_days(user_id, day_number)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_day ON skill_attempts(day_id, attempt_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_action_events_user_day ON action_events(user_id, day_id, event_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_user_tasks_user ON user_tasks(user_id, status, updated_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id, last_activity_at)")
+
         await db.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1659,6 +1892,236 @@ async def log_event(
     except Exception as e:
         log.warning("log_event failed: %s", e)
 
+
+
+async def ensure_user_session(user_id: int, db_path: str, current_screen: str = "") -> str:
+    """Open or touch the current logical bot session."""
+    now = _utc_iso()
+    async with aiosqlite.connect(db_path) as db:
+        session_id = f"{user_id}:{int(time.time())}"
+        await db.execute(
+            "INSERT INTO user_sessions (session_id, user_id, opened_at, last_activity_at, current_screen) VALUES (?, ?, ?, ?, ?)",
+            (session_id, user_id, now, now, current_screen),
+        )
+        await db.commit()
+        return session_id
+
+
+async def ensure_user_day(u: Dict[str, Any], db_path: str, *, calendar_date: str, skill_id: str = "", skill_name: str = "") -> str:
+    """Ensure the user has one active product day; do not create a new day for more attempts."""
+    day_number = int(u.get("day") or u.get("day_number") or 1)
+    existing = u.get("current_day_id")
+    async with aiosqlite.connect(db_path) as db:
+        if existing:
+            cur = await db.execute("SELECT status FROM user_days WHERE day_id=? AND user_id=?", (existing, u["user_id"]))
+            row = await cur.fetchone()
+            if row and row[0] == "active":
+                return str(existing)
+        day_id = f"{u['user_id']}:{day_number}"
+        now = _utc_iso()
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO user_days
+            (day_id, user_id, day_number, calendar_date, status, daily_skill_id, daily_skill_name, daily_skill_status, opened_at)
+            VALUES (?, ?, ?, ?, 'active', ?, ?, 'active', ?)
+            """,
+            (day_id, u["user_id"], day_number, calendar_date, skill_id, skill_name, now),
+        )
+        await db.execute(
+            """
+            UPDATE user_days
+            SET status='active', daily_skill_id=COALESCE(NULLIF(?, ''), daily_skill_id),
+                daily_skill_name=COALESCE(NULLIF(?, ''), daily_skill_name), daily_skill_status='active'
+            WHERE day_id=? AND user_id=?
+            """,
+            (skill_id, skill_name, day_id, u["user_id"]),
+        )
+        await db.commit()
+    u["current_day_id"] = day_id
+    u["daily_skill_id"] = skill_id or u.get("daily_skill_id")
+    u["daily_skill_name"] = skill_name or u.get("daily_skill_name")
+    u["daily_skill_status"] = "active"
+    return day_id
+
+
+async def close_user_day(u: Dict[str, Any], db_path: str) -> None:
+    day_id = u.get("current_day_id")
+    if not day_id:
+        return
+    now = _utc_iso()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE user_days SET status='closed', closed_at=?, daily_skill_status=COALESCE(daily_skill_status, 'active') WHERE day_id=? AND user_id=?",
+            (now, day_id, u["user_id"]),
+        )
+        await db.commit()
+    u["daily_skill_status"] = "closed"
+
+
+async def create_skill_attempt(u: Dict[str, Any], db_path: str, *, skill_id: str, task_id: str = "", result: str = "started", barrier: str = "") -> int:
+    day_id = u.get("current_day_id")
+    if not day_id:
+        day_id = await ensure_user_day(u, db_path, calendar_date=str(u.get("day_core_skill_date") or ""), skill_id=skill_id)
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "INSERT INTO skill_attempts (day_id, user_id, skill_id, task_id, result, barrier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (day_id, u["user_id"], skill_id, task_id, result, barrier, _utc_iso()),
+        )
+        attempt_id = int(cur.lastrowid)
+        await db.execute(
+            "INSERT INTO action_events (user_id, day_id, attempt_id, event_type, skill_id, task_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (u["user_id"], day_id, attempt_id, "attempt_started", skill_id, task_id, json.dumps({"result": result, "barrier": barrier}, ensure_ascii=False), _utc_iso()),
+        )
+        await db.commit()
+        return attempt_id
+
+
+async def attempt_count_for_day(day_id: str, db_path: str) -> int:
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM skill_attempts WHERE day_id=?", (day_id,))
+        row = await cur.fetchone()
+        return int(row[0] if row else 0)
+
+
+async def get_user_day_status(day_id: str, db_path: str) -> str:
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute("SELECT status FROM user_days WHERE day_id=?", (day_id,))
+        row = await cur.fetchone()
+        return str(row[0]) if row else ""
+
+
+def _new_task_id(user_id: int) -> str:
+    return f"{user_id}:task:{int(time.time() * 1000)}"
+
+
+async def save_current_task(u: Dict[str, Any], db_path: str, *, title: str, description: str = "", context: str = "", next_step: str = "") -> str:
+    """Create a new active task and pause the previous one instead of overwriting it."""
+    title = str(title or "").strip()
+    if not title:
+        title = "сегодняшняя задача"
+    now = _utc_iso()
+    old_task_id = u.get("current_task_id")
+    async with aiosqlite.connect(db_path) as db:
+        if old_task_id:
+            await db.execute(
+                "UPDATE user_tasks SET status='paused', updated_at=? WHERE task_id=? AND user_id=? AND status='active'",
+                (now, old_task_id, u["user_id"]),
+            )
+        task_id = _new_task_id(int(u["user_id"]))
+        await db.execute(
+            """
+            INSERT INTO user_tasks (task_id, user_id, title, description, context, next_physical_step, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            """,
+            (task_id, u["user_id"], title, description, context, next_step, now, now),
+        )
+        await db.commit()
+    u["current_task_id"] = task_id
+    u["current_task_title"] = title
+    u["current_task_description"] = description or None
+    u["current_task_context"] = context or None
+    u["current_next_physical_step"] = next_step or None
+    u["current_task_status"] = "active"
+    u["today_target"] = title
+    return task_id
+
+
+async def update_current_task_step(u: Dict[str, Any], db_path: str, next_step: str) -> None:
+    next_step = str(next_step or "").strip()
+    if not u.get("current_task_id") or not next_step:
+        return
+    now = _utc_iso()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE user_tasks SET next_physical_step=?, updated_at=? WHERE task_id=? AND user_id=?",
+            (next_step, now, u["current_task_id"], u["user_id"]),
+        )
+        await db.commit()
+    u["current_next_physical_step"] = next_step
+
+
+async def get_user_tasks(user_id: int, db_path: str) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM user_tasks WHERE user_id=? ORDER BY created_at", (user_id,))
+        return [dict(row) for row in await cur.fetchall()]
+
+
+ACTION_EVENT_TYPES = {
+    "attempt_started",
+    "attempt_completed_self_reported",
+    "slip_reported",
+    "too_hard_reported",
+    "no_energy_reported",
+    "skill_changed",
+    "skill_skipped",
+    "step_reduced",
+    "returned_after_slip",
+    "day_closed",
+    "crisis_started",
+    "crisis_resolved_or_paused",
+}
+
+
+async def record_action_event(
+    user_id: int,
+    db_path: str,
+    event_type: str,
+    *,
+    day_id: str = "",
+    attempt_id: int | None = None,
+    skill_id: str = "",
+    task_id: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    if event_type not in ACTION_EVENT_TYPES:
+        raise ValueError(f"unknown action event type: {event_type}")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT INTO action_events (user_id, day_id, attempt_id, event_type, skill_id, task_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, day_id or None, attempt_id, event_type, skill_id or None, task_id or None, json.dumps(metadata or {}, ensure_ascii=False), _utc_iso()),
+        )
+        await db.commit()
+
+
+async def get_action_metrics(user_id: int, db_path: str, *, day_id: str = "") -> Dict[str, Dict[str, int]]:
+    def empty() -> Dict[str, int]:
+        return {
+            "micro_approaches": 0,
+            "slips": 0,
+            "returns_after_slip": 0,
+            "step_reductions": 0,
+            "too_hard": 0,
+            "no_energy": 0,
+            "attempts_started": 0,
+            "skill_skipped": 0,
+        }
+
+    mapping = {
+        "attempt_completed_self_reported": "micro_approaches",
+        "slip_reported": "slips",
+        "returned_after_slip": "returns_after_slip",
+        "step_reduced": "step_reductions",
+        "too_hard_reported": "too_hard",
+        "no_energy_reported": "no_energy",
+        "attempt_started": "attempts_started",
+        "skill_skipped": "skill_skipped",
+    }
+    metrics = {"today": empty(), "period": empty()}
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "SELECT day_id, event_type, COUNT(*) FROM action_events WHERE user_id=? GROUP BY day_id, event_type",
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+    for row_day_id, event_type, count in rows:
+        key = mapping.get(event_type)
+        if not key:
+            continue
+        metrics["period"][key] += int(count)
+        if day_id and row_day_id == day_id:
+            metrics["today"][key] += int(count)
+    return metrics
 
 
 PATTERN_LABELS = {
