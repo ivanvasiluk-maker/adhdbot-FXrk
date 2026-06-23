@@ -4012,6 +4012,35 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await m.answer("Тестовые данные этого пользователя очищены. Боевые пользователи не затронуты. Напиши /start.")
         return True
 
+    if command == "/debug_state":
+        await m.answer(debug_state_text(u))
+        return True
+
+    if command == "/debug_events":
+        await m.answer(await recent_user_events_text(uid, 20))
+        return True
+
+    if command == "/show_offer":
+        await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await show_day3_offer(m, u, "admin_command")
+        return True
+
+    if command == "/simulate_payment":
+        u["is_test_user"] = 1
+        u["fast_forward_enabled"] = 1
+        await grant_paid_access(u, "admin_simulate_payment", {"days": 30, "test_user_only": True})
+        await send_full_mode_welcome(m, u)
+        return True
+
+    if command == "/reset_test_user":
+        if not (TEST_MODE or int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1):
+            await m.answer("Сначала включи тестовый режим для этого пользователя: /testmode_on 30. Боевые данные не трогаю.")
+            return True
+        await reset_current_user(uid, m.chat.id)
+        await log_event(uid, "admin", "admin_reset_test_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Тестовые данные этого пользователя очищены. Боевые пользователи не затронуты. Напиши /start.")
+        return True
+
     if command == "/testmode_on":
         parts = text.split()
         days = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() and int(parts[1]) in {7, 14, 30} else 30
