@@ -3954,7 +3954,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     admin_commands = {
         "/debug_state", "/debug_events", "/show_offer", "/simulate_payment", "/reset_test_user",
         "/testmode_on", "/testmode_off", "/set_day", "/force_next_day",
-        "/reset", "/reset_me", "/debug_map", "/debug_user", "/test_payment",
+        "/reset", "/debug_map", "/debug_user", "/test_payment",
         "/whoami", "/health", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
         "/simulate_paid", "/simulate_unpaid", "/payment_status", "/sync_sheets", "/stats",
     }
@@ -4087,7 +4087,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await m.answer("Тестовая оплата", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL or payment_month_url())]]))
         return True
 
-    if command in {"/reset", "/reset_me"}:
+    if command == "/reset":
         fresh = await reset_current_user(uid, m.chat.id)
         await log_event(uid, "admin", "admin_reset_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("Твой тестовый профиль полностью сброшен. Напиши /start.")
