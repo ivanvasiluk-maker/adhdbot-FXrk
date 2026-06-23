@@ -2913,6 +2913,17 @@ def is_admin(user_id: int) -> bool:
     return str(user_id) in [x.strip() for x in ids.split(",") if x.strip()]
 
 
+
+
+def qa_command_allowed(user_id: int, u: Dict[str, Any]) -> bool:
+    """Allow QA navigation commands for admins, global TEST_MODE, or users who enabled test access."""
+    return (
+        is_admin(user_id)
+        or TEST_MODE
+        or int(u.get("is_test_user") or 0) == 1
+        or int(u.get("fast_forward_enabled") or 0) == 1
+    )
+
 def payment_month_url() -> str:
     if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
         return PAYMENT_TEST_URL
@@ -3127,7 +3138,7 @@ def day_core_test_mode_enabled(u: Dict[str, Any]) -> bool:
         uid = int(u.get("user_id") or 0)
     except (TypeError, ValueError):
         uid = 0
-    return is_admin(uid) and (int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1)
+    return qa_command_allowed(uid, u)
 
 
 def _parse_iso_date(value: str):
@@ -3850,17 +3861,14 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return True
 
     if command == "/show_offer":
-        if not is_admin(uid):
-            await m.answer("Команда доступна только администратору QA.")
+        if not qa_command_allowed(uid, u):
+            await m.answer("Команда доступна в QA-режиме. Отправь /test_access <код> или попроси добавить твой Telegram ID в ADMIN_IDS.")
             return True
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
         await show_day3_offer(m, u, "manual_command")
         return True
 
     if command == "/test_access":
-        if not is_admin(uid):
-            await answer_with_keyboard(m, u, "Выбери действие 👇", kb_training_main, u.get("stage") or "training_main")
-            return True
         code = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) == 2 else ""
         if TEST_CHEAT_CODE and code == TEST_CHEAT_CODE:
             await activate_test_cheat(m, u, "command")
@@ -3954,17 +3962,54 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     """Handle admin-only test commands. Returns True when command was consumed."""
     uid = m.from_user.id
     command = (text.split(maxsplit=1)[0] if text else "").lower()
-    admin_commands = {
+    qa_commands = {
         "/debug_state", "/debug_events", "/show_offer", "/simulate_payment", "/reset_test_user",
-        "/testmode_on", "/testmode_off", "/set_day", "/force_next_day",
-        "/reset", "/debug_map", "/debug_user", "/test_payment",
-        "/whoami", "/health", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
-        "/simulate_paid", "/simulate_unpaid", "/payment_status", "/sync_sheets", "/stats",
+        "/testmode_on", "/testmode_off", "/set_day", "/force_next_day", "/debug_map", "/debug_user",
+        "/whoami", "/health", "/payment_status",
     }
-    if command not in admin_commands:
+    admin_only_commands = {
+        "/reset", "/test_payment", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
+        "/simulate_paid", "/simulate_unpaid", "/sync_sheets", "/stats",
+    }
+    if command not in qa_commands and command not in admin_only_commands:
         return False
-    if not is_admin(uid):
-        await answer_with_keyboard(m, u, "Выбери действие 👇", kb_training_main, u.get("stage") or "training_main")
+    if command == "/testmode_on" and not qa_command_allowed(uid, u):
+        # Let the user-command handler validate /testmode_on <code> for non-admin testers.
+        return False
+    if command in qa_commands and not qa_command_allowed(uid, u):
+        await m.answer("QA-команда недоступна. Отправь /test_access <код> или добавь свой Telegram ID в ADMIN_IDS.")
+        return True
+    if command in admin_only_commands and not is_admin(uid):
+        await m.answer("Админская команда недоступна для этого пользователя.")
+        return True
+
+    if command == "/debug_state":
+        await m.answer(debug_state_text(u))
+        return True
+
+    if command == "/debug_events":
+        await m.answer(await recent_user_events_text(uid, 20))
+        return True
+
+    if command == "/show_offer":
+        await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await show_day3_offer(m, u, "admin_command")
+        return True
+
+    if command == "/simulate_payment":
+        u["is_test_user"] = 1
+        u["fast_forward_enabled"] = 1
+        await grant_paid_access(u, "admin_simulate_payment", {"days": 30, "test_user_only": True})
+        await send_full_mode_welcome(m, u)
+        return True
+
+    if command == "/reset_test_user":
+        if not (TEST_MODE or int(u.get("is_test_user") or 0) == 1 or int(u.get("fast_forward_enabled") or 0) == 1):
+            await m.answer("Сначала включи тестовый режим для этого пользователя: /testmode_on 30. Боевые данные не трогаю.")
+            return True
+        await reset_current_user(uid, m.chat.id)
+        await log_event(uid, "admin", "admin_reset_test_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Тестовые данные этого пользователя очищены. Боевые пользователи не затронуты. Напиши /start.")
         return True
 
     if command == "/debug_state":
