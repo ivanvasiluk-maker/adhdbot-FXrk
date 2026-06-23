@@ -16,21 +16,36 @@ from skills_texts import SKILLS_TEXTS
 TRAINERS = {
     "skinny": {
         "name": "Скинни",
+        "display_name": "Скинни",
         "tone": "жёсткий, прямой",
+        "grammatical_gender": "masculine",
         "emoji": "🐈‍⬛",
         "short": "Не характер. Не лень. Чиним вход через действия.",
+        "response_templates": {
+            "check_barrier": "Сейчас проверим, что именно ломает вход.",
+        },
     },
     "marsha": {
         "name": "Марша",
+        "display_name": "Марша",
         "tone": "мягкий, поддерживающий",
+        "grammatical_gender": "feminine",
         "emoji": "🐈",
         "short": "Мягко возвращаемся. Без наказания. Навык важнее эмоций.",
+        "response_templates": {
+            "check_barrier": "Давай спокойно посмотрим, что именно сейчас слишком трудно.",
+        },
     },
     "beck": {
         "name": "Бек",
+        "display_name": "Бек",
         "tone": "аналитичный, структурный",
+        "grammatical_gender": "masculine",
         "emoji": "🐈‍🦁",
         "short": "Снижаем стоимость входа и проверяем эффект по действиям.",
+        "response_templates": {
+            "check_barrier": "Проверим, какой фактор запускает избегание: оценка, неопределённость или перегруз.",
+        },
     },
 }
 
