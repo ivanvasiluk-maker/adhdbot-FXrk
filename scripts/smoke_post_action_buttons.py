@@ -145,6 +145,10 @@ async def run() -> None:
         training_map_msg = await send(uid, "🧭 Моя карта")
         assert "Твоя карта" in last_text(training_map_msg) or "Коротко по карте сегодня" in last_text(training_map_msg), last_text(training_map_msg)
 
+        await set_post_action_user(uid, db_path, "done", rounds=1)
+        more_msg = await send(uid, "Ещё")
+        assert "ещё действия" in last_text(more_msg).lower(), last_text(more_msg)
+
         await set_post_action_user(uid, db_path, "training", rounds=1)
         skip_msg = await send(uid, "Пропустить")
         assert "Пропуск" in last_text(skip_msg) and "данные" in last_text(skip_msg), last_text(skip_msg)

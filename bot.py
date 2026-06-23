@@ -4630,6 +4630,8 @@ def global_button_kind(text: str, low: str) -> str:
         return "repeat"
     if text == "🔁 Другой навык" or "другой навык" in low:
         return "other_skill"
+    if text in {"Ещё", "Еще"} or low in {"ещё", "еще"}:
+        return "more"
     if text == "📚 Почему это работает" or "почему это работает" in low:
         return "why"
     if text in {"📚 Подробнее", "🤔 Зачем это?"} or low == "подробнее":
@@ -4711,6 +4713,9 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
     if kind == "other_skill":
         await replace_skill_or_request_rediagnosis(m, u, "global_other_skill")
+        return True
+    if kind == "more":
+        await answer_with_keyboard(m, u, "Ещё действия:", kb_more_actions, "more_actions")
         return True
     if kind == "why":
         await answer_with_keyboard(m, u, day_lock_why_text(), kb_day_core_stop if day_closed_today(u) else kb_training_main, u.get("stage") or "training")
