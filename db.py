@@ -18,6 +18,10 @@ log = logging.getLogger("bot")
 # Global test switch to unlock features without paywalls
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
 
+# Persistent user-state schema version. Migrations must be additive/non-destructive:
+# deploys must never drop the SQLite file or reset existing users.
+USER_STATE_SCHEMA_VERSION = 2
+
 
 # ============================================================
 # USER PROFILE: dynamic digital model
@@ -1131,11 +1135,15 @@ def diagnosis_user_profile_patch(comp: Dict[str, Any]) -> Dict[str, Any]:
 
 USER_FIELDS = [
     "user_id",
+    "telegram_id",
     "chat_id",
     "name",
     "trainer_key",
+    "trainer",
     "input_mode",
+    "mode",
     "stage",
+    "current_step",
     "bucket",
     "analysis_json",
     "plan_json",
@@ -1143,7 +1151,10 @@ USER_FIELDS = [
     "pending_skill_day",
     "today_target",
     "day",
+    "day_number",
     "created_at",
+    "updated_at",
+    "schema_version",
     "first_start_date",
     "points",
     "level",
@@ -1153,6 +1164,7 @@ USER_FIELDS = [
     "trial_days",
     "trial_phase",
     "payment_status",
+    "access_status",
     "free_mode",
     "paid_until",
     "last_payment_click",
@@ -1254,11 +1266,15 @@ def default_user(uid: int) -> Dict[str, Any]:
     """Создать нового пользователя с дефолтными значениями"""
     return {
         "user_id": uid,
+        "telegram_id": uid,
         "chat_id": uid,
         "name": None,
         "trainer_key": "marsha",
+        "trainer": "marsha",
         "input_mode": "text",   # text | voice | test
+        "mode": "text",
         "stage": "start",
+        "current_step": "start",
         "bucket": "mixed",
         "analysis_json": None,
         "plan_json": None,
@@ -1266,14 +1282,18 @@ def default_user(uid: int) -> Dict[str, Any]:
         "pending_skill_day": None,
         "today_target": None,
         "day": 1,
+        "day_number": 1,
         "points": 0,
         "level": 1,
         "streak": 0,
         "last_active": 0.0,
+        "updated_at": _utc_iso(),
+        "schema_version": USER_STATE_SCHEMA_VERSION,
         "plan_overrides_json": None,
         "trial_days": 3,
         "trial_phase": "paid" if TEST_MODE else "trial3",
         "payment_status": "paid" if TEST_MODE else "trial",
+        "access_status": "paid" if TEST_MODE else "trial",
         "free_mode": 0,
         "paid_until": None,
         "last_payment_click": None,
@@ -1316,11 +1336,15 @@ async def init_db(db_path: str):
             """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
+                telegram_id INTEGER UNIQUE,
                 chat_id INTEGER,
                 name TEXT,
                 trainer_key TEXT,
+                trainer TEXT,
                 input_mode TEXT,
+                mode TEXT,
                 stage TEXT,
+                current_step TEXT,
                 bucket TEXT,
                 analysis_json TEXT,
                 plan_json TEXT,
@@ -1328,7 +1352,10 @@ async def init_db(db_path: str):
                 pending_skill_day INTEGER,
                 today_target TEXT,
                 day INTEGER,
+                day_number INTEGER,
                 created_at REAL,
+                updated_at TEXT,
+                schema_version INTEGER DEFAULT 2,
                 first_start_date TEXT,
                 points INTEGER,
                 level INTEGER,
@@ -1338,6 +1365,7 @@ async def init_db(db_path: str):
                 trial_days INTEGER,
                 trial_phase TEXT,
                 payment_status TEXT,
+                access_status TEXT,
                 free_mode INTEGER,
                 paid_until TEXT,
                 last_payment_click TEXT,
@@ -1371,8 +1399,55 @@ async def init_db(db_path: str):
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at)")
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (USER_STATE_SCHEMA_VERSION, _utc_iso()),
+        )
         await ensure_events_schema(db)
         await db.commit()
+
+def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep durable user-state columns in sync with legacy bot fields.
+
+    The bot historically used user_id/day/stage/payment_status/trainer_key/input_mode.
+    The persistent schema also stores telegram_id/day_number/current_step/access_status/
+    trainer/mode so deploys and future code can resume users from explicit state columns.
+    """
+    uid = u.get("user_id") or u.get("telegram_id")
+    if uid is not None:
+        u["user_id"] = int(uid)
+        u["telegram_id"] = int(uid)
+        u.setdefault("chat_id", int(uid))
+    day_value = int(u.get("day") or u.get("day_number") or 1)
+    u["day"] = day_value
+    u["day_number"] = day_value
+    step_value = u.get("stage") or u.get("current_step") or "start"
+    u["stage"] = step_value
+    u["current_step"] = step_value
+    access_value = u.get("payment_status") or u.get("access_status") or ("paid" if TEST_MODE else "trial")
+    u["payment_status"] = access_value
+    u["access_status"] = access_value
+    trainer_value = u.get("trainer_key") or u.get("trainer") or "marsha"
+    u["trainer_key"] = trainer_value
+    u["trainer"] = trainer_value
+    mode_value = u.get("input_mode") or u.get("mode") or "text"
+    u["input_mode"] = mode_value
+    u["mode"] = mode_value
+    u["schema_version"] = max(int(u.get("schema_version") or 0), USER_STATE_SCHEMA_VERSION)
+    if not u.get("updated_at"):
+        u["updated_at"] = _utc_iso()
+    return u
+
 
 async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
     """Получить пользователя из БД"""
@@ -1381,7 +1456,7 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
         cur = await db.execute("SELECT * FROM users WHERE user_id=?", (uid,))
         row = await cur.fetchone()
         if not row:
-            u = default_user(uid)
+            u = sync_user_state_aliases(default_user(uid))
             await save_user(u, db_path)
             return u
 
@@ -1399,10 +1474,13 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
                 u['test_answers'] = []
         else:
             u['test_answers'] = []
-        return u
+        return sync_user_state_aliases(u)
 
 async def save_user(u: Dict[str, Any], db_path: str):
-    """Сохранить пользователя в БД"""
+    """Сохранить пользователя в БД без сброса состояния между деплоями."""
+    u = sync_user_state_aliases(dict(u))
+    u["updated_at"] = _utc_iso()
+    u["schema_version"] = USER_STATE_SCHEMA_VERSION
     cols = USER_FIELDS
     vals = []
     for c in cols:
@@ -1429,6 +1507,14 @@ async def save_user(u: Dict[str, Any], db_path: str):
 # ============================================================
 
 EXTRA_USER_COLS = {
+    "telegram_id": "INTEGER",
+    "day_number": "INTEGER",
+    "current_step": "TEXT",
+    "access_status": "TEXT",
+    "trainer": "TEXT",
+    "mode": "TEXT",
+    "updated_at": "TEXT",
+    "schema_version": "INTEGER DEFAULT 2",
     "points": "INTEGER",
     "level": "INTEGER",
     "streak": "INTEGER",
@@ -1483,6 +1569,31 @@ async def migrate_db(db_path: str):
         for col, ctype in EXTRA_USER_COLS.items():
             if col not in cols:
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
+
+        # Non-destructive backfill: preserve legacy values and expose explicit
+        # persistent state columns used to resume flows after deploys.
+        await db.execute("UPDATE users SET telegram_id = user_id WHERE telegram_id IS NULL")
+        await db.execute("UPDATE users SET day_number = COALESCE(day_number, day, 1)")
+        await db.execute("UPDATE users SET current_step = COALESCE(current_step, stage, 'start')")
+        await db.execute("UPDATE users SET access_status = COALESCE(access_status, payment_status, 'trial')")
+        await db.execute("UPDATE users SET trainer = COALESCE(trainer, trainer_key, 'marsha')")
+        await db.execute("UPDATE users SET mode = COALESCE(mode, input_mode, 'text')")
+        await db.execute("UPDATE users SET updated_at = COALESCE(updated_at, datetime('now'))")
+        await db.execute("UPDATE users SET schema_version = ? WHERE schema_version IS NULL OR schema_version < ?", (USER_STATE_SCHEMA_VERSION, USER_STATE_SCHEMA_VERSION))
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at)")
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (USER_STATE_SCHEMA_VERSION, _utc_iso()),
+        )
 
         await ensure_events_schema(db)
 
