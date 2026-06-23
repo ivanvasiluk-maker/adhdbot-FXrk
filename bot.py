@@ -3747,7 +3747,10 @@ async def build_admin_stats_text(db_path: str) -> str:
 async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
     fresh = default_user(uid)
     fresh["chat_id"] = chat_id
-    fresh["stage"] = "ask_name"
+    # Keep reset as a true pre-start state: /start must rebuild onboarding,
+    # not resume a stale/default skill card.
+    fresh["stage"] = "start"
+    fresh["current_step"] = "start"
     await save_user(fresh, DB_PATH)
     return fresh
 
@@ -4715,19 +4718,24 @@ async def cmd_start(m: Message):
     )
 
 
+    real_skill_state = bool(
+        u.get("current_skill")
+        or u.get("pending_skill_id")
+        or u.get("day_core_skill_id")
+        or u.get("daily_skill_id")
+        or u.get("current_core_skill_id")
+    )
     has_persistent_state = bool(
-        u.get("stage") not in {None, "", "start"}
+        u.get("stage") not in {None, "", "start", "ask_name"}
         or u.get("name")
         or u.get("first_start_date")
         or int(u.get("has_started_training") or 0) == 1
-        or u.get("current_skill")
-        or u.get("pending_skill_id")
-        or u.get("day_core_skill_id")
+        or real_skill_state
     )
     if has_persistent_state:
         await save_user(u, DB_PATH)
         await log_event(uid, "start_resume", {"stage": u.get("stage"), "day": u.get("day")}, db_path=DB_PATH)
-        if current_skill_for_action(u):
+        if real_skill_state and current_skill_for_action(u):
             await m.answer("Продолжаем с того места, где остановились.")
             await send_current_skill(uid, m, u)
         else:

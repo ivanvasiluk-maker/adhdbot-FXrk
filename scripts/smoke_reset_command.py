@@ -22,6 +22,9 @@ from db import default_user, get_user, init_db, migrate_db, save_user  # noqa: E
 class FakeFromUser:
     def __init__(self, user_id: int):
         self.id = user_id
+        self.username = f"tester_{user_id}"
+        self.first_name = "Tester"
+        self.full_name = "Tester"
 
 
 class FakeChat:
@@ -58,9 +61,17 @@ async def main() -> None:
             assert await bot.handle_admin_command(msg, u, msg.text) is False
             assert await bot.handle_user_command(msg, u, msg.text) is True
             saved = await get_user(uid, db_path)
-            assert saved["stage"] == "ask_name"
+            assert saved["stage"] == "start"
             assert any("Профиль полностью сброшен" in x for x in msg.answers)
             assert "Выбери действие" not in "\n".join(msg.answers)
+
+            start_msg = FakeMessage(uid, "/start")
+            await bot.cmd_start(start_msg)
+            start_answers = "\n".join(start_msg.answers)
+            assert "Продолжаем с того места" not in start_answers
+            assert "Как к тебе обращаться?" in start_answers
+            restarted = await get_user(uid, db_path)
+            assert restarted["stage"] == "ask_name"
         finally:
             bot.DB_PATH = old_db
 
