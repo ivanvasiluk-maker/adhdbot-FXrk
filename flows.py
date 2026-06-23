@@ -34,6 +34,33 @@ log = logging.getLogger("bot")
 # UTILS
 # ============================================================
 
+def set_skill_explanation_context(u: Dict[str, Any], skill: Dict[str, Any], sid: str) -> None:
+    title = skill.get("name") or sid or "навык"
+    reason = skill.get("why_short") or skill.get("why") or skill.get("goal") or "Этот навык снижает цену входа и помогает проверить рабочую гипотезу действием."
+    if "чернов" in title.lower():
+        evidence = [
+            "ты боишься оценки",
+            "задача стала слишком дорогой",
+            "хороший текст сейчас требует слишком много",
+            "плохой черновик снижает цену входа",
+        ]
+        next_step = "Мы не пишем финальный материал. Мы ломаем заморозку."
+    else:
+        evidence = [
+            skill.get("goal") or "цель — сделать вход проще",
+            skill.get("explain") or skill.get("why_long") or "короткий шаг уменьшает сопротивление",
+            "мы проверяем навык на практике, а не требуем идеального результата",
+        ]
+        next_step = "Мы не делаем финальный результат. Мы ломаем заморозку маленьким входом."
+    u["last_explanation_context"] = json.dumps({
+        "type": "skill",
+        "title": title,
+        "reason": reason,
+        "evidence": [str(x) for x in evidence if x],
+        "next_step": next_step,
+    }, ensure_ascii=False)
+
+
 def clamp_str(s: str, n: int = 1400) -> str:
     s = (s or "").strip()
     if len(s) <= n:
@@ -132,6 +159,7 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
     u["stage"] = "await_training_target"
     u["pending_skill_id"] = sid
     u["pending_skill_day"] = day
+    set_skill_explanation_context(u, skill, sid)
     await save_user(u, db_path)
 
     # Утренний быстрый чек — только начиная со 2-го дня
@@ -202,6 +230,8 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         source="daily_focus",
     )
     personal_context = daily_profile_explanation(profile, sid, 1)
+    set_skill_explanation_context(u, skill, sid)
+    await save_user(u, db_path)
 
     msg = (
         f"🌅 {name}, День 1\n\n"
@@ -244,6 +274,7 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
         source="daily_focus",
     )
     personal_context = daily_profile_explanation(profile, sid, day)
+    set_skill_explanation_context(u, skill, sid)
 
     msg = (
         f"🌅 {name}, День {day}\n\n"
