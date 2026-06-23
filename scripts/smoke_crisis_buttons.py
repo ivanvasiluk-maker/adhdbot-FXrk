@@ -14,6 +14,7 @@ os.environ.setdefault("BOT_TOKEN", "")
 os.environ.setdefault("OPENAI_API_KEY", "")
 
 import bot  # noqa: E402
+from db import default_user, USER_FIELDS  # noqa: E402
 from texts import (  # noqa: E402
     kb_crisis_mode,
     kb_crisis_stabilize,
@@ -129,6 +130,23 @@ async def main() -> None:
     assert bot.should_open_global_crisis("у меня кризис", "training") is True
     assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "await_problem_text") is False
     assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "run_analysis") is False
+    assert bot.has_crisis_safety_signal("не хочу жить, есть план сегодня", "training") is True
+    assert bot.has_crisis_safety_signal("паническая атака, не могу дышать", "training") is True
+    assert bot.has_crisis_safety_signal("проверь оффер и кризис в тексте диагностики", "await_problem_text") is False
+    assert bot.has_crisis_safety_signal("Лучше бы меня не было, я не вижу выхода", "ask_name") is True
+    assert bot.safety_signal_details("Лучше бы меня не было, я не вижу выхода")["high"] is True
+    assert bot.has_crisis_safety_signal("Мне страшно оставаться одному", "await_training_target") is True
+    assert bot.safety_signal_details("🆘 Кризис", explicit=True)["triggered"] is True
+    assert "crisis_return_blocked_until_safety_done" in BOT_SOURCE
+    assert "safety_blocked_productivity_button" in BOT_SOURCE
+    assert 'await start_safety_interceptor(m, u, text, "training_main", explicit=True)' in BOT_SOURCE
+
+    user = default_user(42)
+    assert user["safety_mode"] == "none"
+    assert user["safety_last_risk"] == "unknown"
+    assert user["safety_contact_status"] == "not_asked"
+    for field in ("safety_mode", "safety_last_risk", "safety_contact_status", "safety_resume_context"):
+        assert field in USER_FIELDS
 
     assert bot.crisis_pattern_from_text("могу навредить себе, есть план") == "high_risk"
     assert bot.crisis_pattern_from_text("меня не понимают и я один") == "social_pain"
@@ -138,6 +156,8 @@ async def main() -> None:
     assert bot.select_daily_skill({"user_id": 1}, {"skill_history": ["open_only", "open_without_timer"]})["skill_id"] != "open_without_timer"
     assert bot.select_daily_skill({"user_id": 1}, {"skill_history": ["task_naming", "name_task_one_word"], "attention_escape_count": 2})["skill_id"] == "phone_away_3_min"
     assert bot.select_daily_skill({"user_id": 1}, {"skill_history": [], "energy_pattern": "low_start_energy"})["skill_id"] == "body_first"
+    assert "данных пока мало" in bot.new_day_insights_text({})
+    assert "залипание усиливается" not in bot.new_day_insights_text({})
     new_day_text = bot.build_new_day_intro({"user_id": 1}, {"skill_id": "phone_away_3_min", "name": "Телефон вне руки на 3 минуты"}, {})
     assert "🌱 Новый день" in new_day_text
     assert "🧩 Навык дня" in new_day_text
@@ -152,6 +172,11 @@ async def main() -> None:
     assert bot.choose_replacement_skill({"current_skill": "open_without_timer"}, ["open_without_timer"]) != "open_without_timer"
     assert bot.day_closed_today({"today_closed": 1, "last_day_closed_at": bot.local_date_for_user({})}, {}) is True
     assert "На сегодня достаточно" in bot.enough_for_today_text()
+    assert "Никаких новых навыков сейчас" in BOT_SOURCE
+    metrics_text = bot.action_metrics_text({"today": {"micro_approaches": 1, "slips": 1, "returns_after_slip": 1, "step_reductions": 0}, "period": {"micro_approaches": 2, "slips": 1, "returns_after_slip": 1, "step_reductions": 1}})
+    assert "микро-подходов" in metrics_text
+    assert "отмеченных залипаний" in metrics_text
+    assert "Это не оценка твоей продуктивности" in metrics_text
     assert "возврат после залипания +1" in bot.return_after_stuck_text()
 
     # Stabilization/effect buttons are still wired.
