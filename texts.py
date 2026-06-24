@@ -983,51 +983,54 @@ kb_trainers = ReplyKeyboardMarkup(
 
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💪 Давай действие"), KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="Ещё")],
-        [KeyboardButton(text="🔄 Сменить тренера"), KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="💪 Сделать следующий шаг")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🌙 Закрыть день")],
+        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 kb_more_actions = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="😑 Ты меня не понял")],
         [KeyboardButton(text="⬅️ Назад")],
-    ],
-    resize_keyboard=True
-)
-
-
-
-kb_skill_card = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="Пропустить")],
-        [KeyboardButton(text="🤔 Не понял"), KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="🆘 Кризис")],
-    ],
-    resize_keyboard=True
-)
-kb_new_day_skill = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="✅ Сделал")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="📱 Залип")],
-        [KeyboardButton(text="😵 Нет сил"), KeyboardButton(text="🔁 Другой навык")],
-        [KeyboardButton(text="🌙 Хватит на сегодня")],
     ],
     resize_keyboard=True,
 )
 
 
-kb_done = ReplyKeyboardMarkup(
+
+kb_action_outcome = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🔁 Ещё круг")],
-        [KeyboardButton(text="🌙 Хватит на сегодня")],
-        [KeyboardButton(text="📌 Что изменилось?"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🟡 Застрял / не вышло")],
+        [KeyboardButton(text="⏸ Пауза")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
+)
+
+# After every skill card we deliberately keep only three choices.
+kb_skill_card = kb_action_outcome
+kb_new_day_skill = kb_action_outcome
+kb_done = kb_action_outcome
+
+kb_success_next = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ Ещё 2 минуты")],
+        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="🗣️ Что помогло?")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_success_limit = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="💪 Другое действие")],
+    ],
+    resize_keyboard=True,
 )
 
 kb_day_core_stop = ReplyKeyboardMarkup(
@@ -1041,11 +1044,13 @@ kb_day_core_stop = ReplyKeyboardMarkup(
 
 kb_failed = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="😵 Нет сил")],
-        [KeyboardButton(text="📱 Залип"), KeyboardButton(text="🤔 Не понял")],
-        [KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="📱 Ушёл в телефон / YouTube")],
+        [KeyboardButton(text="😬 Страшно, стыдно, боюсь ошибиться")],
+        [KeyboardButton(text="🧠 Слишком много всего")],
+        [KeyboardButton(text="🔋 Нет сил")],
+        [KeyboardButton(text="🎙️ Опишу голосом или текстом")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 kb_action_clarify = ReplyKeyboardMarkup(
@@ -1060,7 +1065,7 @@ kb_downscale = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
-        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True
 )
@@ -1068,7 +1073,7 @@ kb_downscale = ReplyKeyboardMarkup(
 kb_downscale_name_task = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Написал")],
-        [KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True
 )
@@ -1699,7 +1704,7 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Кризис».',
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Мне небезопасно».',
     'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
 

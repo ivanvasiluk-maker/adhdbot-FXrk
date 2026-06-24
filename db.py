@@ -1200,6 +1200,11 @@ USER_FIELDS = [
     "safety_last_risk",
     "safety_contact_status",
     "safety_resume_context",
+    "current_state",
+    "state_version",
+    "current_action_id",
+    "last_simplification_modality",
+    "success_repeat_count",
     "current_day_id",
     "current_session_id",
     "daily_skill_id",
@@ -1350,6 +1355,11 @@ def default_user(uid: int) -> Dict[str, Any]:
         "safety_last_risk": "unknown",
         "safety_contact_status": "not_asked",
         "safety_resume_context": None,
+        "current_state": "ONBOARDING",
+        "state_version": 0,
+        "current_action_id": None,
+        "last_simplification_modality": None,
+        "success_repeat_count": 0,
         "current_day_id": None,
         "current_session_id": None,
         "daily_skill_id": None,
@@ -1438,6 +1448,11 @@ async def init_db(db_path: str):
                 safety_last_risk TEXT DEFAULT 'unknown',
                 safety_contact_status TEXT DEFAULT 'not_asked',
                 safety_resume_context TEXT,
+                current_state TEXT DEFAULT 'ONBOARDING',
+                state_version INTEGER DEFAULT 0,
+                current_action_id TEXT,
+                last_simplification_modality TEXT,
+                success_repeat_count INTEGER DEFAULT 0,
                 current_day_id TEXT,
                 current_session_id TEXT,
                 daily_skill_id TEXT,
@@ -1699,6 +1714,11 @@ EXTRA_USER_COLS = {
     "safety_last_risk": "TEXT DEFAULT 'unknown'",
     "safety_contact_status": "TEXT DEFAULT 'not_asked'",
     "safety_resume_context": "TEXT",
+    "current_state": "TEXT DEFAULT 'ONBOARDING'",
+    "state_version": "INTEGER DEFAULT 0",
+    "current_action_id": "TEXT",
+    "last_simplification_modality": "TEXT",
+    "success_repeat_count": "INTEGER DEFAULT 0",
     "current_day_id": "TEXT",
     "current_session_id": "TEXT",
     "daily_skill_id": "TEXT",
@@ -2058,6 +2078,7 @@ ACTION_EVENT_TYPES = {
     "step_reduced",
     "returned_after_slip",
     "day_closed",
+    "stuck_reason_selected",
     "crisis_started",
     "crisis_resolved_or_paused",
 }
@@ -2125,6 +2146,12 @@ async def get_action_metrics(user_id: int, db_path: str, *, day_id: str = "") ->
 
 
 PATTERN_LABELS = {
+    "fearofevaluation": "Страх оценки",
+    "fear_of_evaluation": "Страх оценки",
+    "shameselfattack": "Жёсткая самокритика",
+    "shame_self_attack": "Жёсткая самокритика",
+    "attention_autopilot": "Уход в быстрые стимулы",
+    "task_avoidance": "Избегание трудной задачи",
     "perfectionism_start_block": "идеальный образ результата делает вход слишком дорогим",
     "entry_too_large": "первый шаг ощущается слишком большим",
     "micro_entry_block": "даже подготовка к старту воспринимается как задача",
@@ -2142,6 +2169,8 @@ REASON_LABELS = {
 }
 
 SKILL_LABELS = {
+    "openwithouttimer": "Открыть без таймера",
+    "open_without_timer": "Открыть без таймера",
     "open_only": "открыть задачу без требования работать",
     "ninety_sec_start": "90 секунд входа",
     "bad_first_step": "плохой первый шаг",
@@ -2164,7 +2193,18 @@ SKILL_LABELS = {
 def label(mapping: dict, value: Optional[str], fallback: str) -> str:
     if not value:
         return fallback
-    return mapping.get(value, value)
+    raw = str(value)
+    technical_labels = {
+        "openwithouttimer": "Открыть без таймера",
+        "open_without_timer": "Открыть без таймера",
+        "fearofevaluation": "Страх оценки",
+        "fear_of_evaluation": "Страх оценки",
+        "shameselfattack": "Жёсткая самокритика",
+        "shame_self_attack": "Жёсткая самокритика",
+        "attention_autopilot": "Уход в быстрые стимулы",
+        "task_avoidance": "Избегание трудной задачи",
+    }
+    return mapping.get(raw, technical_labels.get(raw, raw))
 
 
 async def get_user_profile(user_id: int, db_path: str = "bot.db") -> dict:
@@ -2253,17 +2293,9 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
 Она становится точнее после каждого подхода."""
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
-    """Применить геймификацию"""
-    u["points"] = int(u.get("points") or 0) + int(delta_points)
-    u["level"] = max(1, int(u.get("points") or 0) // 10 + 1)
-
-    now = time.time()
-    last = float(u.get("last_active") or 0.0)
-    if now - last > 18 * 3600:
-        u["streak"] = 1
-    else:
-        u["streak"] = int(u.get("streak") or 0) + 1
-    u["last_active"] = now
+    """Launch-safe no-op: false points/levels/streaks are worse than no gamification."""
+    u["last_active"] = time.time()
+    u["gamify_reason"] = reason
 
 def is_paid(u: dict) -> bool:
     """Проверить, есть ли полный доступ: paid, testmode или активная дата paid_until."""

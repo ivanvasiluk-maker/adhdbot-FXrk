@@ -166,8 +166,9 @@ async def main() -> None:
     assert bot.should_route_action_request("💪 Дать сегодняшний навык", "💪 дать сегодняшний навык", {}) is True
     assert bot.should_route_action_request("🔁 Ещё круг", "🔁 ещё круг", {}) is True
     short_mode_buttons = [b.text for row in bot.kb_short_mode_main.keyboard for b in row]
-    assert "💪 Дать сегодняшний навык" in short_mode_buttons
-    assert "💳 Полный режим" in short_mode_buttons
+    assert "💪 Сделать следующий шаг" in short_mode_buttons
+    assert "⚡ Я застрял" in short_mode_buttons
+    assert "💳 Полный режим" not in short_mode_buttons
     assert "Ограничения короткого режима" in bot.stay_free_text()
     assert bot.choose_replacement_skill({"current_skill": "open_without_timer"}, ["open_without_timer"]) != "open_without_timer"
     assert bot.day_closed_today({"today_closed": 1, "last_day_closed_at": bot.local_date_for_user({})}, {}) is True
