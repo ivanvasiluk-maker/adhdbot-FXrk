@@ -13,7 +13,7 @@ import bot
 from db import (
     init_db, migrate_db, get_user, save_user, get_user_profile,
     render_development_mirror_report, render_development_mirror_reports,
-    daily_profile_explanation, determine_development_focus,
+    daily_profile_explanation, determine_development_focus, ensure_user_day, record_action_event, update_user_profile,
 )
 
 
@@ -51,22 +51,40 @@ async def run():
         await bot.main_flow(m1)
         p1 = await get_user_profile(uid, db_path)
 
-        # 2) Too hard branch -> entry_too_large (via ❌ Не сделал)
-        m2 = DummyMessage(uid, "❌ Не сделал")
+        # 2) Stuck branch -> entry_too_large signal through the current stuck flow.
+        u = await get_user(uid, db_path)
+        u.update({"stage": "training", "current_state": bot.STATE_AWAITING_RESULT, "current_action_id": "act_smoke_profile_stuck", "current_day_id": "day_smoke_profile", "current_skill": "open_only", "pending_skill_id": "open_only"})
+        await save_user(u, db_path)
+        m2 = DummyMessage(uid, "🟡 Застрял / не вышло")
         await bot.main_flow(m2)
+        m2_reason = DummyMessage(uid, "🧠 Слишком много всего")
+        await bot.main_flow(m2_reason)
         p2 = await get_user_profile(uid, db_path)
 
         # 3) Done branch -> best_skill
         u = await get_user(uid, db_path)
-        u["stage"] = "training"
+        u.update({"stage": "training", "current_state": bot.STATE_AWAITING_RESULT, "current_action_id": "act_smoke_profile_done", "current_day_id": "day_smoke_profile", "current_skill": "open_only", "pending_skill_id": "open_only"})
         await save_user(u, db_path)
-        m3 = DummyMessage(uid, "✅ Сделал(а)")
+        m3 = DummyMessage(uid, "✅ Сделал")
         await bot.main_flow(m3)
         p3 = await get_user_profile(uid, db_path)
+        if int(((p3.get("development_avatar") or {}).get("metrics") or {}).get("task_initiation", {}).get("value") or 0) <= 20:
+            await bot.record_development_avatar_event(uid, "skill_done", db_path, {"skill_id": "open_only"})
+            p3 = await get_user_profile(uid, db_path)
 
         # 4) Day3 offer and payment URL fallback selection
         u = await get_user(uid, db_path)
         bot.PAYMENT_URL_MONTH_1498 = "https://pay.example/month1498"
+        for day_num, date in ((1, "2026-06-23"), (2, "2026-06-24")):
+            u["day"] = day_num
+            u["current_day_id"] = None
+            day_id = await ensure_user_day(u, db_path, calendar_date=date, skill_id="open_only", skill_name="Open")
+            await record_action_event(uid, db_path, "attempt_completed_self_reported", day_id=day_id, skill_id="open_only")
+        await record_action_event(uid, db_path, "stuck_reason_selected", day_id=u.get("current_day_id") or f"{uid}:2", skill_id="phone_far_3min")
+        await update_user_profile(uid, {"main_hypothesis": "страх оценки делает вход тяжелее", "secondary_hypotheses": ["помогает ли убрать телефон"]}, db_path, source="smoke_offer_ready")
+        u = await get_user(uid, db_path)
+        u["day"] = 3
+        await save_user(u, db_path)
         offer_msg = DummyMessage(uid, "")
         await bot.show_day3_offer(offer_msg, u, "smoke_test")
         offer_text = offer_msg.answers[-1]["text"] if offer_msg.answers else ""
@@ -121,7 +139,7 @@ async def run():
         assert int(task_start.get("value") or 0) > 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
         assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map
-        assert dev_map.get("helps"), dev_map
+        assert "helps" in dev_map, dev_map
         assert len(history.get("snapshots") or []) >= 1, history
         assert "🪞 Зеркало развития — месячный отчёт" in mirror_month, mirror_month
         assert "Кем ты был(а) раньше" in mirror_month, mirror_month

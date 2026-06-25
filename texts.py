@@ -963,7 +963,6 @@ kb_input_mode = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧠 Диагностика текстом")],
         [KeyboardButton(text="🎙 Диагностика голосом")],
-        [KeyboardButton(text="❓ Быстрый тест (5 вопросов)")],
     ],
     resize_keyboard=True,
 )
@@ -983,51 +982,81 @@ kb_trainers = ReplyKeyboardMarkup(
 
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💪 Давай действие"), KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="Ещё")],
-        [KeyboardButton(text="🔄 Сменить тренера"), KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="💪 Сделать следующий шаг")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 kb_more_actions = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📊 Прогресс"), KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="😑 Ты меня не понял")],
+        [KeyboardButton(text="😑 Ты меня не понял")],
         [KeyboardButton(text="⬅️ Назад")],
-    ],
-    resize_keyboard=True
-)
-
-
-
-kb_skill_card = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="❌ Не сделал")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="Пропустить")],
-        [KeyboardButton(text="🤔 Не понял"), KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="🆘 Кризис")],
-    ],
-    resize_keyboard=True
-)
-kb_new_day_skill = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="✅ Сделал")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="📱 Залип")],
-        [KeyboardButton(text="😵 Нет сил"), KeyboardButton(text="🔁 Другой навык")],
-        [KeyboardButton(text="🌙 Хватит на сегодня")],
     ],
     resize_keyboard=True,
 )
 
 
-kb_done = ReplyKeyboardMarkup(
+
+kb_action_outcome = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🔁 Ещё круг")],
-        [KeyboardButton(text="🌙 Хватит на сегодня")],
-        [KeyboardButton(text="📌 Что изменилось?"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🟡 Застрял / не вышло")],
+        [KeyboardButton(text="⏸ Пауза")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
+)
+
+
+kb_action_outcome_with_not_it = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🟡 Застрял / не вышло")],
+        [KeyboardButton(text="⏸ Пауза")],
+        [KeyboardButton(text="😑 Не то")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_not_it_reasons = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🎯 Не та задача")],
+        [KeyboardButton(text="😬 Не та причина")],
+        [KeyboardButton(text="🧩 Шаг слишком большой")],
+        [KeyboardButton(text="🗣️ Скажу по-своему")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_exploration_day = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Закрыть день")],
+        [KeyboardButton(text="💪 Оставить себе один маленький шаг на завтра")],
+    ],
+    resize_keyboard=True,
+)
+
+# After every skill card we deliberately keep only three choices.
+kb_skill_card = kb_action_outcome
+kb_new_day_skill = kb_action_outcome
+kb_done = kb_action_outcome
+
+kb_success_next = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ Ещё 2 минуты")],
+        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="🗣️ Что помогло?")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_success_limit = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="💪 Другое действие")],
+    ],
+    resize_keyboard=True,
 )
 
 kb_day_core_stop = ReplyKeyboardMarkup(
@@ -1041,11 +1070,13 @@ kb_day_core_stop = ReplyKeyboardMarkup(
 
 kb_failed = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="😵 Нет сил")],
-        [KeyboardButton(text="📱 Залип"), KeyboardButton(text="🤔 Не понял")],
-        [KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="📱 Ушёл в телефон / YouTube")],
+        [KeyboardButton(text="😬 Страшно, стыдно, боюсь ошибиться")],
+        [KeyboardButton(text="🧠 Слишком много всего")],
+        [KeyboardButton(text="🔋 Нет сил")],
+        [KeyboardButton(text="🎙️ Опишу голосом или текстом")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 kb_action_clarify = ReplyKeyboardMarkup(
@@ -1060,7 +1091,7 @@ kb_downscale = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
-        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True
 )
@@ -1068,7 +1099,7 @@ kb_downscale = ReplyKeyboardMarkup(
 kb_downscale_name_task = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Написал")],
-        [KeyboardButton(text="🆘 Кризис")],
+        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True
 )
@@ -1080,8 +1111,8 @@ kb_microstep = ReplyKeyboardMarkup(
 
 kb_skeptic = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💪 Давай действие")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🔁 Заменить навык")],
+        [KeyboardButton(text="💪 Сделать следующий шаг")],
+        [KeyboardButton(text="😑 Ты меня не понял")],
     ],
     resize_keyboard=True
 )
@@ -1469,15 +1500,6 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-kb_misunderstood_reasons = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
-        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
-        [KeyboardButton(text="5. Объясню по-другому")],
-    ],
-    resize_keyboard=True
-)
-
 kb_analysis_need_more = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="😵 Перегруз"), KeyboardButton(text="😬 Страх ошибки")],
@@ -1508,9 +1530,11 @@ kb_trainer_switch = ReplyKeyboardMarkup(
 
 kb_misunderstood_reasons = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
-        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
-        [KeyboardButton(text="5. Объясню по-другому")],
+        [KeyboardButton(text="Не та проблема")],
+        [KeyboardButton(text="Слишком общий ответ")],
+        [KeyboardButton(text="Не тот шаг")],
+        [KeyboardButton(text="Мне страшно / тяжело, а не лень")],
+        [KeyboardButton(text="Объясню по-своему")],
     ],
     resize_keyboard=True
 )
@@ -1627,17 +1651,17 @@ SYSTEM_PHRASES = [
 
 kb_micro_habit = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="👍 Попробую"), KeyboardButton(text="🤷 Не моё")],
+        [KeyboardButton(text="💪 Сделать следующий шаг")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True
 )
 
 kb_skip_data = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🔁 Другой навык")],
-        [KeyboardButton(text="🧩 Уменьшить шаг")],
+        [KeyboardButton(text="💪 Сделать следующий шаг")],
         [KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="🌙 На сегодня хватит")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True
 )
@@ -1699,7 +1723,7 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Кризис».',
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Мне небезопасно».',
     'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
 

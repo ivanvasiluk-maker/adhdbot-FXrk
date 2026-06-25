@@ -1200,6 +1200,11 @@ USER_FIELDS = [
     "safety_last_risk",
     "safety_contact_status",
     "safety_resume_context",
+    "current_state",
+    "state_version",
+    "current_action_id",
+    "last_simplification_modality",
+    "success_repeat_count",
     "current_day_id",
     "current_session_id",
     "daily_skill_id",
@@ -1350,6 +1355,11 @@ def default_user(uid: int) -> Dict[str, Any]:
         "safety_last_risk": "unknown",
         "safety_contact_status": "not_asked",
         "safety_resume_context": None,
+        "current_state": "ONBOARDING",
+        "state_version": 0,
+        "current_action_id": None,
+        "last_simplification_modality": None,
+        "success_repeat_count": 0,
         "current_day_id": None,
         "current_session_id": None,
         "daily_skill_id": None,
@@ -1438,6 +1448,11 @@ async def init_db(db_path: str):
                 safety_last_risk TEXT DEFAULT 'unknown',
                 safety_contact_status TEXT DEFAULT 'not_asked',
                 safety_resume_context TEXT,
+                current_state TEXT DEFAULT 'ONBOARDING',
+                state_version INTEGER DEFAULT 0,
+                current_action_id TEXT,
+                last_simplification_modality TEXT,
+                success_repeat_count INTEGER DEFAULT 0,
                 current_day_id TEXT,
                 current_session_id TEXT,
                 daily_skill_id TEXT,
@@ -1699,6 +1714,11 @@ EXTRA_USER_COLS = {
     "safety_last_risk": "TEXT DEFAULT 'unknown'",
     "safety_contact_status": "TEXT DEFAULT 'not_asked'",
     "safety_resume_context": "TEXT",
+    "current_state": "TEXT DEFAULT 'ONBOARDING'",
+    "state_version": "INTEGER DEFAULT 0",
+    "current_action_id": "TEXT",
+    "last_simplification_modality": "TEXT",
+    "success_repeat_count": "INTEGER DEFAULT 0",
     "current_day_id": "TEXT",
     "current_session_id": "TEXT",
     "daily_skill_id": "TEXT",
@@ -2058,8 +2078,11 @@ ACTION_EVENT_TYPES = {
     "step_reduced",
     "returned_after_slip",
     "day_closed",
+    "stuck_reason_selected",
     "crisis_started",
     "crisis_resolved_or_paused",
+    "wrong_hypothesis",
+    "exploration_day",
 }
 
 
@@ -2125,6 +2148,12 @@ async def get_action_metrics(user_id: int, db_path: str, *, day_id: str = "") ->
 
 
 PATTERN_LABELS = {
+    "fearofevaluation": "Страх оценки",
+    "fear_of_evaluation": "Страх оценки",
+    "shameselfattack": "Жёсткая самокритика",
+    "shame_self_attack": "Жёсткая самокритика",
+    "attention_autopilot": "Уход в быстрые стимулы",
+    "task_avoidance": "Избегание трудной задачи",
     "perfectionism_start_block": "идеальный образ результата делает вход слишком дорогим",
     "entry_too_large": "первый шаг ощущается слишком большим",
     "micro_entry_block": "даже подготовка к старту воспринимается как задача",
@@ -2142,6 +2171,8 @@ REASON_LABELS = {
 }
 
 SKILL_LABELS = {
+    "openwithouttimer": "Открыть без таймера",
+    "open_without_timer": "Открыть без таймера",
     "open_only": "открыть задачу без требования работать",
     "ninety_sec_start": "90 секунд входа",
     "bad_first_step": "плохой первый шаг",
@@ -2164,7 +2195,18 @@ SKILL_LABELS = {
 def label(mapping: dict, value: Optional[str], fallback: str) -> str:
     if not value:
         return fallback
-    return mapping.get(value, value)
+    raw = str(value)
+    technical_labels = {
+        "openwithouttimer": "Открыть без таймера",
+        "open_without_timer": "Открыть без таймера",
+        "fearofevaluation": "Страх оценки",
+        "fear_of_evaluation": "Страх оценки",
+        "shameselfattack": "Жёсткая самокритика",
+        "shame_self_attack": "Жёсткая самокритика",
+        "attention_autopilot": "Уход в быстрые стимулы",
+        "task_avoidance": "Избегание трудной задачи",
+    }
+    return mapping.get(raw, technical_labels.get(raw, raw))
 
 
 async def get_user_profile(user_id: int, db_path: str = "bot.db") -> dict:
@@ -2187,83 +2229,95 @@ async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db"
 
 
 def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
+    """Render the user map as evidence levels, not as diagnostic facts.
+
+    The map intentionally separates what the user reported, what we are only
+    hypothesizing, what has actually been tested, and what still needs testing.
+    """
     profile = profile or {}
-    dev_map = normalize_development_map(profile.get("development_map"))
+
+    def _clean(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return label(SKILL_LABELS, label(PATTERN_LABELS, text, text), text)
+
+    def _unique(items: Any, *, limit: int = 4) -> List[str]:
+        values: List[str] = []
+        for raw in _as_list(items):
+            item = _clean(raw)
+            if item and item not in values:
+                values.append(item)
+            if len(values) >= limit:
+                break
+        return values
 
     def bullet_lines(items: Any, fallback: str, limit: int = 4) -> str:
-        values = [str(x) for x in _as_list(items) if x not in (None, "")]
+        values = _unique(items, limit=limit)
         if not values:
             values = [fallback]
         return "\n".join(f"— {item}" for item in values[:limit])
 
-    stable_patterns = [label(PATTERN_LABELS, profile.get("main_pattern") or profile.get("avoidance_pattern"), "вход часто становится слишком большим")]
-    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        stable_patterns.append("залипание появляется как способ уйти от напряжения")
-    if int(profile.get("downscale_count") or 0):
-        stable_patterns.append("после уменьшения шага действие получается легче")
-    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
-        stable_patterns.append("самокритика усиливает ступор")
-
-    working_skills = _merge_unique_list(
-        [profile.get("best_variant"), profile.get("best_skill"), profile.get("last_successful_skill")],
-        [* _as_list(profile.get("successful_skills")), * _as_list(profile.get("working_strategies")), * _as_list(dev_map.get("helps"))],
-        limit=8,
-    )
-    if int(profile.get("downscale_count") or 0):
-        working_skills = _merge_unique_list(working_skills, ["уменьшить шаг"], limit=8)
-    working_skills = [label(SKILL_LABELS, str(item), str(item)) for item in working_skills]
-
-    barriers = _merge_unique_list(profile.get("barriers"), dev_map.get("blocks"), limit=8)
+    said: List[str] = []
+    said.extend(_unique(profile.get("confirmed_signals"), limit=3))
+    said.extend(_unique(profile.get("barriers"), limit=3))
     if profile.get("avoidance_trigger"):
-        barriers = _merge_unique_list(barriers, [profile.get("avoidance_trigger")], limit=8)
+        said.append(_clean(profile.get("avoidance_trigger")))
+    if profile.get("shame_signal") or profile.get("main_pattern") in {"shame_self_attack", "fear_of_evaluation"}:
+        said.append("страшно показать недоделанное или ошибиться")
     if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        barriers = _merge_unique_list(barriers, ["быстрый дофамин и доступный телефон"], limit=8)
-    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
-        barriers = _merge_unique_list(barriers, ["страх недоделанности или самокритика"], limit=8)
+        said.append("в напряжении уходишь в телефон / быстрые стимулы")
+    said = _unique(said, limit=5)
 
-    next_tests = []
-    if profile.get("preferred_activation") == "body_doubling":
-        next_tests.append("помогает ли внешний контакт")
-    if int(profile.get("downscale_count") or 0):
-        next_tests.append("какой минимальный шаг держится лучше")
-    if profile.get("trainer_fit_signal") or profile.get("trainer_current_mode"):
-        next_tests.append("какой стиль поддержки работает: мягкий, жёсткий или аналитичный")
-    if not next_tests:
-        next_tests = [
-            "помогает ли внешний контакт",
-            "какой минимальный шаг держится лучше",
-            "какой стиль поддержки работает: мягкий, жёсткий или аналитичный",
-        ]
+    assumptions: List[str] = []
+    main_hypothesis = _clean(profile.get("main_hypothesis"))
+    if main_hypothesis:
+        assumptions.append(main_hypothesis)
+    main_pattern = _clean(profile.get("main_pattern") or profile.get("avoidance_pattern"))
+    if main_pattern and main_pattern not in assumptions:
+        assumptions.append(main_pattern)
+    if not assumptions and (profile.get("shame_signal") or profile.get("avoidance_trigger")):
+        assumptions.append("страх оценки может делать вход в задачу тяжелее")
+    assumptions = _unique(assumptions, limit=3)
 
-    return f"""🧭 Твоя карта
+    verified: List[str] = []
+    done_count = int(profile.get("action_done_count") or profile.get("done_count") or 0)
+    if done_count > 0:
+        verified.append("маленький шаг помог вернуться к задаче")
+    successful_skills = _unique(
+        [profile.get("best_variant"), profile.get("best_skill"), profile.get("last_successful_skill"), *_as_list(profile.get("successful_skills"))],
+        limit=3,
+    )
+    for skill in successful_skills:
+        verified.append(f"{skill} уже давал(а) контакт с задачей")
+    verified = _unique(verified, limit=4)
 
-1. Что уже видно
-{bullet_lines(stable_patterns, "данных пока мало, собираем первые сигналы")}
+    to_check = [
+        "помогает ли плохой черновик",
+        "помогает ли убрать телефон",
+        "помогает ли внешний контакт",
+    ]
+    if int(profile.get("downscale_count") or 0) == 0:
+        to_check.append("какой минимальный шаг не вызывает перегруз")
 
-2. Что помогает
-{bullet_lines(working_skills, "пока проверяем первые навыки")}
-
-3. Что пока мешает
-{bullet_lines(barriers, "пока не видно устойчивого барьера")}
-
-4. Что проверяем дальше
-{bullet_lines(next_tests, "какой вход в задачу держится легче")}
-
-Карта не окончательная.
-Она становится точнее после каждого подхода."""
+    return (
+        "🧭 Твоя рабочая карта\n\n"
+        "Ты сказал:\n"
+        f"{bullet_lines(said, 'пока мало прямых слов пользователя — собираем данные аккуратно', limit=5)}\n\n"
+        "Пока предполагаем:\n"
+        f"{bullet_lines(assumptions, 'вход в задачу становится тяжелее при напряжении', limit=3)}\n\n"
+        "Уже проверили:\n"
+        f"{bullet_lines(verified, 'пока нет проверенного паттерна — нужны 1–2 маленьких подхода', limit=4)}\n\n"
+        "Надо проверить:\n"
+        f"{bullet_lines(to_check, 'какой вход в задачу держится легче', limit=4)}\n\n"
+        "Это не диагноз и не итоговая правда.\n"
+        "Карта меняется только после новых проверок."
+    )
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
-    """Применить геймификацию"""
-    u["points"] = int(u.get("points") or 0) + int(delta_points)
-    u["level"] = max(1, int(u.get("points") or 0) // 10 + 1)
-
-    now = time.time()
-    last = float(u.get("last_active") or 0.0)
-    if now - last > 18 * 3600:
-        u["streak"] = 1
-    else:
-        u["streak"] = int(u.get("streak") or 0) + 1
-    u["last_active"] = now
+    """Launch-safe no-op: false points/levels/streaks are worse than no gamification."""
+    u["last_active"] = time.time()
+    u["gamify_reason"] = reason
 
 def is_paid(u: dict) -> bool:
     """Проверить, есть ли полный доступ: paid, testmode или активная дата paid_until."""
