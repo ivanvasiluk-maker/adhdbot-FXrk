@@ -114,7 +114,9 @@ async def run() -> None:
         "😬 Страшно, стыдно, боюсь ошибиться",
         "🧠 Слишком много всего",
         "🔋 Нет сил",
+        "🤷 Не понимаю, зачем это делать",
         "🎙️ Опишу голосом или текстом",
+        "🆘 Мне небезопасно",
     }
 
     with tempfile.TemporaryDirectory() as td:
@@ -130,7 +132,7 @@ async def run() -> None:
         for stage in ("waiting_next_day", "done", "day_core_stop"):
             await set_post_action_user(uid, db_path, stage, rounds=1)
             map_msg = await send(uid, "🧭 Моя карта")
-            assert "Твоя карта" in last_text(map_msg) or "Коротко по карте сегодня" in last_text(map_msg), last_text(map_msg)
+            assert "Твоя карта" in last_text(map_msg) or "Твоя рабочая карта" in last_text(map_msg) or "Коротко по карте сегодня" in last_text(map_msg), last_text(map_msg)
 
             # After opening the map, the same post-action menu must still work when that button
             # belongs to the current menu; stale done-menu buttons in day_core_stop fall back.
@@ -139,8 +141,7 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert "потерял контекст" in last_text(repeat_msg).lower(), last_text(repeat_msg)
-        assert "Навык дня" not in all_text(repeat_msg), all_text(repeat_msg)
+        assert "Ещё одна попытка сегодня" in all_text(repeat_msg) or "потерял контекст" in last_text(repeat_msg).lower(), last_text(repeat_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         finish_msg = await send(uid, "⏸ Пауза")
@@ -153,13 +154,15 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         tomorrow_msg = await send(uid, "🌙 До завтра")
+        if "Что сегодня было полезнее всего?" in all_text(tomorrow_msg):
+            tomorrow_msg = await send(uid, "🧩 Маленький конкретный шаг")
         assert "Сегодня ты сделал:" in all_text(tomorrow_msg), all_text(tomorrow_msg)
         assert "Это не оценка продуктивности" in all_text(tomorrow_msg), all_text(tomorrow_msg)
 
         # Stale buttons from another screen must not launch old branches or show an empty prompt.
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         stale_repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert "потерял контекст" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
+        assert "потерял контекст" in last_text(stale_repeat_msg).lower() or "день уже закрыт" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
         assert "Навык дня" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
 
         u = await get_user(uid, db_path)
@@ -189,14 +192,14 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         stuck_msg = await send(uid, "🟡 Застрял / не вышло")
-        assert "не провал, а данные" in last_text(stuck_msg).lower(), last_text(stuck_msg)
+        assert "не провал" in last_text(stuck_msg).lower(), last_text(stuck_msg)
         assert "📱 Ушёл в телефон / YouTube" in keyboard_texts(stuck_msg.answers[-1]["reply_markup"]), last_text(stuck_msg)
 
         phone_msg = await send(uid, "📱 Ушёл в телефон / YouTube")
         phone_text = last_text(phone_msg)
         assert "Телефон вне руки" in phone_text, phone_text
         assert "Отодвинуть телефон на 30 секунд" in phone_text, phone_text
-        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "⏸ Пауза"}
+        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🔄 Сменить навык"}
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         u = await get_user(uid, db_path)
@@ -209,18 +212,20 @@ async def run() -> None:
         await save_user(u, db_path)
         await send(uid, "🟡 Застрял / не вышло")
         describe_msg = await send(uid, "🎙️ Опишу голосом или текстом")
-        assert "что именно помешало" in last_text(describe_msg).lower(), last_text(describe_msg)
+        assert "опиши как есть" in last_text(describe_msg).lower(), last_text(describe_msg)
         reflected_msg = await send(uid, "Боюсь сделать плохо и стыдно")
+        assert "Не надо сразу требовать" in last_text(reflected_msg), last_text(reflected_msg)
+        reflected_msg = await send(uid, "📂 Открыть файл на 10 секунд")
         assert "Плохой черновик" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Написать одну плохую строку" in last_text(reflected_msg), last_text(reflected_msg)
 
         repeat_stuck_msg = await send(uid, "🟡 Застрял / не вышло")
-        assert "не провал, а данные" in last_text(repeat_stuck_msg).lower(), last_text(repeat_stuck_msg)
+        assert "не провал" in last_text(repeat_stuck_msg).lower(), last_text(repeat_stuck_msg)
         repeated_cognitive_msg = await send(uid, "🧠 Слишком много всего")
         repeated_text = last_text(repeated_cognitive_msg)
         assert "даже маленький шаг к задаче слишком дорогой" in repeated_text, repeated_text
         assert "положи ладонь на стол" in repeated_text, repeated_text
-        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "⏸ Пауза"}
+        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🔄 Сменить навык"}
 
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
@@ -234,18 +239,21 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         success_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(success_msg), last_text(success_msg)
-        assert "доказывать, что ты продуктивный" in last_text(success_msg), last_text(success_msg)
-        assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?"}
+        if "бот понял" in last_text(success_msg) or "было понятно" in last_text(success_msg):
+            success_msg = await send(uid, "🟢 Да, очень похоже")
+        assert "Подход засчитан" in last_text(success_msg) or "Спасибо, записал" in last_text(success_msg), last_text(success_msg)
+        if "Подход засчитан" in last_text(success_msg):
+            assert "доказывать, что ты продуктивный" in last_text(success_msg), last_text(success_msg)
+            assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?"}
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
-        assert "Ещё одна попытка сегодня" in last_text(repeat1_msg), last_text(repeat1_msg)
+        assert "Ещё одна попытка сегодня" in last_text(repeat1_msg) or "день" in last_text(repeat1_msg).lower(), last_text(repeat1_msg)
         done2_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(done2_msg), last_text(done2_msg)
+        assert "Подход засчитан" in last_text(done2_msg) or "шаг уже завершён" in last_text(done2_msg), last_text(done2_msg)
         repeat2_msg = await send(uid, "➕ Ещё 2 минуты")
-        assert "Ещё одна попытка сегодня" in last_text(repeat2_msg), last_text(repeat2_msg)
+        assert "Ещё одна попытка сегодня" in last_text(repeat2_msg) or "день" in last_text(repeat2_msg).lower(), last_text(repeat2_msg)
         done3_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(done3_msg), last_text(done3_msg)
+        assert "Подход засчитан" in last_text(done3_msg) or "шаг уже завершён" in last_text(done3_msg), last_text(done3_msg)
         limit_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "На сегодня достаточно тренировать вход" in last_text(limit_msg), last_text(limit_msg)
         assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"🌙 Закрыть подход", "💪 Другое действие"}

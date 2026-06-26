@@ -264,7 +264,7 @@ async def main() -> None:
     new_day_text = bot.build_new_day_intro({"user_id": 1}, {"skill_id": "phone_away_3_min", "name": "Телефон вне руки на 3 минуты"}, {})
     assert "🌱 Новый день" in new_day_text
     assert "🧩 Навык дня" in new_day_text
-    assert bot.action_keyboard() is bot.kb_new_day_skill
+    assert bot.action_keyboard() is bot.kb_active_skill
     assert bot.should_route_action_request("💪 Давай действие", "💪 давай действие", {"stage": "training", "has_started_training": 1}) is True
     assert bot.should_route_action_request("💪 Дать сегодняшний навык", "💪 дать сегодняшний навык", {}) is True
     assert bot.should_route_action_request("🔁 Ещё круг", "🔁 ещё круг", {}) is True
