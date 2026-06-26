@@ -51,10 +51,12 @@ from db import (
     USER_FIELDS, default_user, init_db, migrate_db, get_user, save_user, 
     log_event, gamify_apply, is_paid, EXTRA_USER_COLS,
     get_user_profile, update_user_profile, render_short_user_map, label, SKILL_LABELS,
+    user_model_event, user_model_events_from_signal,
     record_development_avatar_event, development_map_event_patch,
     render_development_mirror_reports,
     ensure_user_day, close_user_day, create_skill_attempt, attempt_count_for_day,
     record_action_event, get_action_metrics, save_current_task, update_current_task_step,
+    record_user_feedback, user_feedback_count, recent_user_feedback,
 )
 from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
@@ -294,6 +296,143 @@ kb_day_pause_confirm = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_feedback_instruction_clarity = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🟢 Да, очень понятно")],
+        [KeyboardButton(text="🟡 В целом понятно")],
+        [KeyboardButton(text="🔴 Не понял(а), что от меня хотят")],
+        [KeyboardButton(text="🎙️ Напишу или скажу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_validation = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🟢 Да, очень похоже")],
+        [KeyboardButton(text="🟡 Частично понял")],
+        [KeyboardButton(text="🔴 Нет, мимо")],
+        [KeyboardButton(text="🎙️ Хочу объяснить, что было не так")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_validation_after_missed = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔄 Сменить навык"), KeyboardButton(text="💪 Вернуться к шагу")],
+        [KeyboardButton(text="🌙 Закрыть подход")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_day_value = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧩 Маленький конкретный шаг")],
+        [KeyboardButton(text="🧠 Разбор, почему я застрял")],
+        [KeyboardButton(text="🤍 Поддержка без стыда")],
+        [KeyboardButton(text="🔄 Возможность сменить навык")],
+        [KeyboardButton(text="😐 Пока ничего")],
+        [KeyboardButton(text="🎙️ Напишу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_day_none_reason = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🤷 Не понял, как пользоваться")],
+        [KeyboardButton(text="🧊 Не почувствовал пользы")],
+        [KeyboardButton(text="😬 Было слишком много текста")],
+        [KeyboardButton(text="🐌 Было скучно / медленно")],
+        [KeyboardButton(text="🧠 Совет не подошёл")],
+        [KeyboardButton(text="🎙️ Опишу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_product_score = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text=str(i)) for i in range(0, 6)],
+        [KeyboardButton(text=str(i)) for i in range(6, 11)],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_product_low = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🤷 Не понимаю, как бот работает")],
+        [KeyboardButton(text="🧠 Не чувствую персонализации")],
+        [KeyboardButton(text="🐌 Слишком много текста")],
+        [KeyboardButton(text="😐 Пока не помогает начать")],
+        [KeyboardButton(text="💳 Не понимаю, за что платить")],
+        [KeyboardButton(text="🎙️ Опишу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_product_high = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧩 Маленькие шаги")],
+        [KeyboardButton(text="🧠 Разбор застреваний")],
+        [KeyboardButton(text="🤍 Поддержку без стыда")],
+        [KeyboardButton(text="🗺 Личную карту")],
+        [KeyboardButton(text="🔄 Смену навыков")],
+        [KeyboardButton(text="🎙️ Напишу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_feedback_offer = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧠 Не понимаю разницу режимов")],
+        [KeyboardButton(text="💳 Дорого")],
+        [KeyboardButton(text="🕒 Хочу сначала попробовать дольше")],
+        [KeyboardButton(text="🤷 Пока не вижу пользы")],
+        [KeyboardButton(text="📦 Не хватает конкретной функции")],
+        [KeyboardButton(text="🎙️ Напишу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_active_skill = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="🟡 Застрял / не вышло")],
+        [KeyboardButton(text="➕ Ещё 2 минуты"), KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_change_reason = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😬 Слишком тревожно / страшно")],
+        [KeyboardButton(text="🔋 Нет сил")],
+        [KeyboardButton(text="📱 Меня уносит в телефон / другое")],
+        [KeyboardButton(text="🧠 Слишком много всего")],
+        [KeyboardButton(text="🤷 Не понимаю, зачем это делать")],
+        [KeyboardButton(text="🎙️ Опишу ситуацию сам(а)")],
+        [KeyboardButton(text="↩️ Оставить текущий навык")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_change_meaning = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="это важно для денег / работы")],
+        [KeyboardButton(text="это важно для человека")],
+        [KeyboardButton(text="это освобождает меня позже")],
+        [KeyboardButton(text="я делаю это из страха, а не по своему выбору")],
+        [KeyboardButton(text="пока не понимаю")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_map_with_trainer = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🎭 Сменить тренера")],
+        [KeyboardButton(text="💪 Давай действие"), KeyboardButton(text="🌙 Закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
 
 def is_free_after_day3(u: Dict[str, Any]) -> bool:
     return int(u.get("free_mode") or 0) == 1 and calendar_program_day(u) >= 3 and not is_paid(u)
@@ -361,7 +500,9 @@ async def send_user_map(m: Message, u: Dict[str, Any], source: str):
         markup = kb_short_map_repeat
     else:
         txt = render_short_user_map(profile, u.get("name"))
-        markup = kb_training_main
+        trainer = TRAINERS.get(u.get("trainer_key") or "marsha", TRAINERS["marsha"])
+        txt += f"\n\nТекущий тренер: {trainer.get('emoji', '')} {trainer.get('display_name') or trainer.get('name')}"
+        markup = kb_map_with_trainer
     prev_date = u.get("profile_map_shown_date")
     u["profile_map_shown_date"] = today
     u["profile_map_shown_count"] = (int(u.get("profile_map_shown_count") or 0) + 1) if prev_date == today else 1
@@ -653,6 +794,22 @@ async def complete_safety_day(m: Message, u: Dict[str, Any]):
     await bot_record_action_event(u, "crisis_resolved_or_paused", metadata={"source": "safety_day_closed"})
     await log_event(u["user_id"], "safety", "safety_day_closed", {}, DB_PATH, SHEETS_WEBHOOK_URL)
     await answer_with_keyboard(m, u, "Ок. На сегодня достаточно. Никаких новых навыков сейчас.", kb_day_core_stop, "waiting_next_day")
+
+
+async def handle_safety_callback(c: CallbackQuery, u: Dict[str, Any], data: str) -> bool:
+    """Prevent stale inline callbacks from bypassing an active safety block."""
+    mode = safety_mode(u)
+    if mode == "none":
+        return False
+    await log_event(u["user_id"], "safety", "safety_blocked_callback", {"data": (data or "")[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if mode == "urgent":
+        await show_safety_urgent(c.message, u, "blocked_callback")
+    elif mode == "support":
+        await c.message.answer("Сейчас ещё режим поддержки, не продуктивности.", reply_markup=kb_safety_aftercare)
+    else:
+        await c.message.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
+    await c.answer()
+    return True
 
 
 async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
@@ -1088,7 +1245,9 @@ async def record_profile_signal(user_id: int, stage: str, patch: Dict[str, Any],
         return
     current_profile = await get_user_profile(user_id, DB_PATH)
     map_patch = development_map_event_patch(current_profile, safe_patch, source)
-    await update_user_profile(user_id, {**safe_patch, **map_patch}, DB_PATH, source=source)
+    model_events = user_model_events_from_signal(user_id, safe_patch, source)
+    model_patch = {"user_model_events": model_events} if model_events else {}
+    await update_user_profile(user_id, {**safe_patch, **map_patch, **model_patch}, DB_PATH, source=source)
     event_meta = {"source": source, **safe_patch}
     await log_event(user_id, stage, "profile_signal_detected", event_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(user_id, stage, "profile_map_updated", event_meta, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -1351,12 +1510,11 @@ def trainer_key_from_text(text: str) -> Optional[str]:
 
 
 def trainer_mode_preview_text(current_key: str, switch_count: int, comp: Optional[Dict[str, Any]] = None) -> str:
-    left = max(0, TRAINER_SWITCH_LIMIT - switch_count)
     current = TRAINERS.get(current_key, TRAINERS["marsha"])
     mode_lines = (
-        "🐈‍⬛ Скинни — коротко, прямо, через действие.\n"
-        "🐈 Марша — мягко, снижает стыд и давление.\n"
-        "🐈‍🦁 Бек — объясняет механизм и эксперимент."
+        "🤍 Марша — мягко\n"
+        "🐈‍⬛ Скинни — чётко\n"
+        "🧠 Бек — с объяснениями"
     )
     snippets = ""
     if isinstance(comp, dict) and comp.get("analysis_result"):
@@ -1368,12 +1526,12 @@ def trainer_mode_preview_text(current_key: str, switch_count: int, comp: Optiona
             parts.append(f"{trainer['emoji']} {trainer['name']}: {sample}")
         snippets = "\n\nКак будет звучать этот же разбор:\n" + "\n\n".join(parts)
     return (
-        "Можно посмотреть все режимы и выбрать, каким голосом продолжать.\n\n"
-        f"Сейчас: {current['emoji']} {current['name']}.\n"
-        f"Смен осталось: {left}/{TRAINER_SWITCH_LIMIT}.\n\n"
+        f"Твой текущий тренер: {current['emoji']} {current['name']}.\n"
+        "Можно сменить стиль поддержки в любой момент.\n"
+        "Задача, карта и прогресс сохранятся.\n\n"
         f"{mode_lines}"
         f"{snippets}\n\n"
-        "Выбери режим. Просмотр не считается заменой; считаются только реальные смены. Смена попадёт в карту — это сигнал, какой формат поддержки тебе подходит."
+        "Выбери режим. Смена попадёт в карту как факт выбора стиля, не как доказательство, что этот тренер помогает."
     )
 
 
@@ -1433,14 +1591,11 @@ async def open_trainer_switch(m: Message, u: Dict[str, Any], source: str):
 
 
 def trainer_mode_changed_text(new_key: str, switch_count: int) -> str:
-    trainer = TRAINERS.get(new_key, TRAINERS["marsha"])
-    left = max(0, TRAINER_SWITCH_LIMIT - switch_count)
-    return (
-        f"Ок. Теперь режим: {trainer['emoji']} {trainer['name']}.\n\n"
-        f"{trainer['short']}\n\n"
-        f"Смен осталось: {left}/{TRAINER_SWITCH_LIMIT}.\n"
-        "Записал в карту: какой формат поддержки тебе подходит."
-    )
+    if new_key == "marsha":
+        return "🤍 Теперь с тобой Марша.\nБудем идти мягче: без давления, с опорой на возвращение после срывов."
+    if new_key == "skinny":
+        return "🐈‍⬛ Теперь с тобой Скинни.\nБудем идти короче и конкретнее: один шаг, одна проверка, без лишних переговоров."
+    return "🧠 Теперь с тобой Бек.\nБудем смотреть на механизм: что запускает избегание и какой шаг его обходит."
 
 
 async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stage: str, switched: bool = False):
@@ -1481,6 +1636,9 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
     if return_stage == "done":
         await answer_with_keyboard(m, u, "Ок. Режим обновлён. Что дальше?", kb_done, "done")
         return
+    if u.get("current_state") in ACTIVE_ACTION_STATES and return_stage in ACTION_RELATED_STAGES | {"training", "waiting_next_day"}:
+        await answer_with_keyboard(m, u, "Ок. Тренер обновлён. Текущий подход на месте — можно отметить результат или сменить шаг.", action_keyboard(), "skill_card")
+        return
     await answer_with_keyboard(m, u, "Ок. Режим обновлён. Возвращаемся к дню.", kb_training_main, "training_main")
 
 
@@ -1488,7 +1646,7 @@ async def handle_trainer_switch_choice(m: Message, u: Dict[str, Any], text: str)
     profile = await get_user_profile(u["user_id"], DB_PATH)
     return_stage = trainer_switch_return_stage(u)
     low = (text or "").lower().strip()
-    if text == "⬅️ Назад" or low == "назад":
+    if text in {"⬅️ Назад", "↩️ Оставить текущего тренера"} or low in {"назад", "оставить текущего тренера"}:
         await log_event(u["user_id"], "trainer", "trainer_switch_cancelled", {"return_stage": return_stage}, DB_PATH, SHEETS_WEBHOOK_URL)
         await return_after_trainer_switch(m, u, return_stage)
         return
@@ -1498,32 +1656,15 @@ async def handle_trainer_switch_choice(m: Message, u: Dict[str, Any], text: str)
         return
     old_key = u.get("trainer_key") or "marsha"
     if new_key == old_key:
-        await m.answer("Этот режим уже активен. Можно выбрать другой или нажать Назад.")
+        await m.answer("Этот тренер уже активен. Можно выбрать другого или нажать «↩️ Оставить текущего тренера».")
         await answer_with_keyboard(m, u, trainer_mode_preview_text(old_key, trainer_switch_count(profile)), kb_trainer_switch, "trainer_switch")
         return
     count = trainer_switch_count(profile)
-    if count >= TRAINER_SWITCH_LIMIT:
-        await log_event(u["user_id"], "trainer", "trainer_switch_limit_reached", {"requested": new_key, "count": count}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(
-            m,
-            u,
-            "Лимит смен тренера на тест — 2.\n\nПосмотреть режимы можно, но дальше голос не меняю, чтобы не размазать данные для финальной карты.",
-            kb_trainer_switch,
-            "trainer_switch",
-        )
-        return
     history = _profile_list(profile.get("trainer_switch_history"))
     history.append(f"{old_key}->{new_key}@day{u.get('day') or 1}:{return_stage}")
     count += 1
     u["trainer_key"] = new_key
     await save_user(u, DB_PATH)
-    await update_user_profile(u["user_id"], {
-        "trainer_switch_count": count,
-        "trainer_switch_history": history[-TRAINER_SWITCH_LIMIT:],
-        "trainer_previous_mode": old_key,
-        "trainer_current_mode": new_key,
-        "trainer_fit_signal": f"selected_{new_key}",
-    }, DB_PATH)
     await log_event(
         u["user_id"],
         "trainer",
@@ -1534,6 +1675,13 @@ async def handle_trainer_switch_choice(m: Message, u: Dict[str, Any], text: str)
     )
     await m.answer(trainer_mode_changed_text(new_key, count))
     await return_after_trainer_switch(m, u, return_stage, switched=True)
+    await update_user_profile(u["user_id"], {
+        "trainer_switch_count": count,
+        "trainer_switch_history": history[-TRAINER_SWITCH_LIMIT:],
+        "trainer_previous_mode": old_key,
+        "trainer_current_mode": new_key,
+        "trainer_fit_signal": f"selected_{new_key}",
+    }, DB_PATH)
 
 
 def trainer_template(trainer_key: str, template_key: str) -> str:
@@ -1601,14 +1749,14 @@ def _metrics_from_profile(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[st
         return raw
     return {
         "today": {
-            "micro_approaches": int(profile.get("action_done_count_today") or u.get("day_core_round_count") or 0),
-            "slips": int(profile.get("slip_count_today") or profile.get("failed_reason_count_today") or 0),
+            "micro_approaches": int(profile.get("action_done_count_today") or 0),
+            "slips": int(profile.get("slip_count_today") or 0),
             "returns_after_slip": int(profile.get("return_count_today") or 0),
             "step_reductions": int(profile.get("downscale_count_today") or 0),
         },
         "period": {
             "micro_approaches": int(profile.get("action_done_count") or u.get("done_count") or 0),
-            "slips": int(profile.get("slip_count") or profile.get("failed_reason_count") or 0),
+            "slips": int(profile.get("slip_count") or 0),
             "returns_after_slip": int(profile.get("return_count") or u.get("return_count") or 0),
             "step_reductions": int(profile.get("downscale_count") or 0),
         },
@@ -2134,9 +2282,8 @@ async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
     )
     await save_user(u, DB_PATH)
     if pattern == "high_risk":
-        u["stage"] = CRISIS_WAITING_INPUT
-        await save_user(u, DB_PATH)
         await m.answer(crisis_tool_text(crisis_stack))
+        await start_safety_interceptor(m, u, reason_text, "crisis_tool_high_risk", explicit=True)
         return
     else:
         await m.answer(crisis_tool_text(crisis_stack))
@@ -2258,11 +2405,12 @@ def _reply_keyboard_texts(markup) -> set[str]:
 
 def known_reply_button_texts() -> set[str]:
     keyboard_names = (
-        "kb_training_main", "kb_more_actions", "kb_skill_card", "kb_new_day_skill", "kb_done",
+        "kb_training_main", "kb_more_actions", "kb_skill_card", "kb_new_day_skill", "kb_done", "kb_active_skill",
         "kb_day_core_stop", "kb_failed", "kb_action_clarify", "kb_downscale",
         "kb_downscale_name_task", "kb_microstep", "kb_skeptic", "kb_crisis_mode",
         "kb_crisis_stabilize", "kb_crisis_tool_select", "kb_crisis_effect", "kb_short_mode_main",
-        "kb_day_menu", "kb_day_pause_confirm", "kb_trainers", "kb_input_mode", "kb_yes_no",
+        "kb_day_menu", "kb_day_pause_confirm", "kb_skill_change_reason", "kb_skill_change_meaning", "kb_map_with_trainer", "kb_trainers", "kb_input_mode", "kb_yes_no",
+        "kb_stuck_validation_meaning", "kb_stuck_validation_self_attack", "kb_stuck_validation_file_fear", "kb_stuck_validation_safety",
         "kb_working_map", "kb_analysis_confirm", "kb_social_support", "kb_notifications_consent",
     )
     texts = set()
@@ -2276,8 +2424,8 @@ def known_reply_button_texts() -> set[str]:
         "🔁 Другой навык", "🧩 Уменьшить шаг", "🔁 Ещё круг", "📌 Что изменилось?",
         "📱 Ушёл в телефон / YouTube", "😬 Страшно, стыдно, боюсь ошибиться",
         "🧠 Слишком много всего", "🔋 Нет сил", "🎙️ Опишу голосом или текстом",
-        "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?", "💪 Другое действие",
-        "💪 Сделать следующий шаг", "🆘 Мне небезопасно", "Ещё", "Еще",
+        "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🔄 Сменить навык", "🗣️ Что помогло?", "💪 Другое действие",
+        "💪 Сделать следующий шаг", "🆘 Мне небезопасно", "🎭 Сменить тренера", "🔄 Сменить тренера", "Ещё", "Еще",
     })
     return texts
 
@@ -2310,11 +2458,17 @@ def button_fits_current_state(text: str, u: Dict[str, Any]) -> bool:
         "crisis_action": _reply_keyboard_texts(globals().get("kb_crisis_action")),
         "success_menu": _reply_keyboard_texts(globals().get("kb_success_next")) | _reply_keyboard_texts(globals().get("kb_success_limit")),
         "success_help_note": _reply_keyboard_texts(globals().get("kb_success_next")) | _reply_keyboard_texts(globals().get("kb_success_limit")),
+        "failed_options": _reply_keyboard_texts(globals().get("kb_failed")) | {"📱 Залип", "😣 Слишком сложно", "😵 Нет сил"},
+        "stuck_validation_choice": _reply_keyboard_texts(globals().get("kb_stuck_validation_meaning"))
+        | _reply_keyboard_texts(globals().get("kb_stuck_validation_self_attack"))
+        | _reply_keyboard_texts(globals().get("kb_stuck_validation_file_fear"))
+        | _reply_keyboard_texts(globals().get("kb_stuck_validation_safety")),
     }
     if stage in ACTION_RELATED_STAGES or stage in {"waiting_next_day", "training", "skill_card"}:
         allowed = set()
-        for name in ("kb_training_main", "kb_more_actions", "kb_skill_card", "kb_new_day_skill", "kb_failed", "kb_downscale", "kb_downscale_name_task", "kb_microstep", "kb_skeptic", "kb_done"):
+        for name in ("kb_training_main", "kb_more_actions", "kb_skill_card", "kb_new_day_skill", "kb_active_skill", "kb_failed", "kb_downscale", "kb_downscale_name_task", "kb_microstep", "kb_skeptic", "kb_done"):
             allowed.update(_reply_keyboard_texts(globals().get(name)))
+        allowed.update({"📱 Залип", "😣 Слишком сложно", "😵 Нет сил"})
         return text in allowed
     allowed = by_stage.get(stage)
     return allowed is None or text in allowed
@@ -2338,7 +2492,7 @@ STATE_SAFETY_LOCK = "SAFETY_LOCK"
 STATE_OFFER_SCREEN = "OFFER_SCREEN"
 
 ACTIVE_ACTION_STATES = {STATE_ACTION_ACTIVE, STATE_AWAITING_RESULT, STATE_AWAITING_STUCK_REASON}
-ACTION_OUTCOME_BUTTONS = {"✅ Сделал", "🟡 Застрял / не вышло", "⏸ Пауза"}
+ACTION_OUTCOME_BUTTONS = {"✅ Сделал", "✅ Сделал(а)", "🟡 Застрял / не вышло", "📱 Залип", "😣 Слишком сложно", "😵 Нет сил", "❌ Не сделал", "⏸ Пауза"}
 STALE_ACTION_CHANGED_TEXT = (
     "Этот шаг уже завершён или изменился.\n\n"
     "Нажми «💪 Дать следующий шаг» —\n"
@@ -2380,7 +2534,11 @@ def is_previous_scenario_finished(u: Dict[str, Any]) -> bool:
 
 
 def should_reject_action_button(text: str, u: Dict[str, Any]) -> bool:
+    if u.get("stage") in {"skill_change_reason", "skill_change_free_text", "skill_change_meaning", "stuck_validation_choice"}:
+        return False
     if text not in ACTION_OUTCOME_BUTTONS:
+        return False
+    if text in {"📱 Залип", "😣 Слишком сложно", "😵 Нет сил"} and u.get("current_state") == STATE_AWAITING_STUCK_REASON:
         return False
     if u.get("current_state") != STATE_AWAITING_RESULT:
         return True
@@ -2417,7 +2575,275 @@ SUCCESS_HELP_PROMPT = (
 )
 
 
+FEEDBACK_SENSITIVE_MARKERS = (
+    "очень устал", "нет сил", "бессмыс", "небезопас", "плачу", "слез", "рыда",
+    "не хочу жить", "хочу умереть", "паника", "отчаяние",
+)
+
+
+def feedback_blocked_now(u: Dict[str, Any], text: str = "") -> bool:
+    if safety_mode(u) != "none":
+        return True
+    low = (text or "").lower()
+    return any(marker in low for marker in FEEDBACK_SENSITIVE_MARKERS)
+
+
+def feedback_context(u: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = {
+        "day_id": u.get("current_day_id") or "",
+        "day_number": int(u.get("day") or 1),
+        "skill_id": current_skill_id(u) or u.get("daily_skill_id") or "",
+        "trainer_key": u.get("trainer_key") or "",
+        "attempts": int(u.get("done_count") or 0),
+        "stage": u.get("stage") or "",
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+
+async def feedback_questions_today(u: Dict[str, Any]) -> int:
+    day_id = u.get("current_day_id") or ""
+    if not day_id:
+        return 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM user_feedback WHERE user_id=? AND day_id=? AND feedback_type IN ('feedback_instruction_clarity','feedback_validation','feedback_day_value','product_value_score','offer_feedback')",
+            (u["user_id"], day_id),
+        )
+        row = await cur.fetchone()
+    return int(row[0] if row else 0)
+
+
+async def can_show_feedback_question(u: Dict[str, Any], feedback_type: str, *, once_per_test: bool = False, max_per_day: int = 3) -> bool:
+    if feedback_blocked_now(u):
+        return False
+    day_id = u.get("current_day_id") or ""
+    if day_id and await feedback_questions_today(u) >= max_per_day:
+        return False
+    if await user_feedback_count(u["user_id"], DB_PATH, feedback_type, day_id="" if once_per_test else day_id) > 0:
+        return False
+    return True
+
+
+async def ask_instruction_clarity_feedback(m: Message, u: Dict[str, Any]) -> bool:
+    if int(u.get("done_count") or 0) != 1:
+        return False
+    if not await can_show_feedback_question(u, "feedback_instruction_clarity"):
+        return False
+    u["stage"] = "feedback_instruction_clarity"
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, "Коротко для теста: было понятно, что делать?", kb_feedback_instruction_clarity, "feedback_instruction_clarity")
+    return True
+
+
+async def ask_validation_feedback(m: Message, u: Dict[str, Any], reason: str, bot_answer: str) -> bool:
+    if not await can_show_feedback_question(u, "feedback_validation", once_per_test=True):
+        return False
+    u["stage"] = "feedback_validation"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "feedback", "feedback_validation_prompted", {"reason": reason, "bot_answer": bot_answer[:240]}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, "Коротко для теста: тебе сейчас показалось, что бот понял твою ситуацию?", kb_feedback_validation, "feedback_validation")
+    return True
+
+
+def set_pending_validation_feedback(u: Dict[str, Any], reason: str, bot_answer: str) -> None:
+    u["pending_feedback_json"] = json.dumps(
+        {"type": "feedback_validation", "reason": reason, "bot_answer": bot_answer[:240]},
+        ensure_ascii=False,
+    )
+
+
+def pop_pending_validation_feedback(u: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        data = json.loads(u.get("pending_feedback_json") or "{}")
+    except Exception:
+        data = {}
+    if data.get("type") == "feedback_validation":
+        u["pending_feedback_json"] = None
+        return data
+    return {}
+
+
+def should_ask_day_value_feedback(u: Dict[str, Any]) -> bool:
+    day = int(u.get("day") or 1)
+    return day == 1 or day in {2, 3} or (day > 3 and day % 3 == 0)
+
+
+async def ask_day_value_feedback(m: Message, u: Dict[str, Any]) -> bool:
+    if not should_ask_day_value_feedback(u):
+        return False
+    if not await can_show_feedback_question(u, "feedback_day_value"):
+        return False
+    u["stage"] = "feedback_day_value"
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, "Что сегодня было полезнее всего?", kb_feedback_day_value, "feedback_day_value")
+    return True
+
+
+async def ask_product_value_feedback(m: Message, u: Dict[str, Any], *, before_offer: bool = False) -> bool:
+    day = int(u.get("day") or 1)
+    if day not in {2, 3} and not before_offer:
+        return False
+    if not await can_show_feedback_question(u, "product_value_score", once_per_test=True):
+        return False
+    u["stage"] = "feedback_product_value_score"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], u.get("stage", ""), "keyboard_shown", {"keyboard": "feedback_product_value_score", "button_count": 11}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer(
+        "Представь, что завтра этого бота больше нет.\nНасколько тебе было бы жалко его потерять?\n\n0 — вообще не жалко\n10 — очень жалко, хочу продолжать",
+        reply_markup=kb_feedback_product_score,
+    )
+    return True
+
+
+async def save_feedback_answer(u: Dict[str, Any], feedback_type: str, value: str, *, comment: str = "", metadata: Optional[Dict[str, Any]] = None) -> None:
+    ctx = feedback_context(u, metadata)
+    await record_user_feedback(
+        u["user_id"],
+        DB_PATH,
+        feedback_type,
+        value,
+        comment=comment,
+        day_id=ctx.get("day_id") or "",
+        day_number=int(ctx.get("day_number") or 1),
+        skill_id=ctx.get("skill_id") or "",
+        trainer_key=ctx.get("trainer_key") or "",
+        metadata=ctx,
+    )
+    await log_event(u["user_id"], "feedback", feedback_type, {"value": value, "comment": comment[:240], **ctx}, DB_PATH, SHEETS_WEBHOOK_URL)
+
+
+async def handle_feedback_response(m: Message, u: Dict[str, Any], text: str) -> bool:
+    stage = u.get("stage") or ""
+    low = (text or "").lower().strip()
+    if stage == "feedback_instruction_clarity":
+        values = {
+            "🟢 Да, очень понятно": "clear",
+            "🟡 В целом понятно": "partly_clear",
+            "🔴 Не понял(а), что от меня хотят": "unclear",
+            "🎙️ Напишу или скажу сам(а)": "free_text",
+        }
+        value = values.get(text, "free_text")
+        await save_feedback_answer(u, "feedback_instruction_clarity", value, comment="" if text in values else text)
+        u["stage"] = "success_menu"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.", kb_success_next, "success_menu")
+        return True
+
+    if stage == "feedback_validation":
+        values = {
+            "🟢 Да, очень похоже": "understood",
+            "🟡 Частично понял": "partly_understood",
+            "🔴 Нет, мимо": "missed",
+            "🎙️ Хочу объяснить, что было не так": "free_text",
+        }
+        value = values.get(text, "free_text")
+        if value in {"missed", "free_text"} and text in values:
+            u["stage"] = "feedback_validation_free_text"
+            await save_user(u, DB_PATH)
+            await m.answer("Спасибо. Это важно для теста.\nНапиши или скажи голосом: что бот не понял или что должен был ответить иначе?")
+            return True
+        await save_feedback_answer(u, "feedback_validation", value, comment="" if text in values else text)
+        u["stage"] = "downscale_action"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.", action_keyboard(), "downscale")
+        return True
+
+    if stage == "feedback_validation_free_text":
+        await save_feedback_answer(u, "feedback_validation", "free_text", comment=text)
+        u["stage"] = "downscale_action"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Записал. Сейчас не будем спорить с твоим опытом.\nМожешь вернуться к задаче, сменить навык или закрыть подход.",
+            kb_feedback_validation_after_missed,
+            "feedback_validation_done",
+        )
+        return True
+
+    if stage == "feedback_day_value":
+        values = {
+            "🧩 Маленький конкретный шаг": "small_step",
+            "🧠 Разбор, почему я застрял": "stuck_analysis",
+            "🤍 Поддержка без стыда": "shame_free_support",
+            "🔄 Возможность сменить навык": "skill_change",
+            "😐 Пока ничего": "nothing_yet",
+            "🎙️ Напишу сам(а)": "free_text",
+        }
+        value = values.get(text, "free_text")
+        if value == "nothing_yet":
+            u["stage"] = "feedback_day_none_reason"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Спасибо, это тоже полезный ответ.\nЧто было главным?", kb_feedback_day_none_reason, "feedback_day_none_reason")
+            return True
+        await save_feedback_answer(u, "feedback_day_value", value, comment="" if text in values else text, metadata={"approaches": int(u.get("done_count") or 0)})
+        u["stage"] = "day_core_stop"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.\n\n" + await day_close_metrics_text(u), kb_day_core_stop, "day_core_stop")
+        return True
+
+    if stage == "feedback_day_none_reason":
+        values = {
+            "🤷 Не понял, как пользоваться": "unclear_usage",
+            "🧊 Не почувствовал пользы": "no_value_felt",
+            "😬 Было слишком много текста": "too_much_text",
+            "🐌 Было скучно / медленно": "boring_or_slow",
+            "🧠 Совет не подошёл": "advice_mismatch",
+            "🎙️ Опишу сам(а)": "free_text",
+        }
+        value = values.get(text, "free_text")
+        await save_feedback_answer(u, "feedback_day_value", "nothing_yet", comment=text if value == "free_text" else "", metadata={"reason": value, "approaches": int(u.get("done_count") or 0)})
+        u["stage"] = "day_core_stop"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.\n\n" + await day_close_metrics_text(u), kb_day_core_stop, "day_core_stop")
+        return True
+
+    if stage == "feedback_product_value_score":
+        if not low.isdigit() or not (0 <= int(low) <= 10):
+            await m.answer("Выбери число от 0 до 10.")
+            return True
+        score = int(low)
+        await save_feedback_answer(u, "product_value_score", str(score), metadata={"offer_shown": bool(u.get("last_offer_shown_at"))})
+        u["pending_product_value_score"] = score
+        u["stage"] = "feedback_product_value_reason"
+        await save_user(u, DB_PATH)
+        if score <= 6:
+            await answer_with_keyboard(m, u, "Спасибо. Что сильнее всего мешает почувствовать пользу?", kb_feedback_product_low, "feedback_product_value_reason")
+        else:
+            await answer_with_keyboard(m, u, "Спасибо. Что тебе хотелось бы сохранить в боте?", kb_feedback_product_high, "feedback_product_value_reason")
+        return True
+
+    if stage == "feedback_product_value_reason":
+        score = int(u.get("pending_product_value_score") or 0)
+        await save_feedback_answer(u, "product_value_reason", "low_reason" if score <= 6 else "high_value", comment=text, metadata={"score": score})
+        u["stage"] = "day_core_stop"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.", kb_day_core_stop, "day_core_stop")
+        return True
+
+    if stage == "feedback_offer":
+        await save_feedback_answer(u, "offer_feedback", "reason", comment=text, metadata={"value_score": u.get("pending_product_value_score")})
+        u["stage"] = "waiting_next_day"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.\n\n" + stay_free_text(), kb_short_mode_main, "short_mode_main")
+        return True
+
+    return False
+
+
 async def send_success_menu(m: Message, u: Dict[str, Any], *, source: str = "done"):
+    pending_validation = pop_pending_validation_feedback(u)
+    if pending_validation and await ask_validation_feedback(
+        m,
+        u,
+        str(pending_validation.get("reason") or ""),
+        str(pending_validation.get("bot_answer") or ""),
+    ):
+        return
+    if await ask_instruction_clarity_feedback(m, u):
+        return
     u["stage"] = "success_menu"
     set_current_state(u, STATE_PAUSED, close_action=True)
     await save_user(u, DB_PATH)
@@ -2431,8 +2857,45 @@ async def send_success_limit_menu(m: Message, u: Dict[str, Any]):
     await answer_with_keyboard(m, u, SUCCESS_REPEAT_LIMIT_TEXT, kb_success_limit, "success_limit")
 
 STUCK_REASON_PROMPT = (
-    "Понял. Это не провал, а данные.\n\n"
-    "Что сейчас сильнее мешает?"
+    "Понял. Это не провал, а важные данные.\n"
+    "Что сейчас происходит?"
+)
+
+kb_stuck_validation_meaning = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧭 Не вижу смысла в самой задаче")],
+        [KeyboardButton(text="🔋 Я слишком устал, чтобы видеть смысл")],
+        [KeyboardButton(text="😡 Меня бесит, что я должен это делать")],
+        [KeyboardButton(text="🧠 Задача слишком расплывчатая")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_stuck_validation_self_attack = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🤍 Нужно сначала успокоиться")],
+        [KeyboardButton(text="✍️ Хочу вернуть маленький шаг")],
+        [KeyboardButton(text="🎙️ Хочу сказать ещё")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_stuck_validation_file_fear = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🫁 Сначала снизить тревогу")],
+        [KeyboardButton(text="📂 Открыть файл на 10 секунд")],
+        [KeyboardButton(text="👤 Нужен внешний контакт")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_stuck_validation_safety = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🟢 Я в безопасности, просто очень устал")],
+        [KeyboardButton(text="🟡 Не уверен(а), насколько я в безопасности")],
+        [KeyboardButton(text="🆘 Мне небезопасно")],
+    ],
+    resize_keyboard=True,
 )
 
 STUCK_REASON_CONFIG = {
@@ -2538,6 +3001,176 @@ def stuck_reason_code_from_text(text: str) -> str:
     return "overwhelm"
 
 
+def classify_free_stuck_text(text: str) -> str:
+    low = (text or "").lower()
+    if any(x in low for x in ("небезопас", "суицид", "не хочу жить", "хочу умереть")):
+        return "safety"
+    if ("устал" in low or "нет сил" in low or "ничего не хочу" in low) and any(x in low for x in ("бессмыс", "не вижу смысл", "зачем")):
+        return "safety"
+    if any(x in low for x in ("просрал", "ненавижу себя", "тупой", "тупая", "ничтож")):
+        return "self_attack"
+    if ("страш" in low or "ужас" in low or "стыд" in low) and any(x in low for x in ("файл", "документ", "откры")):
+        return "file_fear"
+    if any(x in low for x in ("нахуя", "нахуй", "зачем", "смысл", "бессмыс", "должен", "должна", "бесит")):
+        return "meaning"
+    if any(x in low for x in ("телефон", "ютуб", "youtube", "скрол", "залип")):
+        return "phone"
+    if any(x in low for x in ("устал", "нет сил", "выжат", "сон")):
+        return "energy"
+    if any(x in low for x in ("страш", "стыд", "боюсь", "оцен")):
+        return "file_fear"
+    return "overwhelm"
+
+
+def reflect_stuck_text(text: str) -> str:
+    clean = " ".join((text or "").split())
+    return clamp_str(clean, 140) if clean else "сейчас сложно продолжать"
+
+
+def stuck_validation_response(kind: str, text: str) -> tuple[str, ReplyKeyboardMarkup]:
+    heard = reflect_stuck_text(text)
+    if kind == "meaning":
+        return (
+            f"Я слышу: {heard}\n"
+            "Похоже, сейчас ты упёрся не в сложность шага, а в вопрос: зачем вообще на это тратить силы.\n"
+            "В таком состоянии бессмысленно просто сильнее себя давить.\n"
+            "Что ближе?",
+            kb_stuck_validation_meaning,
+        )
+    if kind == "self_attack":
+        return (
+            f"Я слышу: {heard}\n"
+            "Похоже, сейчас тебя сильнее блокирует самокритика, чем сама задача.\n"
+            "Когда мозг атакует тебя, вход в дело становится ещё дороже.\n"
+            "Не будем спорить с тобой и не будем заставлять тебя работать прямо сейчас.",
+            kb_stuck_validation_self_attack,
+        )
+    if kind == "file_fear":
+        return (
+            f"Я слышу: {heard}\n"
+            "Похоже, файл сейчас воспринимается не как документ, а как доказательство того, справляешься ты или нет.\n"
+            "Это тяжело. Не надо сразу требовать от себя работы.",
+            kb_stuck_validation_file_fear,
+        )
+    if kind == "safety":
+        return (
+            f"Я слышу: {heard}\n"
+            "Сейчас важнее не продуктивность, а понять, насколько тебе безопасно и есть ли хоть немного ресурса.",
+            kb_stuck_validation_safety,
+        )
+    if kind == "phone":
+        return (
+            f"Я слышу: {heard}\n"
+            "Это может быть не лень, а автопилот быстрых стимулов.\n"
+            "Сейчас не будем решать задачу силой воли. Сначала меняем среду.\n"
+            "Что ближе?",
+            kb_stuck_validation_meaning,
+        )
+    return (
+        f"Я слышу: {heard}\n"
+        "Это может быть не лень, а перегруз: задача выглядит не как один вход, а как ком.\n"
+        "Сейчас не будем делать вид, что это решается давлением.\n"
+        "Что ближе?",
+        kb_stuck_validation_meaning,
+    )
+
+
+async def start_stuck_text_validation(m: Message, u: Dict[str, Any], text: str):
+    kind = classify_free_stuck_text(text)
+    response, keyboard = stuck_validation_response(kind, text)
+    u["stage"] = "stuck_validation_choice"
+    u["pending_feedback_json"] = json.dumps({"type": "stuck_validation", "kind": kind, "text": text[:500]}, ensure_ascii=False)
+    set_current_state(u, STATE_AWAITING_STUCK_REASON)
+    await save_user(u, DB_PATH)
+    await record_profile_signal(
+        u["user_id"],
+        "training",
+        {
+            "last_free_stuck_text": text[:240],
+            "last_free_stuck_hypothesis": kind,
+            "user_model_events": [user_model_event(u["user_id"], "barrier_reported", text[:240], confidence=0.8)],
+        },
+        source="stuck_free_text_validation",
+    )
+    await log_event(u["user_id"], "training", "stuck_free_text_validated", {"kind": kind, "text": text[:240]}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, response, keyboard, f"stuck_validation_{kind}")
+
+
+def pending_stuck_validation(u: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        data = json.loads(u.get("pending_feedback_json") or "{}")
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) and data.get("type") == "stuck_validation" else {}
+
+
+async def handle_stuck_validation_choice(m: Message, u: Dict[str, Any], text: str) -> bool:
+    pending = pending_stuck_validation(u)
+    if not pending:
+        return False
+    kind = str(pending.get("kind") or "overwhelm")
+    original_text = str(pending.get("text") or "")
+    await record_profile_signal(
+        u["user_id"],
+        "training",
+        {
+            "last_free_stuck_choice": text[:120],
+            "last_free_stuck_hypothesis": kind,
+        },
+        source="stuck_validation_choice",
+    )
+    u["pending_feedback_json"] = None
+    await save_user(u, DB_PATH)
+    if text in {"🟡 Не уверен(а), насколько я в безопасности", "🆘 Мне небезопасно"}:
+        await start_safety_interceptor(m, u, original_text or text, "stuck_validation_choice", explicit=True)
+        return True
+    if text == "🟢 Я в безопасности, просто очень устал":
+        await send_stuck_reason_skill(m, u, "energy", user_text=original_text)
+        return True
+    if text in {"🔋 Я слишком устал, чтобы видеть смысл", "🤍 Нужно сначала успокоиться", "🫁 Сначала снизить тревогу"}:
+        await send_stuck_reason_skill(m, u, "energy", user_text=original_text)
+        return True
+    if text in {"🧠 Задача слишком расплывчатая", "✍️ Хочу вернуть маленький шаг"}:
+        await send_stuck_reason_skill(m, u, "overwhelm", user_text=original_text)
+        return True
+    if text == "📂 Открыть файл на 10 секунд":
+        await send_stuck_reason_skill(m, u, "shame", user_text=original_text)
+        return True
+    if text == "👤 Нужен внешний контакт":
+        await apply_skill_change(
+            m,
+            u,
+            reason_code="external_contact",
+            reason_text="нужен внешний контакт перед входом",
+            new_sid="body_doubling_plan",
+            new_name="Внешний контакт перед входом",
+            intro="Похоже, сейчас одному входить в задачу слишком дорого. Используем контакт с человеком как опору, не как контроль.",
+            minimum="Написать одному человеку: «Я попробую открыть задачу на 10 секунд и потом отмечу, начал ли».",
+        )
+        return True
+    if text in {"🧭 Не вижу смысла в самой задаче", "😡 Меня бесит, что я должен это делать"}:
+        await apply_skill_change(
+            m,
+            u,
+            reason_code="meaning",
+            reason_text=text,
+            new_sid="task_naming",
+            new_name="Вернуть смысл шага",
+            intro="Похоже, сейчас проблема не в размере шага, а в контакте со смыслом или протесте против давления.",
+            minimum=meaning_step_text(text, current_task_label(u)),
+            meaning_choice=text,
+        )
+        return True
+    if text == "🎙️ Хочу сказать ещё":
+        u["stage"] = "stuck_reason_text"
+        u["pending_feedback_json"] = json.dumps({"type": "stuck_validation_more", "previous": original_text[:300]}, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await m.answer("Скажи ещё одним сообщением или голосом. Я сначала попробую понять, а не сразу дать совет.")
+        return True
+    await send_stuck_reason_skill(m, u, stuck_reason_code_from_text(original_text or text), user_text=original_text or text)
+    return True
+
+
 def stuck_skill_card_text(u: Dict[str, Any], config: Dict[str, Any], *, user_text: str = "") -> str:
     reflected = f"\n\nЯ услышал: {clamp_str(user_text, 180)}" if user_text else ""
     return (
@@ -2549,6 +3182,14 @@ def stuck_skill_card_text(u: Dict[str, Any], config: Dict[str, Any], *, user_tex
 
 async def send_stuck_reason_skill(m: Message, u: Dict[str, Any], code: str, *, user_text: str = ""):
     config = STUCK_REASON_CONFIG.get(code) or STUCK_REASON_CONFIG["overwhelm"]
+    if code == "phone":
+        u["last_event"] = "stuck"
+        mark_pending_return_after_disruption(u, "stuck_phone")
+        await bot_record_action_event(u, "slip_reported", metadata={"source": "stuck_reason", "user_text": user_text[:160]})
+    elif code == "overwhelm":
+        await bot_record_action_event(u, "too_hard_reported", metadata={"source": "stuck_reason", "user_text": user_text[:160]})
+    elif code == "energy":
+        await bot_record_action_event(u, "no_energy_reported", metadata={"source": "stuck_reason", "user_text": user_text[:160]})
     modality = simplification_modality_for(config)
     profile = await get_user_profile(u["user_id"], DB_PATH)
     if should_switch_simplification_modality(profile, modality, u):
@@ -2572,7 +3213,10 @@ async def send_stuck_reason_skill(m: Message, u: Dict[str, Any], code: str, *, u
     await log_event(u["user_id"], "training", "stuck_reason_selected", {"reason": code, "skill_id": skill_id}, DB_PATH, SHEETS_WEBHOOK_URL)
     mark_action_card_active(u)
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, stuck_skill_card_text(u, config, user_text=user_text), action_keyboard(), "downscale")
+    bot_answer = stuck_skill_card_text(u, config, user_text=user_text)
+    set_pending_validation_feedback(u, code, bot_answer)
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, bot_answer, action_keyboard(), "downscale")
 
 
 def is_misunderstood_button(text: str) -> bool:
@@ -2817,6 +3461,18 @@ async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt
 async def record_return_after_slip_action_event_if_needed(u: Dict[str, Any], source: str):
     if u.get("last_event") == "stuck" or u.get("pending_return_reason") == "stuck_phone":
         await bot_record_action_event(u, "returned_after_slip", metadata={"source": source})
+        return
+    day_id = str(u.get("current_day_id") or "")
+    if not day_id:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT event_type, COUNT(*) FROM action_events WHERE user_id=? AND day_id=? AND event_type IN ('slip_reported', 'returned_after_slip') GROUP BY event_type",
+            (u["user_id"], day_id),
+        )
+        counts = {str(event_type): int(count or 0) for event_type, count in await cur.fetchall()}
+    if counts.get("slip_reported", 0) > counts.get("returned_after_slip", 0):
+        await bot_record_action_event(u, "returned_after_slip", metadata={"source": source, "detected_from_event_log": True})
 
 def replacement_reason_code(reason: str) -> str:
     low = (reason or "").lower()
@@ -2927,6 +3583,152 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
     await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, text, action_keyboard(), "skill_card")
     return True
+
+
+SKILL_CHANGE_REASON_CONFIG = {
+    "anxiety": {
+        "buttons": {"😬 Слишком тревожно / страшно"},
+        "skill_id": "body_before_task",
+        "reason": "слишком тревожно / страшно",
+        "intro": "Похоже, сейчас вход через задачу слишком дорогой.\nСначала уменьшим напряжение, потом вернёмся к действию.",
+        "name": "Сначала тело, потом задача",
+        "minimum": "Один длинный выдох и назвать задачу одним словом.",
+    },
+    "energy": {
+        "buttons": {"🔋 Нет сил"},
+        "skill_id": "body_first",
+        "reason": "нет сил",
+        "intro": "Похоже, сейчас проблема не в дисциплине, а в ресурсе.\nНе будем требовать от тебя полноценного входа.",
+        "name": "Вход через восстановление",
+        "minimum": "Встать, выпить воды или умыться. Потом решить: возвращаемся к задаче или закрываем подход без штрафа.",
+    },
+    "phone": {
+        "buttons": {"📱 Меня уносит в телефон / другое"},
+        "skill_id": "phone_away_3_min",
+        "reason": "уносит в телефон / другое",
+        "intro": "Ок. Сначала работаем не с силой воли, а со средой.",
+        "name": "Телефон вне руки",
+        "minimum": "Положить телефон экраном вниз не в зоне руки. Открыть задачу на 10 секунд.",
+    },
+    "overwhelm": {
+        "buttons": {"🧠 Слишком много всего"},
+        "skill_id": "one_visible_step",
+        "reason": "слишком много всего",
+        "intro": "Похоже, задача сейчас выглядит не как один шаг, а как огромный ком.\nНе будем решать всё. Найдём только физический следующий шаг.",
+        "name": "Один физический шаг",
+        "minimum": "Выбрать одно действие: открыть / написать / найти / отправить / назвать.",
+    },
+}
+
+
+def skill_change_code_from_text(text: str) -> str:
+    for code, config in SKILL_CHANGE_REASON_CONFIG.items():
+        if text in config["buttons"]:
+            return code
+    low = (text or "").lower()
+    if "тревож" in low or "страш" in low:
+        return "anxiety"
+    if "нет сил" in low or "устал" in low or "ресурс" in low:
+        return "energy"
+    if "телефон" in low or "уносит" in low or "залип" in low:
+        return "phone"
+    if "много" in low or "перегруз" in low or "ком" in low:
+        return "overwhelm"
+    return "overwhelm"
+
+
+async def open_skill_change_reason(m: Message, u: Dict[str, Any]):
+    u["stage"] = "skill_change_reason"
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(
+        m,
+        u,
+        "Ок. Не будем повторять навык, который сейчас не ложится.\nЧто в нём не подходит?",
+        kb_skill_change_reason,
+        "skill_change_reason",
+    )
+
+
+def meaning_step_text(choice: str, task_label: str) -> str:
+    low = (choice or "").lower()
+    if "деньг" in low or "работ" in low:
+        return f"Открой место, где лежит «{task_label}», и напиши один рабочий следующий шаг."
+    if "челов" in low:
+        return f"Напиши одно предложение: кому станет легче или понятнее, если «{task_label}» сдвинется на 1%."
+    if "освобож" in low:
+        return f"Напиши одну строку: что освободится позже, если сейчас сделать 10 секунд по «{task_label}»."
+    if "страх" in low:
+        return "Отметь: «я делаю это из страха». Потом выбери самый маленький шаг, который не требует доказывать ценность."
+    return f"Не ищем большой смысл. Только назови «{task_label}» одним словом и остановись."
+
+
+async def apply_skill_change(
+    m: Message,
+    u: Dict[str, Any],
+    *,
+    reason_code: str,
+    reason_text: str,
+    new_sid: str,
+    new_name: str,
+    intro: str,
+    minimum: str,
+    meaning_choice: str = "",
+):
+    previous_sid = current_skill_for_action(u) or current_skill_id(u) or ""
+    if new_sid not in SKILLS_DB:
+        new_sid = "open_only" if "open_only" in SKILLS_DB else next(iter(SKILLS_DB.keys()))
+    plan = get_current_plan(u) or build_28_day_plan(u.get("bucket") or "mixed")
+    day = int(u.get("day") or 1)
+    if plan:
+        idx = max(0, min(len(plan) - 1, day - 1))
+        plan[idx] = new_sid
+        u["plan_json"] = json.dumps(plan, ensure_ascii=False)
+    u["stage"] = "training"
+    u["current_skill"] = new_sid
+    u["current_skill_variant"] = new_sid
+    u["pending_skill_id"] = new_sid
+    u["pending_skill_day"] = day
+    u["daily_skill_id"] = new_sid
+    u["daily_skill_name"] = new_name
+    u["daily_skill_status"] = "active"
+    replace_day_core_skill(u, new_sid)
+    await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=new_sid, skill_name=new_name)
+    await bot_record_action_event(
+        u,
+        "skill_changed",
+        skill_id=new_sid,
+        metadata={"previous_skill_id": previous_sid, "reason_code": reason_code, "reason": reason_text, "new_skill_name": new_name, "meaning_choice": meaning_choice},
+    )
+    model_events = [
+        user_model_event(u["user_id"], "intervention_not_helpful", f"Пользователь сменил навык: {reason_text}", source_skill_id=previous_sid, confidence=0.8),
+        user_model_event(u["user_id"], "intervention_offered", "Навык заменён и предложен как новый тест, не как доказанный рабочий способ", source_skill_id=new_sid, confidence=0.6),
+    ]
+    await log_event(u["user_id"], "training", "skill_changed_by_user_reason", {
+        "previous_skill_id": previous_sid,
+        "skill_id": new_sid,
+        "reason_code": reason_code,
+        "reason": reason_text,
+        "meaning_choice": meaning_choice,
+    }, DB_PATH, SHEETS_WEBHOOK_URL)
+    mark_action_card_active(u)
+    await save_user(u, DB_PATH)
+    await record_profile_signal(u["user_id"], "training", {
+        "last_replacement_skill": new_sid,
+        "last_replacement_reason": reason_text,
+        "skill_change_previous_skill": previous_sid,
+        "skill_change_new_skill": new_sid,
+    }, source="skill_change_requested")
+    await update_user_profile(u["user_id"], {"user_model_events": model_events}, DB_PATH, source="skill_change_requested_events")
+    text = (
+        "Навык заменён.\n"
+        "Это не откат и не провал.\n"
+        "Мы просто нашли более подходящий вход для этого состояния.\n\n"
+        f"{intro}\n\n"
+        f"Новый навык:\n🧩 {new_name}\n\n"
+        f"Минимум:\n{minimum}\n\n"
+        "Что получилось?"
+    )
+    await answer_with_keyboard(m, u, text, action_keyboard(), "skill_card")
 
 
 async def show_route(m: Message, u: Dict[str, Any], source: str):
@@ -3645,7 +4447,7 @@ def new_day_insights_text(profile: Dict[str, Any]) -> str:
     insights = []
     if int(profile.get("downscale_count") or profile.get("failed_reason_count") or 0) > 0:
         insights.append("большой вход тормозит старт")
-        insights.append("уменьшение шага помогает")
+        insights.append("уменьшение шага пока выглядит как гипотеза для проверки")
     if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0) > 0:
         insights.append("залипание усиливается, когда телефон рядом")
     if not insights:
@@ -3667,13 +4469,38 @@ def new_day_insights_text(profile: Dict[str, Any]) -> str:
     return "\n".join(f"— {item};" for item in insights[:3])
 
 
-def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    if skill.get("daily_text"):
+def has_previous_day_evidence(profile: Dict[str, Any]) -> bool:
+    profile = profile or {}
+    evidence_keys = (
+        "action_done_count", "attempts_started", "stuck_count", "attention_escape_count",
+        "return_count", "downscale_count", "skill_attempts_total", "crisis_count",
+    )
+    if any(int(profile.get(key) or 0) > 0 for key in evidence_keys):
+        return True
+    dev_map = profile.get("development_map") if isinstance(profile.get("development_map"), dict) else {}
+    return bool(profile.get("user_model_events") or profile.get("confirmed_signals") or int(dev_map.get("behavior_events_count") or 0) > 0)
+
+
+def new_day_context_header(profile: Dict[str, Any]) -> str:
+    if has_previous_day_evidence(profile):
         return (
             "🌱 Новый день.\n\n"
             "Вчера мы увидели важное:\n"
             f"{new_day_insights_text(profile)}\n\n"
             "Сегодня не начинаем с нуля.\n"
+        )
+    return (
+        "🌱 Новый день.\n\n"
+        "Пока у нас мало фактических данных за прошлый день.\n"
+        "Начинаем с короткого теста без выводов про вчера.\n"
+    )
+
+
+def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    header = new_day_context_header(profile)
+    if skill.get("daily_text"):
+        return (
+            header +
             "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
             f"{skill.get('daily_text')}\n\n"
             "Что получилось?"
@@ -3681,10 +4508,7 @@ def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
     skill_name = skill.get("name") or "Телефон вне руки на 3 минуты"
     if (skill.get("skill_id") or "") in {"phone_far_3min", "phone_away_3_min"} or "телефон" in skill_name.lower():
         return (
-            "🌱 Новый день.\n\n"
-            "Вчера мы увидели важное:\n"
-            f"{new_day_insights_text(profile)}\n\n"
-            "Сегодня не начинаем с нуля.\n"
+            header +
             "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
             "🧩 Навык дня: Телефон вне руки на 3 минуты\n\n"
             "Попробуй:\n"
@@ -3702,10 +4526,7 @@ def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
         step_text = skill.get("how") or skill.get("how_more") or "Сделай самый маленький вход в задачу 60–120 секунд."
     minimum = skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу"
     return (
-        "🌱 Новый день.\n\n"
-        "Вчера мы увидели важное:\n"
-        f"{new_day_insights_text(profile)}\n\n"
-        "Сегодня не начинаем с нуля.\n"
+        header +
         "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
         f"🧩 Навык дня: {skill_name}\n\n"
         f"Попробуй:\n{step_text}\n\n"
@@ -3816,7 +4637,7 @@ def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optiona
 
 
 def action_keyboard() -> ReplyKeyboardMarkup:
-    return kb_new_day_skill
+    return kb_active_skill
 
 
 async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: str):
@@ -3931,7 +4752,8 @@ async def day_close_metrics_text(u: Dict[str, Any]) -> str:
         f"Один раз застрял: {counts['stuck_events_today']}.\n"
         f"Вернулся после паузы: {counts['returns_today']}.\n\n"
         "Это не оценка продуктивности.\n"
-        "Это данные о том, как тебе легче начинать."
+        "Это данные о том, как тебе легче начинать.\n\n"
+        "До завтра. Новый навык откроется после смены календарного дня."
     )
 
 
@@ -4000,6 +4822,12 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
     await ensure_user_day(user, DB_PATH, calendar_date=local_date_for_user(user), skill_id=sid, skill_name=skill.get("name") or sid)
     action_id = mark_action_card_active(user)
     await save_user(user, DB_PATH)
+    await update_user_profile(
+        user_id,
+        {"user_model_events": [user_model_event(user_id, "intervention_offered", "", source_skill_id=sid, confidence=0.6)]},
+        DB_PATH,
+        source="skill_offered",
+    )
     await log_event(user_id, "training", "current_skill_resent", {"skill_id": sid, "day_id": user.get("current_day_id"), "action_id": user.get("current_action_id"), "state_version": user.get("state_version")}, DB_PATH, SHEETS_WEBHOOK_URL)
     await answer_with_keyboard(message, user, build_current_skill_text(skill, u=user), action_keyboard(), "new_day_skill")
 
@@ -4206,6 +5034,31 @@ async def recent_user_events_text(user_id: int, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
+async def recent_user_feedback_text(user_id: int, limit: int = 20) -> str:
+    rows = await recent_user_feedback(user_id, DB_PATH, limit=limit)
+    if not rows:
+        return "DEBUG FEEDBACK\nответов тестирования пока нет"
+    labels = {
+        "feedback_instruction_clarity": "понятность первого навыка",
+        "feedback_validation": "ощущение понимания ситуации",
+        "feedback_day_value": "полезная механика дня",
+        "product_value_score": "жалко потерять 0–10",
+        "product_value_reason": "раздражающие/ценные точки",
+        "offer_feedback": "причина отказа от полного режима",
+    }
+    lines = ["DEBUG FEEDBACK", f"last: {len(rows)}"]
+    for item in rows:
+        label = labels.get(item.get("feedback_type"), item.get("feedback_type") or "-")
+        comment = item.get("comment") or ""
+        if len(comment) > 120:
+            comment = comment[:117] + "..."
+        lines.append(
+            f"- {item.get('created_at') or '-'} | day {item.get('day_number') or '-'} | {label}: {item.get('value') or '-'}"
+            f"{(' | ' + comment) if comment else ''}"
+        )
+    return "\n".join(lines)
+
+
 def debug_state_text(u: Dict[str, Any]) -> str:
     """Render the minimum QA state requested before manual testing."""
     sid = current_skill_id(u)
@@ -4238,6 +5091,7 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str, days: 
         "/show_offer — показать offer вручную\n"
         "/debug_state\n"
         "/debug_events\n"
+        "/debug_feedback\n"
         "/reset_test_user\n"
         "/simulate_payment\n"
         "/testmode_off\n\n"
@@ -4364,7 +5218,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
     qa_commands = {
         "/debug_state", "/debug_events", "/show_offer", "/simulate_payment", "/reset_test_user",
         "/testmode_on", "/testmode_off", "/set_day", "/force_next_day", "/debug_map", "/debug_user",
-        "/whoami", "/health", "/payment_status",
+        "/debug_feedback", "/whoami", "/health", "/payment_status",
     }
     admin_only_commands = {
         "/reset", "/test_payment", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
@@ -4388,6 +5242,10 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/debug_events":
         await m.answer(await recent_user_events_text(uid, 20))
+        return True
+
+    if command == "/debug_feedback":
+        await m.answer(await recent_user_feedback_text(uid, 20))
         return True
 
     if command == "/show_offer":
@@ -5031,6 +5889,10 @@ def global_button_kind(text: str, low: str) -> str:
         return "repeat"
     if text == "🔁 Другой навык" or "другой навык" in low:
         return "other_skill"
+    if text == "🔄 Сменить навык" or "сменить навык" in low:
+        return "change_skill"
+    if text in {"🎭 Сменить тренера", "🔄 Сменить тренера"} or "сменить тренера" in low:
+        return "trainer_switch"
     if text == "🟡 Застрял / не вышло" or "застрял" in low or "не вышло" in low:
         return "stuck"
     if text == "⚡ Я застрял" or "я застрял" in low:
@@ -5052,6 +5914,10 @@ async def close_day_from_global_button(m: Message, u: Dict[str, Any], source: st
     u["stage"] = "day_core_stop"
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "training", "day_closed_global_button", {"day": current_day, "day_id": u.get("current_day_id"), "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if await ask_product_value_feedback(m, u):
+        return
+    if await ask_day_value_feedback(m, u):
+        return
     await answer_with_keyboard(m, u, await day_close_metrics_text(u), kb_day_core_stop, "day_core_stop")
 
 
@@ -5119,6 +5985,12 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
     if kind == "other_skill":
         await replace_skill_or_request_rediagnosis(m, u, "global_other_skill")
+        return True
+    if kind == "change_skill":
+        await open_skill_change_reason(m, u)
+        return True
+    if kind == "trainer_switch":
+        await open_trainer_switch(m, u, "global_button")
         return True
     if kind == "stuck":
         u["stage"] = "failed_options"
@@ -5235,17 +6107,6 @@ async def main_flow(m: Message):
     text = (m.text or "").strip()
     low = text.lower()
 
-    if safety_mode(u) != "none" and await handle_safety_mode(m, u, text):
-        return
-
-    if await handle_admin_command(m, u, text):
-        return
-    if await handle_user_command(m, u, text):
-        return
-    if TEST_CHEAT_CODE and text == TEST_CHEAT_CODE:
-        await activate_test_cheat(m, u, "plain_code")
-        return
-
     if u.get("first_start_date") or int(u.get("has_started_training") or 0) == 1 or u.get("day_core_skill_date"):
         sync_calendar_day(u)
         await save_user(u, DB_PATH)
@@ -5266,22 +6127,40 @@ async def main_flow(m: Message):
         low = text.lower()
         await log_event(u.get("user_id"), u.get("stage", ""), "global_voice_transcribed", {"len": len(text)}, DB_PATH, SHEETS_WEBHOOK_URL)
 
-    if await handle_safety_mode(m, u, text):
-        return
-
+    # Global safety gate: every text/voice transcript is checked before any normal flow.
     if text and has_crisis_safety_signal(text, u.get("stage") or ""):
         await start_safety_interceptor(m, u, text, "global_text", explicit=(text in {"🆘 Мне небезопасно", "🆘 Кризис"} or low == "/crisis"))
         return
 
+    # If a safety block is already active, swallow all normal/productivity routing.
+    if await handle_safety_mode(m, u, text):
+        return
+
+    if await handle_admin_command(m, u, text):
+        return
+    if await handle_user_command(m, u, text):
+        return
+    if TEST_CHEAT_CODE and text == TEST_CHEAT_CODE:
+        await activate_test_cheat(m, u, "plain_code")
+        return
+
+    if await handle_feedback_response(m, u, text):
+        return
+
     if await handle_full_mode_buttons(m, u, text):
         return
+
+    early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
+    if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "details", "map"}:
+        if await handle_global_button(m, u, text):
+            return
 
     if should_reject_action_button(text, u):
         await show_action_changed_fallback(m, u, "action_button_context_mismatch")
         return
 
     current_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
-    if u.get("current_state") == STATE_AWAITING_RESULT and is_known_reply_button(text) and text not in ACTION_OUTCOME_BUTTONS and current_kind not in {"map", "crisis"}:
+    if u.get("current_state") == STATE_AWAITING_RESULT and u.get("stage") not in {"skill_change_reason", "skill_change_free_text", "skill_change_meaning", "stuck_validation_choice"} and is_known_reply_button(text) and text not in ACTION_OUTCOME_BUTTONS and current_kind not in {"map", "crisis"}:
         await show_action_changed_fallback(m, u, "old_action_button_hidden")
         return
 
@@ -5329,7 +6208,7 @@ async def main_flow(m: Message):
         return
 
     pre_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
-    if pre_global_kind in {"repeat", "other_skill", "more", "why", "details", "skip"} and not button_fits_current_state(text, u):
+    if pre_global_kind in {"more"} and not button_fits_current_state(text, u):
         await show_context_fallback(m, u, "known_button_invalid_for_stage")
         return
 
@@ -5352,6 +6231,10 @@ async def main_flow(m: Message):
     if u.get("stage") == "trainer_switch":
         await handle_trainer_switch_choice(m, u, text)
         return
+
+    if u.get("stage") == "stuck_validation_choice":
+        if await handle_stuck_validation_choice(m, u, text):
+            return
 
     if should_route_action_request(text, low, u):
         await handle_action_request(u["user_id"], m, u, repeat=("ещё круг" in low or "еще круг" in low or text == "🔁 Ещё круг"))
@@ -5378,7 +6261,7 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
             return
-        if text == "🔄 Сменить тренера" or "сменить тренера" in low:
+        if text in {"🎭 Сменить тренера", "🔄 Сменить тренера"} or "сменить тренера" in low:
             await open_trainer_switch(m, u, "day_menu")
             return
         await answer_with_keyboard(m, u, "Что сейчас сделать?", kb_day_menu, "day_menu")
@@ -5390,6 +6273,10 @@ async def main_flow(m: Message):
             await mark_day_closed(u, "day_pause_confirm_closed")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "training", "day_closed_confirmed", {"day": current_day, "day_id": u.get("current_day_id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+            if await ask_product_value_feedback(m, u):
+                return
+            if await ask_day_value_feedback(m, u):
+                return
             await answer_with_keyboard(m, u, await day_close_metrics_text(u), kb_day_core_stop, "day_core_stop")
             return
         if text == "⏸ Просто пауза" or "пауза" in low:
@@ -5403,7 +6290,77 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
         return
 
-    if text == "🔄 Сменить тренера" or "сменить тренера" in low or "другой тренер" in low or "режим" in low and "трен" in low:
+    if u.get("stage") == "skill_change_reason":
+        if text == "↩️ Оставить текущий навык" or "оставить" in low:
+            u["stage"] = "training"
+            mark_action_card_active(u)
+            await save_user(u, DB_PATH)
+            sid = current_skill_for_action(u) or current_skill_id(u)
+            skill = dict(SKILLS_DB.get(sid) or SKILLS_DB.get("open_only") or next(iter(SKILLS_DB.values())))
+            skill.setdefault("skill_id", sid)
+            await answer_with_keyboard(m, u, f"Ок. Оставляем текущий навык.\n\n{format_skill_card(u, skill, current_task_label(u))}", action_keyboard(), "skill_card")
+            return
+        if text == "🤷 Не понимаю, зачем это делать":
+            u["stage"] = "skill_change_meaning"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(
+                m,
+                u,
+                "Похоже, сейчас проблема не в сложности, а в контакте со смыслом.\nНе будем заставлять себя через пустоту.\n\nНовый навык:\n🧩 Вернуть смысл шага\n\nЧто ближе?",
+                kb_skill_change_meaning,
+                "skill_change_meaning",
+            )
+            return
+        if text == "🎙️ Опишу ситуацию сам(а)":
+            u["stage"] = "skill_change_free_text"
+            await save_user(u, DB_PATH)
+            await m.answer("Опиши одним сообщением или голосом: что именно не ложится в текущем навыке?")
+            return
+        code = skill_change_code_from_text(text)
+        config = SKILL_CHANGE_REASON_CONFIG[code]
+        await apply_skill_change(
+            m,
+            u,
+            reason_code=code,
+            reason_text=config["reason"] if text in config["buttons"] else (text or config["reason"]),
+            new_sid=config["skill_id"],
+            new_name=config["name"],
+            intro=config["intro"],
+            minimum=config["minimum"],
+        )
+        return
+
+    if u.get("stage") == "skill_change_free_text":
+        code = skill_change_code_from_text(text)
+        config = SKILL_CHANGE_REASON_CONFIG[code]
+        await apply_skill_change(
+            m,
+            u,
+            reason_code=code,
+            reason_text=text or config["reason"],
+            new_sid=config["skill_id"],
+            new_name=config["name"],
+            intro=config["intro"],
+            minimum=config["minimum"],
+        )
+        return
+
+    if u.get("stage") == "skill_change_meaning":
+        choice = text or "пока не понимаю"
+        await apply_skill_change(
+            m,
+            u,
+            reason_code="meaning",
+            reason_text="не понимаю, зачем это делать",
+            new_sid="task_naming",
+            new_name="Вернуть смысл шага",
+            intro="Похоже, сейчас проблема не в сложности, а в контакте со смыслом.\nНе будем заставлять себя через пустоту.",
+            minimum=meaning_step_text(choice, current_task_label(u)),
+            meaning_choice=choice,
+        )
+        return
+
+    if text in {"🎭 Сменить тренера", "🔄 Сменить тренера"} or "сменить тренера" in low or "другой тренер" in low or "режим" in low and "трен" in low:
         if u.get("stage") in TRAINER_SWITCH_STAGES and (u.get("analysis_json") or int(u.get("has_started_training") or 0) == 1 or u.get("day_core_skill_date")):
             await open_trainer_switch(m, u, u.get("stage") or "unknown")
             return
@@ -5629,12 +6586,15 @@ async def main_flow(m: Message):
             await answer_with_keyboard(m, u, screen["text"], kb_failed, "failed")
             return
 
+        if u.get("stage") == "stuck_validation_choice":
+            if await handle_stuck_validation_choice(m, u, text):
+                return
+
         if u.get("stage") == "stuck_reason_text":
             if not text:
-                await m.answer("Опиши одним сообщением или голосом: что именно помешало?")
+                await m.answer("Опиши как есть — одним сообщением или голосом.\nНе нужно формулировать красиво.\nЯ сначала попробую понять, что с тобой происходит, а не сразу дать совет.")
                 return
-            code = stuck_reason_code_from_text(text)
-            await send_stuck_reason_skill(m, u, code, user_text=text)
+            await start_stuck_text_validation(m, u, text)
             return
 
         if u.get("stage") == "failed_options":
@@ -5649,7 +6609,13 @@ async def main_flow(m: Message):
                 u["stage"] = "stuck_reason_text"
                 set_current_state(u, STATE_AWAITING_STUCK_REASON)
                 await save_user(u, DB_PATH)
-                await m.answer("Опиши одним сообщением или голосом: что именно помешало?")
+                await m.answer("Опиши как есть — одним сообщением или голосом.\nНе нужно формулировать красиво.\nЯ сначала попробую понять, что с тобой происходит, а не сразу дать совет.")
+                return
+            if text == "🤷 Не понимаю, зачем это делать":
+                await start_stuck_text_validation(m, u, "не понимаю, зачем это делать")
+                return
+            if text == "🆘 Мне небезопасно":
+                await start_safety_interceptor(m, u, text, "failed_options", explicit=True)
                 return
             if text == "😣 Слишком сложно" or is_too_hard(text):
                 await send_stuck_reason_skill(m, u, "overwhelm")
@@ -5768,11 +6734,13 @@ async def main_flow(m: Message):
                 u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 profile = await get_user_profile(u["user_id"], DB_PATH)
+                await record_return_after_slip_action_event_if_needed(u, "downscale_done")
                 returned_after_disruption = await record_return_after_disruption_if_needed(u, profile, "done_after_disruption")
                 if returned_after_disruption:
                     await save_user(u, DB_PATH)
                     profile = await get_user_profile(u["user_id"], DB_PATH)
                 sid = current_skill_id(u) or DOWNSCALE_PRIMARY_SKILL
+                await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "downscale_done"})
                 await record_profile_signal(u["user_id"], "training", {
                     "best_skill": sid,
                     "last_successful_skill": sid,
@@ -5799,11 +6767,13 @@ async def main_flow(m: Message):
                 u["stage"] = "waiting_next_day"
                 await save_user(u, DB_PATH)
                 profile = await get_user_profile(u["user_id"], DB_PATH)
+                await record_return_after_slip_action_event_if_needed(u, "downscale_done")
                 returned_after_disruption = await record_return_after_disruption_if_needed(u, profile, "done_after_disruption")
                 if returned_after_disruption:
                     await save_user(u, DB_PATH)
                     profile = await get_user_profile(u["user_id"], DB_PATH)
                 sid = current_skill_id(u) or DOWNSCALE_PRIMARY_SKILL
+                await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "downscale_name_done"})
                 await record_profile_signal(u["user_id"], "training", {
                     "best_skill": sid,
                     "last_successful_skill": sid,
@@ -6785,9 +7755,8 @@ async def main_flow(m: Message):
             return
 
         if text == "⬅️ Назад" or "назад" in low:
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
+            await log_event(u["user_id"], "crisis", "crisis_return_blocked_until_safety_done", {"stage": u.get("stage")}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Сначала завершим блок безопасности. Выбери способ описать состояние или нажми кнопки.", kb_crisis_mode, "crisis_mode")
             return
         if text in {"🎙 Голосом", "🎙 Кризис голосом"} or "голос" in low:
             u["crisis_input_mode"] = "voice"
@@ -6829,9 +7798,8 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer(f"Распознал: {clamp_str(text, 700)}")
         if text and text.lower().strip() in {"⬅️ назад", "назад"}:
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
+            await log_event(u["user_id"], "crisis", "crisis_return_blocked_until_safety_done", {"stage": u.get("stage")}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Сначала завершим блок безопасности. Напиши 1–3 предложения или пришли голосовое.", kb_crisis_stabilize, "crisis_stabilize")
             return
         if not text:
             await m.answer("Напиши 1–3 предложения или пришли голосовое.")
@@ -6843,9 +7811,8 @@ async def main_flow(m: Message):
 
     if u.get("stage") == "crisis_voice":
         if text and text.lower().strip() in {"⬅️ назад", "назад"}:
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Ок. Возвращаемся в тренировку.", kb_training_main, "training_main")
+            await log_event(u["user_id"], "crisis", "crisis_return_blocked_until_safety_done", {"stage": u.get("stage")}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Сначала завершим блок безопасности. Напиши 1–3 предложения или пришли голосовое.", kb_crisis_stabilize, "crisis_stabilize")
             return
         if not m.voice:
             await m.answer("Пришли голосовое 🎙")
@@ -6922,6 +7889,11 @@ async def main_flow(m: Message):
             pending = json.loads(u.get("pending_plan_change") or "{}")
         except Exception:
             pending = {}
+        if isinstance(pending, dict) and pending.get("type") == "crisis_aftercare":
+            u["pending_plan_change"] = None
+            await save_user(u, DB_PATH)
+            await show_safety_support(m, u, "social_support_after_crisis")
+            return
         return_stage = pending.get("return_stage") if isinstance(pending, dict) and pending.get("type") == "social_support" else "waiting_next_day"
         if no_support:
             await m.answer(
@@ -7007,17 +7979,17 @@ async def main_flow(m: Message):
         profile_after = await get_user_profile(u["user_id"], DB_PATH)
         if not profile_after.get("social_support_prompt_shown"):
             u["stage"] = "social_support_await"
+            u["pending_plan_change"] = json.dumps({"type": "crisis_aftercare"}, ensure_ascii=False)
             u["pending_crisis_pattern"] = None
             u["pending_crisis_skill"] = None
             await update_user_profile(u["user_id"], {"social_support_prompt_shown": 1}, DB_PATH, source="social_support_prompt")
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, social_support_prompt_text(), kb_social_support, "social_support")
             return
-        u["stage"] = "waiting_next_day"
         u["pending_crisis_pattern"] = None
         u["pending_crisis_skill"] = None
-        await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, "Записал. Это данные для карты. Возвращаемся к основному навыку дня.", kb_training_main, "training_main")
+        await show_safety_support(m, u, "crisis_effect_completed")
+        await log_event(u["user_id"], "crisis", "crisis_productivity_return_deferred_until_safety_aftercare", {"effect": effect}, DB_PATH, SHEETS_WEBHOOK_URL)
         return
 
     if u.get("stage") == "crisis_plan_confirm":
@@ -7080,9 +8052,15 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "offer", "free_mode_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["free_mode"] = 1
             u["payment_status"] = "free_mode"
-            u["stage"] = "waiting_next_day"
+            u["stage"] = "feedback_offer"
             await save_user(u, DB_PATH)
-            await m.answer(stay_free_text(), reply_markup=kb_short_mode_main)
+            await answer_with_keyboard(
+                m,
+                u,
+                "Это нормально. Короткий режим остаётся.\nДля теста скажи: чего пока не хватает, чтобы полный режим выглядел нужным?",
+                kb_feedback_offer,
+                "feedback_offer",
+            )
             return
         if text in {"📚 Что входит", "📚 Подробнее о карте", "📚 Что будет дальше"} or "что входит" in low or "подробнее" in low or "что будет дальше" in low:
             await log_event(u["user_id"], "offer", "profile_map_details_opened", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -7138,6 +8116,9 @@ async def on_offer_callbacks(c: CallbackQuery):
     u = await get_user(uid, DB_PATH)
     data = c.data or ""
 
+    if await handle_safety_callback(c, u, data):
+        return
+
     if u.get("stage") != "offer" and data != "confirm_test_payment":
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
@@ -7163,9 +8144,12 @@ async def on_offer_callbacks(c: CallbackQuery):
         await log_event(uid, "offer", "free_mode_started", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
         u["free_mode"] = 1
         u["payment_status"] = "free_mode"
-        u["stage"] = "waiting_next_day"
+        u["stage"] = "feedback_offer"
         await save_user(u, DB_PATH)
-        await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
+        await c.message.answer(
+            "Это нормально. Короткий режим остаётся.\nДля теста скажи: чего пока не хватает, чтобы полный режим выглядел нужным?",
+            reply_markup=kb_feedback_offer,
+        )
         await c.answer()
         return
 
@@ -7198,6 +8182,8 @@ async def on_offer_callbacks(c: CallbackQuery):
 async def on_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
+    if await handle_safety_callback(c, u, c.data or ""):
+        return
     if c.data == "noop":
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)

@@ -30,6 +30,7 @@ USER_STATE_SCHEMA_VERSION = 2
 USER_PROFILE_SCHEMA_VERSION = 1
 
 USER_PROFILE_LIST_FIELDS = {
+    "user_model_events",
     "strengths",
     "barriers",
     "resources",
@@ -735,7 +736,7 @@ def determine_development_focus(profile: Dict[str, Any]) -> Dict[str, str]:
         reason = "пока предполагаем, что самокритика после откладывания мешает старту"
     elif int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in helps:
         code = "self_regulation"
-        reason = "сейчас видно, что уменьшение шага помогает регулировать нагрузку"
+        reason = "пока есть 1–2 сигнала, что уменьшение шага может помогать; нужно ещё несколько попыток"
     elif any(x in target for x in ("работ", "проект", "код", "созвон", "учеб", "документ")):
         code = "professional_activity"
         reason = "мы проверим профессиональную активность через маленький рабочий шаг"
@@ -956,6 +957,7 @@ def default_user_profile(*, trainer_key: str = "") -> Dict[str, Any]:
         "resources": [],
         "failure_patterns": [],
         "working_strategies": [],
+        "user_model_events": [],
         "attention_profile": {},
         "motivation_profile": {},
         "emotional_profile": {},
@@ -1205,6 +1207,9 @@ USER_FIELDS = [
     "current_action_id",
     "last_simplification_modality",
     "success_repeat_count",
+    "day_closed",
+    "today_closed",
+    "last_day_closed_at",
     "current_day_id",
     "current_session_id",
     "daily_skill_id",
@@ -1220,6 +1225,7 @@ USER_FIELDS = [
     "full_mode_started_at",
     "full_mode_until",
     "full_mode_plan_json",
+    "pending_feedback_json",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1360,6 +1366,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "current_action_id": None,
         "last_simplification_modality": None,
         "success_repeat_count": 0,
+        "day_closed": 0,
+        "today_closed": 0,
+        "last_day_closed_at": None,
         "current_day_id": None,
         "current_session_id": None,
         "daily_skill_id": None,
@@ -1375,6 +1384,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "full_mode_started_at": None,
         "full_mode_until": None,
         "full_mode_plan_json": None,
+        "pending_feedback_json": None,
     }
 
 async def init_db(db_path: str):
@@ -1467,7 +1477,8 @@ async def init_db(db_path: str):
                 full_mode INTEGER DEFAULT 0,
                 full_mode_started_at TEXT,
                 full_mode_until TEXT,
-                full_mode_plan_json TEXT
+                full_mode_plan_json TEXT,
+                pending_feedback_json TEXT
             )
             """
         )
@@ -1518,6 +1529,23 @@ async def init_db(db_path: str):
         )
         await db.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                feedback_type TEXT NOT NULL,
+                value TEXT,
+                comment TEXT,
+                day_id TEXT,
+                day_number INTEGER,
+                skill_id TEXT,
+                trainer_key TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_tasks (
                 task_id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -1545,6 +1573,7 @@ async def init_db(db_path: str):
         await db.execute("CREATE INDEX IF NOT EXISTS idx_user_days_user ON user_days(user_id, day_number)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_day ON skill_attempts(day_id, attempt_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_action_events_user_day ON action_events(user_id, day_id, event_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_user_feedback_user_type ON user_feedback(user_id, feedback_type, day_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_user_tasks_user ON user_tasks(user_id, status, updated_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id, last_activity_at)")
 
@@ -1719,6 +1748,9 @@ EXTRA_USER_COLS = {
     "current_action_id": "TEXT",
     "last_simplification_modality": "TEXT",
     "success_repeat_count": "INTEGER DEFAULT 0",
+    "day_closed": "INTEGER DEFAULT 0",
+    "today_closed": "INTEGER DEFAULT 0",
+    "last_day_closed_at": "TEXT",
     "current_day_id": "TEXT",
     "current_session_id": "TEXT",
     "daily_skill_id": "TEXT",
@@ -1733,7 +1765,8 @@ EXTRA_USER_COLS = {
     "full_mode": "INTEGER DEFAULT 0",
     "full_mode_started_at": "TEXT",
     "full_mode_until": "TEXT",
-    "full_mode_plan_json": "TEXT"
+    "full_mode_plan_json": "TEXT",
+    "pending_feedback_json": "TEXT"
 }
 
 async def migrate_db(db_path: str):
@@ -1805,6 +1838,23 @@ async def migrate_db(db_path: str):
         )
         await db.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                feedback_type TEXT NOT NULL,
+                value TEXT,
+                comment TEXT,
+                day_id TEXT,
+                day_number INTEGER,
+                skill_id TEXT,
+                trainer_key TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_tasks (
                 task_id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -1832,6 +1882,7 @@ async def migrate_db(db_path: str):
         await db.execute("CREATE INDEX IF NOT EXISTS idx_user_days_user ON user_days(user_id, day_number)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_attempts_day ON skill_attempts(day_id, attempt_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_action_events_user_day ON action_events(user_id, day_id, event_type)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_user_feedback_user_type ON user_feedback(user_id, feedback_type, day_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_user_tasks_user ON user_tasks(user_id, status, updated_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id, last_activity_at)")
 
@@ -2145,6 +2196,97 @@ async def get_action_metrics(user_id: int, db_path: str, *, day_id: str = "") ->
     return metrics
 
 
+async def record_user_feedback(
+    user_id: int,
+    db_path: str,
+    feedback_type: str,
+    value: str,
+    *,
+    comment: str = "",
+    day_id: str = "",
+    day_number: int | None = None,
+    skill_id: str = "",
+    trainer_key: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Persist tester feedback outside the psychological user map."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                feedback_type TEXT NOT NULL,
+                value TEXT,
+                comment TEXT,
+                day_id TEXT,
+                day_number INTEGER,
+                skill_id TEXT,
+                trainer_key TEXT,
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO user_feedback (user_id, feedback_type, value, comment, day_id, day_number, skill_id, trainer_key, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                feedback_type,
+                value,
+                comment,
+                day_id or None,
+                day_number,
+                skill_id or None,
+                trainer_key or None,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                _utc_iso(),
+            ),
+        )
+        await db.commit()
+
+
+async def user_feedback_count(user_id: int, db_path: str, feedback_type: str, *, day_id: str = "") -> int:
+    async with aiosqlite.connect(db_path) as db:
+        if day_id:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM user_feedback WHERE user_id=? AND feedback_type=? AND day_id=?",
+                (user_id, feedback_type, day_id),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM user_feedback WHERE user_id=? AND feedback_type=?",
+                (user_id, feedback_type),
+            )
+        row = await cur.fetchone()
+    return int(row[0] if row else 0)
+
+
+async def recent_user_feedback(user_id: int, db_path: str, *, limit: int = 20) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT feedback_type, value, comment, day_id, day_number, skill_id, trainer_key, metadata, created_at
+            FROM user_feedback
+            WHERE user_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        )
+        rows = await cur.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.get("metadata") or "{}")
+        except Exception:
+            item["metadata"] = {}
+        result.append(item)
+    return result
+
+
 PATTERN_LABELS = {
     "fearofevaluation": "Страх оценки",
     "fear_of_evaluation": "Страх оценки",
@@ -2187,6 +2329,9 @@ SKILL_LABELS = {
     "minimum_viable_day": "минимально жизнеспособный день",
     "body_doubling_plan": "запуск рядом с человеком",
     "if_then_plan": "если–то план для маленького входа",
+    "small_step": "маленький шаг",
+    "draft_mode": "Плохой черновик на 2 минуты",
+    "bad_draft": "Плохой черновик на 2 минуты",
 }
 
 
@@ -2201,6 +2346,9 @@ def label(mapping: dict, value: Optional[str], fallback: str) -> str:
         "fear_of_evaluation": "Страх оценки",
         "shameselfattack": "Жёсткая самокритика",
         "shame_self_attack": "Жёсткая самокритика",
+        "small_step": "маленький шаг",
+        "draft_mode": "Плохой черновик на 2 минуты",
+        "bad_draft": "Плохой черновик на 2 минуты",
         "attention_autopilot": "Уход в быстрые стимулы",
         "task_avoidance": "Избегание трудной задачи",
     }
@@ -2226,71 +2374,221 @@ async def update_user_profile(user_id: int, patch: dict, db_path: str = "bot.db"
     return profile
 
 
+USER_MODEL_EVENT_TYPES = {
+    "reported",
+    "hypothesis",
+    "intervention_offered",
+    "intervention_attempted",
+    "intervention_confirmed_helpful",
+    "intervention_not_helpful",
+    "barrier_reported",
+    "barrier_confirmed",
+    "contradiction",
+}
+
+
+def _human_skill_label(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return label(SKILL_LABELS, str(value), str(value))
+
+
+def user_model_event(
+    user_id: int,
+    event_type: str,
+    text: str,
+    *,
+    source_message_id: str = "",
+    source_skill_id: str = "",
+    confidence: float = 0.5,
+    is_active: bool = True,
+    event_id: str = "",
+    created_at: str = "",
+) -> Dict[str, Any]:
+    """Create a normalized user-map event for fact/hypothesis/intervention separation."""
+    safe_type = event_type if event_type in USER_MODEL_EVENT_TYPES else "hypothesis"
+    return {
+        "id": event_id or f"ume:{user_id}:{int(time.time() * 1000)}",
+        "user_id": user_id,
+        "event_type": safe_type,
+        "text": str(text or "").strip(),
+        "source_message_id": str(source_message_id or ""),
+        "source_skill_id": str(source_skill_id or ""),
+        "confidence": max(0.0, min(1.0, float(confidence or 0))),
+        "created_at": created_at or _utc_iso(),
+        "is_active": bool(is_active),
+    }
+
+
+
+
+def user_model_events_from_signal(user_id: int, signal_patch: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
+    """Translate legacy profile patches into explicit user-model provenance events."""
+    patch = signal_patch or {}
+    events: List[Dict[str, Any]] = []
+    for item in _as_list(patch.get("confirmed_signals")):
+        if item:
+            events.append(user_model_event(user_id, "reported", str(item), confidence=0.9))
+    if patch.get("main_hypothesis"):
+        events.append(user_model_event(user_id, "hypothesis", f"Пока есть гипотеза, что {patch.get('main_hypothesis')}", confidence=0.5))
+    for item in _as_list(patch.get("secondary_hypotheses")):
+        if item:
+            events.append(user_model_event(user_id, "hypothesis", f"Мы проверяем, может ли {item}", confidence=0.4))
+
+    offered_skill = patch.get("recommended_core_skill") or patch.get("recommended_variant")
+    if offered_skill:
+        events.append(user_model_event(user_id, "intervention_offered", "", source_skill_id=str(offered_skill), confidence=0.6))
+
+    skill = patch.get("best_skill") or patch.get("last_successful_skill") or patch.get("best_variant")
+    if source in {"action_done", "downscale_done"} and skill:
+        events.append(user_model_event(user_id, "intervention_attempted", "", source_skill_id=str(skill), confidence=0.6))
+    if source == "after_action_note_saved" and skill:
+        tags = set(str(x) for x in _as_list(patch.get("effect_tags")))
+        positive = bool(tags & {"relief", "anxiety_down", "confidence_up", "clarity_up"}) or bool(patch.get("effect_relief") or patch.get("effect_anxiety_down"))
+        event_type = "intervention_confirmed_helpful" if positive else "intervention_attempted"
+        events.append(user_model_event(user_id, event_type, "", source_skill_id=str(skill), confidence=0.7 if positive else 0.5))
+
+    failed_skill = patch.get("failed_skill") or patch.get("worst_skill")
+    if source in {"action_failed", "downscale_even_too_hard"} and failed_skill:
+        events.append(user_model_event(user_id, "intervention_not_helpful", "", source_skill_id=str(failed_skill), confidence=0.7))
+    trigger = patch.get("avoidance_trigger") or patch.get("avoidance_reason")
+    if trigger:
+        events.append(user_model_event(user_id, "barrier_reported", str(trigger), confidence=0.6))
+    return events
+
+
+def _normalize_user_model_events(profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    for item in _as_list((profile or {}).get("user_model_events")):
+        if not isinstance(item, dict):
+            continue
+        event_type = str(item.get("event_type") or "").strip()
+        text = str(item.get("text") or "").strip()
+        skill_id = str(item.get("source_skill_id") or "").strip()
+        if not text and skill_id:
+            text = _human_skill_label(skill_id)
+        if not text or event_type not in USER_MODEL_EVENT_TYPES or item.get("is_active") is False:
+            continue
+        normalized = dict(item)
+        normalized["event_type"] = event_type
+        normalized["text"] = _human_skill_label(text) if text in SKILL_LABELS else text
+        normalized["source_skill_id"] = skill_id
+        events.append(normalized)
+    return events[-80:]
+
+
+def _event_skill_text(event: Dict[str, Any]) -> str:
+    skill_id = str(event.get("source_skill_id") or "").strip()
+    text = str(event.get("text") or "").strip()
+    if skill_id:
+        return _human_skill_label(skill_id)
+    return _human_skill_label(text) if text in SKILL_LABELS else text
+
+
+def _map_bullets(items: Any, fallback: str, *, limit: int = 5) -> str:
+    values = []
+    seen = set()
+    for raw in _as_list(items):
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        values.append(text)
+    if not values:
+        values = [fallback]
+    return "\n".join(f"— {item}" for item in values[:limit])
+
+
+def profile_contradiction_prompt(profile: Dict[str, Any]) -> str:
+    """Ask a clarifying question when reported signals conflict."""
+    events = _normalize_user_model_events(profile or {})
+    texts = "\n".join(str(e.get("text") or "") for e in events + [{"text": x} for x in _as_list((profile or {}).get("confirmed_signals"))]).lower()
+    has_evaluation = any(x in texts for x in ("страх оцен", "люди увид", "недодел", "сделаю плохо", "оценят", "стыд"))
+    has_meaning = any(x in texts for x in ("не вижу смысла", "нет смысла", "зачем", "бессмыс"))
+    if not (has_evaluation and has_meaning):
+        return ""
+    return (
+        "Ты описал страх оценки, но выбрал(а) “не вижу смысла”.\n"
+        "Что чаще возникает ПЕРЕД тем, как ты уходишь в Telegram?\n\n"
+        "😬 “Сделаю плохо, меня оценят”\n"
+        "😶 “Не понимаю, зачем это вообще делать”\n"
+        "🌀 Оба варианта\n"
+        "✍️ Объясню иначе"
+    )
+
+
 def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
-    profile = profile or {}
-    dev_map = normalize_development_map(profile.get("development_map"))
+    profile = normalize_user_profile(profile or {})
+    events = _normalize_user_model_events(profile)
 
-    def bullet_lines(items: Any, fallback: str, limit: int = 4) -> str:
-        values = [str(x) for x in _as_list(items) if x not in (None, "")]
-        if not values:
-            values = [fallback]
-        return "\n".join(f"— {item}" for item in values[:limit])
-
-    stable_patterns = [label(PATTERN_LABELS, profile.get("main_pattern") or profile.get("avoidance_pattern"), "вход часто становится слишком большим")]
+    reported = [_event_skill_text(e) for e in events if e["event_type"] in {"reported", "barrier_reported", "barrier_confirmed"}]
+    reported = _merge_unique_list(reported, profile.get("confirmed_signals"), limit=8)
     if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        stable_patterns.append("залипание появляется как способ уйти от напряжения")
-    if int(profile.get("downscale_count") or 0):
-        stable_patterns.append("после уменьшения шага действие получается легче")
-    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
-        stable_patterns.append("самокритика усиливает ступор")
+        reported = _merge_unique_list(reported, ["уход в быстрые стимулы / Telegram / новости"], limit=8)
 
-    working_skills = _merge_unique_list(
-        [profile.get("best_variant"), profile.get("best_skill"), profile.get("last_successful_skill")],
-        [* _as_list(profile.get("successful_skills")), * _as_list(profile.get("working_strategies")), * _as_list(dev_map.get("helps"))],
+    hypotheses = [_event_skill_text(e) for e in events if e["event_type"] == "hypothesis"]
+    if profile.get("main_hypothesis"):
+        hypotheses = _merge_unique_list(hypotheses, [f"Пока есть гипотеза, что {profile.get('main_hypothesis')}"], limit=8)
+    for item in _as_list(profile.get("secondary_hypotheses")):
+        hypotheses = _merge_unique_list(hypotheses, [f"Мы проверяем, может ли {item}"], limit=8)
+
+    attempted = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_attempted"]
+    helpful = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_confirmed_helpful"]
+    not_helpful = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_not_helpful"]
+
+    checked = []
+    for item in attempted:
+        checked.append(f"попробовал(а) «{item}»; эффекта пока не знаем")
+    for item in helpful:
+        checked.append(f"Пока похоже, что этот шаг помогает: «{item}»")
+    for item in not_helpful:
+        checked.append(f"«{item}» пока не подошёл / не помог")
+    if int(profile.get("action_done_count") or 0) and not checked:
+        checked.append("ты сделал(а) один микро-подход; этого пока недостаточно, чтобы назвать навык рабочим")
+
+    offered = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_offered"]
+    legacy_offered = _merge_unique_list(
+        [profile.get("recommended_core_skill"), profile.get("recommended_variant"), profile.get("best_variant"), profile.get("best_skill"), profile.get("last_successful_skill")],
+        profile.get("successful_skills"),
         limit=8,
     )
-    if int(profile.get("downscale_count") or 0):
-        working_skills = _merge_unique_list(working_skills, ["уменьшить шаг"], limit=8)
-    working_skills = [label(SKILL_LABELS, str(item), str(item)) for item in working_skills]
+    for item in legacy_offered:
+        label_text = _human_skill_label(item)
+        if label_text and label_text not in helpful and label_text not in attempted:
+            offered = _merge_unique_list(offered, [label_text], limit=8)
 
-    barriers = _merge_unique_list(profile.get("barriers"), dev_map.get("blocks"), limit=8)
-    if profile.get("avoidance_trigger"):
-        barriers = _merge_unique_list(barriers, [profile.get("avoidance_trigger")], limit=8)
-    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        barriers = _merge_unique_list(barriers, ["быстрый дофамин и доступный телефон"], limit=8)
-    if profile.get("shame_signal") or profile.get("main_pattern") == "shame_self_attack":
-        barriers = _merge_unique_list(barriers, ["страх недоделанности или самокритика"], limit=8)
+    cannot_assert = []
+    for item in offered:
+        cannot_assert.append(f"что «{item}» помогает — это пока только предложено/проверяется")
+    if not helpful:
+        cannot_assert.append("какой навык стабильно помогает — данных пока мало")
+    for item in [x for x in not_helpful if x]:
+        cannot_assert.append(f"что «{item}» подходит — есть отрицательный сигнал")
 
-    next_tests = []
-    if profile.get("preferred_activation") == "body_doubling":
-        next_tests.append("помогает ли внешний контакт")
-    if int(profile.get("downscale_count") or 0):
-        next_tests.append("какой минимальный шаг держится лучше")
-    if profile.get("trainer_fit_signal") or profile.get("trainer_current_mode"):
-        next_tests.append("какой стиль поддержки работает: мягкий, жёсткий или аналитичный")
-    if not next_tests:
-        next_tests = [
-            "помогает ли внешний контакт",
-            "какой минимальный шаг держится лучше",
-            "какой стиль поддержки работает: мягкий, жёсткий или аналитичный",
-        ]
+    contradiction = profile_contradiction_prompt(profile)
+    next_test = "выяснить, что появляется раньше: страх оценки, потеря смысла или перегруз"
+    if offered:
+        next_test = f"проверить «{offered[0]}» и отдельно отметить, стало ли легче"
+    if contradiction:
+        next_test = "ответить на уточнение: что возникает перед уходом в Telegram"
 
-    return f"""🧭 Твоя карта
-
-1. Что уже видно
-{bullet_lines(stable_patterns, "данных пока мало, собираем первые сигналы")}
-
-2. Что помогает
-{bullet_lines(working_skills, "пока проверяем первые навыки")}
-
-3. Что пока мешает
-{bullet_lines(barriers, "пока не видно устойчивого барьера")}
-
-4. Что проверяем дальше
-{bullet_lines(next_tests, "какой вход в задачу держится легче")}
-
-Карта не окончательная.
-Она становится точнее после каждого подхода."""
+    text = (
+        "🧭 Твоя рабочая карта\n\n"
+        "Что ты сам(а) описал(а):\n"
+        f"{_map_bullets(reported, 'данных пока мало — сначала собираем твои слова и выборы')}\n\n"
+        "Что пока похоже на гипотезу:\n"
+        f"{_map_bullets(hypotheses, 'пока есть гипотеза, что вход в задачу становится слишком большим')}\n\n"
+        "Что уже проверили:\n"
+        f"{_map_bullets(checked, 'пока не было подтверждённой попытки с отметкой эффекта')}\n\n"
+        "Что пока нельзя утверждать:\n"
+        f"{_map_bullets(cannot_assert, 'пока нельзя уверенно назвать рабочий навык')}\n\n"
+        "Следующий короткий тест:\n"
+        f"— {next_test}\n\n"
+        "Карта не окончательная: факты, гипотезы и непроверенные предложения здесь разделены."
+    )
+    if contradiction:
+        text = f"{text}\n\n{contradiction}"
+    return text
 
 def gamify_apply(u: dict, delta_points: int, reason: str):
     """Launch-safe no-op: false points/levels/streaks are worse than no gamification."""

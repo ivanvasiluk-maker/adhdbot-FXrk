@@ -28,6 +28,8 @@ def main() -> None:
         "🌙 До завтра": "tomorrow",
         "🔁 Ещё круг": "repeat",
         "🔁 Другой навык": "other_skill",
+        "🔄 Сменить навык": "change_skill",
+        "🎭 Сменить тренера": "trainer_switch",
         "Ещё": "more",
         "📚 Почему это работает": "why",
         "📚 Подробнее": "details",
@@ -41,6 +43,8 @@ def main() -> None:
     assert "handle_global_button(m, u, text)" in BOT_SOURCE
     assert "Сейчас день уже закрыт. Новый навык откроется завтра" in BOT_SOURCE
     assert "Пропуск записал как данные" in BOT_SOURCE
+    assert "Ок. Не будем повторять навык, который сейчас не ложится." in BOT_SOURCE
+    assert "Задача, карта и прогресс сохранятся." in BOT_SOURCE
     assert "start_safety_interceptor(m, u, text, \"global_button\", explicit=True)" in BOT_SOURCE
 
     for key in ("marsha", "skinny", "beck"):

@@ -994,6 +994,7 @@ kb_training_main = ReplyKeyboardMarkup(
 kb_more_actions = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🔁 Заменить навык"), KeyboardButton(text="😑 Ты меня не понял")],
         [KeyboardButton(text="⬅️ Назад")],
     ],
@@ -1044,11 +1045,13 @@ kb_day_core_stop = ReplyKeyboardMarkup(
 
 kb_failed = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📱 Ушёл в телефон / YouTube")],
         [KeyboardButton(text="😬 Страшно, стыдно, боюсь ошибиться")],
-        [KeyboardButton(text="🧠 Слишком много всего")],
+        [KeyboardButton(text="📱 Ушёл в телефон / YouTube")],
         [KeyboardButton(text="🔋 Нет сил")],
+        [KeyboardButton(text="🧠 Слишком много всего")],
+        [KeyboardButton(text="🤷 Не понимаю, зачем это делать")],
         [KeyboardButton(text="🎙️ Опишу голосом или текстом")],
+        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -1469,7 +1472,7 @@ kb_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Да, в точку"), KeyboardButton(text="😑 Ты меня не понял")],
         [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="💪 Давай действие")],
-        [KeyboardButton(text="🔄 Сменить тренера")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
     ],
     resize_keyboard=True
 )
@@ -1496,7 +1499,7 @@ kb_working_map = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➡️ Переходим к первому навыку")],
         [KeyboardButton(text="📚 Подробнее"), KeyboardButton(text="😑 Ты меня не понял")],
-        [KeyboardButton(text="🔄 Сменить тренера")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
     ],
     resize_keyboard=True
 )
@@ -1504,9 +1507,10 @@ kb_working_map = ReplyKeyboardMarkup(
 
 kb_trainer_switch = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🐈‍⬛ Скинни"), KeyboardButton(text="🐈 Марша")],
-        [KeyboardButton(text="🐈‍🦁 Бек")],
-        [KeyboardButton(text="⬅️ Назад")],
+        [KeyboardButton(text="🤍 Марша — мягко")],
+        [KeyboardButton(text="🐈‍⬛ Скинни — чётко")],
+        [KeyboardButton(text="🧠 Бек — с объяснениями")],
+        [KeyboardButton(text="↩️ Оставить текущего тренера")],
     ],
     resize_keyboard=True
 )
