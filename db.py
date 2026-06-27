@@ -1210,6 +1210,7 @@ USER_FIELDS = [
     "day_closed",
     "today_closed",
     "last_day_closed_at",
+    "day_status",
     "current_day_id",
     "current_session_id",
     "daily_skill_id",
@@ -1226,6 +1227,7 @@ USER_FIELDS = [
     "full_mode_until",
     "full_mode_plan_json",
     "pending_feedback_json",
+    "current_screen_id",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1369,6 +1371,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "day_closed": 0,
         "today_closed": 0,
         "last_day_closed_at": None,
+        "day_status": "open",
         "current_day_id": None,
         "current_session_id": None,
         "daily_skill_id": None,
@@ -1385,6 +1388,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "full_mode_until": None,
         "full_mode_plan_json": None,
         "pending_feedback_json": None,
+        "current_screen_id": None,
     }
 
 async def init_db(db_path: str):
@@ -1463,6 +1467,10 @@ async def init_db(db_path: str):
                 current_action_id TEXT,
                 last_simplification_modality TEXT,
                 success_repeat_count INTEGER DEFAULT 0,
+                day_closed INTEGER DEFAULT 0,
+                today_closed INTEGER DEFAULT 0,
+                last_day_closed_at TEXT,
+                day_status TEXT DEFAULT 'open',
                 current_day_id TEXT,
                 current_session_id TEXT,
                 daily_skill_id TEXT,
@@ -1478,7 +1486,8 @@ async def init_db(db_path: str):
                 full_mode_started_at TEXT,
                 full_mode_until TEXT,
                 full_mode_plan_json TEXT,
-                pending_feedback_json TEXT
+                pending_feedback_json TEXT,
+                current_screen_id TEXT
             )
             """
         )
@@ -1751,6 +1760,7 @@ EXTRA_USER_COLS = {
     "day_closed": "INTEGER DEFAULT 0",
     "today_closed": "INTEGER DEFAULT 0",
     "last_day_closed_at": "TEXT",
+    "day_status": "TEXT DEFAULT 'open'",
     "current_day_id": "TEXT",
     "current_session_id": "TEXT",
     "daily_skill_id": "TEXT",
@@ -1766,7 +1776,8 @@ EXTRA_USER_COLS = {
     "full_mode_started_at": "TEXT",
     "full_mode_until": "TEXT",
     "full_mode_plan_json": "TEXT",
-    "pending_feedback_json": "TEXT"
+    "pending_feedback_json": "TEXT",
+    "current_screen_id": "TEXT"
 }
 
 async def migrate_db(db_path: str):
@@ -2517,6 +2528,30 @@ def profile_contradiction_prompt(profile: Dict[str, Any]) -> str:
     )
 
 
+
+
+def _skill_status_wording(status: str) -> str:
+    return {
+        "proposed": "Пока проверяем, помогает ли этот вход.",
+        "tested_once": "Пока проверяем, помогает ли этот вход.",
+        "promising": "Есть первый сигнал, что этот шаг может помогать.",
+        "confirmed": "Этот вход уже несколько раз помог тебе вернуться к задаче.",
+        "not_helpful": "Этот навык пока не дал эффекта. Не будем повторять его автоматически.",
+    }.get(str(status or "proposed"), "Пока проверяем, помогает ли этот вход.")
+
+
+def _skill_map_lines_from_object(skill_map: Any, limit: int = 5) -> str:
+    skills = skill_map.get("skills") if isinstance(skill_map, dict) else []
+    if not isinstance(skills, list) or not skills:
+        return "— пока нет проверенных навыков: первый вход только выбираем"
+    lines = []
+    for item in skills[:limit]:
+        if not isinstance(item, dict):
+            continue
+        skill_id = item.get("skill_id") or "open_only"
+        lines.append(f"— {_human_skill_label(skill_id)}: {_skill_status_wording(str(item.get('status') or 'proposed'))}")
+    return "\n".join(lines) if lines else "— пока нет проверенных навыков: первый вход только выбираем"
+
 def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
     profile = normalize_user_profile(profile or {})
     events = _normalize_user_model_events(profile)
@@ -2532,19 +2567,8 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
     for item in _as_list(profile.get("secondary_hypotheses")):
         hypotheses = _merge_unique_list(hypotheses, [f"Мы проверяем, может ли {item}"], limit=8)
 
-    attempted = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_attempted"]
-    helpful = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_confirmed_helpful"]
-    not_helpful = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_not_helpful"]
-
-    checked = []
-    for item in attempted:
-        checked.append(f"попробовал(а) «{item}»; эффекта пока не знаем")
-    for item in helpful:
-        checked.append(f"Пока похоже, что этот шаг помогает: «{item}»")
-    for item in not_helpful:
-        checked.append(f"«{item}» пока не подошёл / не помог")
-    if int(profile.get("action_done_count") or 0) and not checked:
-        checked.append("ты сделал(а) один микро-подход; этого пока недостаточно, чтобы назвать навык рабочим")
+    skill_map = profile.get("_skill_map") if isinstance(profile, dict) else {}
+    checked_text = _skill_map_lines_from_object(skill_map)
 
     offered = [_event_skill_text(e) for e in events if e["event_type"] == "intervention_offered"]
     legacy_offered = _merge_unique_list(
@@ -2552,18 +2576,21 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
         profile.get("successful_skills"),
         limit=8,
     )
+    known_skill_labels = {_human_skill_label((item or {}).get("skill_id")) for item in (skill_map.get("skills") if isinstance(skill_map, dict) else []) or [] if isinstance(item, dict)}
     for item in legacy_offered:
         label_text = _human_skill_label(item)
-        if label_text and label_text not in helpful and label_text not in attempted:
+        if label_text and label_text not in known_skill_labels:
             offered = _merge_unique_list(offered, [label_text], limit=8)
 
     cannot_assert = []
-    for item in offered:
-        cannot_assert.append(f"что «{item}» помогает — это пока только предложено/проверяется")
-    if not helpful:
-        cannot_assert.append("какой навык стабильно помогает — данных пока мало")
-    for item in [x for x in not_helpful if x]:
-        cannot_assert.append(f"что «{item}» подходит — есть отрицательный сигнал")
+    skills = skill_map.get("skills") if isinstance(skill_map, dict) else []
+    for item in skills or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") in {"proposed", "tested_once"}:
+            cannot_assert.append(f"что «{_human_skill_label(item.get('skill_id'))}» стабильно помогает — пока проверяем")
+    if not cannot_assert:
+        cannot_assert.append("выводы строим только по статусам навыков выше")
 
     contradiction = profile_contradiction_prompt(profile)
     next_test = "выяснить, что появляется раньше: страх оценки, потеря смысла или перегруз"
@@ -2579,7 +2606,7 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
         "Что пока похоже на гипотезу:\n"
         f"{_map_bullets(hypotheses, 'пока есть гипотеза, что вход в задачу становится слишком большим')}\n\n"
         "Что уже проверили:\n"
-        f"{_map_bullets(checked, 'пока не было подтверждённой попытки с отметкой эффекта')}\n\n"
+        f"{checked_text}\n\n"
         "Что пока нельзя утверждать:\n"
         f"{_map_bullets(cannot_assert, 'пока нельзя уверенно назвать рабочий навык')}\n\n"
         "Следующий короткий тест:\n"
