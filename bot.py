@@ -1158,7 +1158,8 @@ def _trainer_mode_map_text(profile: Dict[str, Any]) -> str:
 
 
 def _working_map_behavior_records_text(profile: Dict[str, Any]) -> str:
-    success = _profile_skill_list_text(profile, "successful_skills", "пока проверяем первые навыки")
+    completed_unknown = _profile_skill_list_text(profile, "completed_skills_effect_unknown", "пока нет выполненных навыков без оценки")
+    success = _profile_skill_list_text(profile, "successful_skills", "пока нет навыков с подтверждённым облегчением")
     failed = _profile_skill_list_text(profile, "failed_skills", "пока явных провалов навыков нет")
     main = profile.get("main_hypothesis") or "рабочая гипотеза уточняется"
     trainer_line = _trainer_mode_map_text(profile)
@@ -1166,7 +1167,9 @@ def _working_map_behavior_records_text(profile: Dict[str, Any]) -> str:
     return (
         "Что проверяли действиями:\n"
         f"— исходная гипотеза: {main}\n\n"
-        "Что уже сработало:\n"
+        "Выполнено, эффект пока не оценён:\n"
+        f"{completed_unknown}\n\n"
+        "Подтверждённо облегчило старт:\n"
         f"{success}\n\n"
         "Что не подошло или потребовало упрощения:\n"
         f"{failed}"
@@ -2383,8 +2386,8 @@ def apply_engine_updates(u: Dict[str, Any], screen: Dict[str, Any]):
 
 
 CONTEXT_FALLBACK_TEXT = (
-    "Похоже, я потерял контекст прошлого шага.\n"
-    "Не буду делать вид, что понял.\n\n"
+    "Старый экран уже не актуален.\n"
+    "Покажу следующий доступный вариант или закроем день без повтора.\n\n"
     "Что сейчас нужнее?"
 )
 
@@ -2494,9 +2497,9 @@ STATE_OFFER_SCREEN = "OFFER_SCREEN"
 ACTIVE_ACTION_STATES = {STATE_ACTION_ACTIVE, STATE_AWAITING_RESULT, STATE_AWAITING_STUCK_REASON}
 ACTION_OUTCOME_BUTTONS = {"✅ Сделал", "✅ Сделал(а)", "🟡 Застрял / не вышло", "📱 Залип", "😣 Слишком сложно", "😵 Нет сил", "❌ Не сделал", "⏸ Пауза"}
 STALE_ACTION_CHANGED_TEXT = (
-    "Этот шаг уже завершён или изменился.\n\n"
-    "Нажми «💪 Дать следующий шаг» —\n"
-    "я покажу актуальный вариант."
+    "На сегодня достаточно.\n"
+    "Ты уже сделал доступный шаг.\n"
+    "Следующий навык откроется завтра."
 )
 
 
@@ -2522,7 +2525,17 @@ def set_current_state(u: Dict[str, Any], state: str, *, new_action: bool = False
 
 
 def mark_action_card_active(u: Dict[str, Any]) -> str:
+    u["daily_skill_status"] = "in_progress"
     return set_current_state(u, STATE_AWAITING_RESULT, new_action=True)
+
+
+def mark_current_skill_status(u: Dict[str, Any], status: str) -> None:
+    if status in {"not_started", "in_progress", "completed", "stuck", "replaced", "closed"}:
+        u["daily_skill_status"] = status
+
+
+def current_skill_completed_or_closed(u: Dict[str, Any]) -> bool:
+    return str(u.get("daily_skill_status") or "") in {"completed", "closed"}
 
 
 def current_day_matches_active_action(u: Dict[str, Any]) -> bool:
@@ -2697,6 +2710,32 @@ async def ask_product_value_feedback(m: Message, u: Dict[str, Any], *, before_of
     return True
 
 
+def unclear_skill_simplification_text(u: Dict[str, Any]) -> str:
+    task = current_task_title(u, "").strip()
+    if not task:
+        concrete = "открой место, где обычно лежит эта задача, и ничего не меняй"
+        example = "открой файл с резюме и ничего в нём не меняй"
+    else:
+        concrete = f"открой место для задачи «{task}» и ничего в нём не меняй"
+        example = f"открой файл или страницу для «{task}» и просто посмотри 10 секунд"
+    return (
+        "Понял. Я объяснил слишком абстрактно.\n"
+        "Сейчас только одно действие:\n"
+        f"{concrete}.\n\n"
+        f"Например: {example}.\n\n"
+        "Нажми:\n"
+        "✅ Открыл(а)\n"
+        "🟡 Не смог(ла)"
+    )
+
+
+def kb_unclear_skill_simplified() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="✅ Открыл(а)"), KeyboardButton(text="🟡 Не смог(ла)")]],
+        resize_keyboard=True,
+    )
+
+
 async def save_feedback_answer(u: Dict[str, Any], feedback_type: str, value: str, *, comment: str = "", metadata: Optional[Dict[str, Any]] = None) -> None:
     ctx = feedback_context(u, metadata)
     await record_user_feedback(
@@ -2726,6 +2765,13 @@ async def handle_feedback_response(m: Message, u: Dict[str, Any], text: str) -> 
         }
         value = values.get(text, "free_text")
         await save_feedback_answer(u, "feedback_instruction_clarity", value, comment="" if text in values else text)
+        if value == "unclear":
+            u["stage"] = "downscale_action"
+            mark_current_skill_status(u, "stuck")
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "feedback", "instruction_unclear_simplified", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, unclear_skill_simplification_text(u), kb_unclear_skill_simplified(), "unclear_skill_simplified")
+            return True
         u["stage"] = "success_menu"
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, "Спасибо, записал для улучшения теста.", kb_success_next, "success_menu")
@@ -3196,6 +3242,7 @@ async def send_stuck_reason_skill(m: Message, u: Dict[str, Any], code: str, *, u
         await send_repeated_simplification_body_reset(m, u, original_code=code, user_text=user_text)
         return
     skill_id = config["skill_id"] if config["skill_id"] in SKILLS_DB else DOWNSCALE_PRIMARY_SKILL
+    mark_current_skill_status(u, "stuck")
     u["stage"] = "downscale_action"
     u["last_simplification_modality"] = modality
     u["skill_variant_label"] = config["skill_name"]
@@ -3543,6 +3590,9 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
     idx = max(0, min(len(plan) - 1, day - 1))
     plan[idx] = new_sid
     u["plan_json"] = json.dumps(plan, ensure_ascii=False)
+    previous_sid = current_skill_for_action(u)
+    u["previous_replaced_skill_id"] = previous_sid
+    u["previous_replaced_skill_status"] = "replaced"
     u["stage"] = "training"
     u["current_skill"] = new_sid
     u["current_skill_variant"] = new_sid
@@ -3550,7 +3600,7 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
     u["pending_skill_day"] = day
     u["daily_skill_id"] = new_sid
     u["daily_skill_name"] = (SKILLS_DB.get(new_sid) or {}).get("name") or new_sid
-    u["daily_skill_status"] = "active"
+    u["daily_skill_status"] = "in_progress"
     replace_day_core_skill(u, new_sid)
     await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=new_sid, skill_name=u["daily_skill_name"])
     await bot_record_action_event(u, "skill_changed", skill_id=new_sid, metadata={"reason": replacement_reason_code(reason), "raw_reason": reason})
@@ -3683,6 +3733,9 @@ async def apply_skill_change(
         idx = max(0, min(len(plan) - 1, day - 1))
         plan[idx] = new_sid
         u["plan_json"] = json.dumps(plan, ensure_ascii=False)
+    previous_sid = current_skill_for_action(u)
+    u["previous_replaced_skill_id"] = previous_sid
+    u["previous_replaced_skill_status"] = "replaced"
     u["stage"] = "training"
     u["current_skill"] = new_sid
     u["current_skill_variant"] = new_sid
@@ -3690,7 +3743,7 @@ async def apply_skill_change(
     u["pending_skill_day"] = day
     u["daily_skill_id"] = new_sid
     u["daily_skill_name"] = new_name
-    u["daily_skill_status"] = "active"
+    u["daily_skill_status"] = "in_progress"
     replace_day_core_skill(u, new_sid)
     await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=new_sid, skill_name=new_name)
     await bot_record_action_event(
@@ -3815,22 +3868,23 @@ def profile_patch_from_diagnosis(comp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
+    attempts = _real_attempts_count(summary, profile) if "_real_attempts_count" in globals() else int(summary.get("done_count") or 0)
     points: List[str] = []
     if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
-        points.append("легче заходишь через маленький шаг")
+        points.append("похоже, маленький шаг может снижать входной порог")
     if (
         profile.get("shame_signal")
         or profile.get("emotional_trigger") == "shame_or_anxiety"
         or profile.get("main_pattern") == "shame_self_attack"
     ):
-        points.append("самокритика после откладывания заметно влияет на старт")
+        points.append("возможно, самокритика после откладывания влияет на старт")
     if (
         profile.get("avoidance_reason") == "fear_of_bad_result"
         or profile.get("main_pattern") == "anxiety_avoidance"
     ):
-        points.append("страх ошибки или оценки выше среднего")
+        points.append("похоже, страх ошибки или оценки стоит проверить отдельно")
     if int(summary.get("return_count") or profile.get("return_count") or 0) > 0:
-        points.append("возврат после срыва уже начал тренироваться")
+        points.append("есть факт возврата после срыва; это можно тренировать дальше")
     if (
         profile.get("preferred_activation") == "body_doubling"
         or profile.get("best_skill") == "body_doubling_plan"
@@ -3846,11 +3900,11 @@ def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any])
         or profile.get("best_skill")
         or profile.get("last_successful_skill")
     )
-    if best_skill:
-        points.append(f"уже есть первый рабочий навык: {_skill_label(str(best_skill))}")
+    if best_skill and attempts >= 3:
+        points.append(f"есть навык с подтверждённым облегчением: {_skill_label(str(best_skill))}")
 
     fallback = [
-        "легче заходишь через маленький шаг",
+        "возможно, легче заходить через маленький шаг",
         "самокритика после откладывания может усиливать ступор",
         "страх оценки или ошибки пока остаётся важной гипотезой",
     ]
@@ -3862,24 +3916,40 @@ def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any])
     return points[:5]
 
 
+def _real_attempts_count(summary: Dict[str, Any], profile: Dict[str, Any]) -> int:
+    return max(
+        int(summary.get("done_count") or profile.get("done_count") or 0),
+        int(profile.get("action_done_count") or 0),
+        len(_profile_list(profile.get("completed_skills_effect_unknown"))),
+        len(_profile_list(profile.get("successful_skills"))),
+    )
+
+
 def _day3_offer_success_points(summary: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
+    attempts = _real_attempts_count(summary, profile)
+    if attempts < 3:
+        return [
+            "появились первые гипотезы, но данных пока мало",
+            "нужно проверить реакции на нескольких реальных попытках",
+            "полный режим нужен, чтобы не давать случайные советы",
+        ]
     points: List[str] = []
     if int(summary.get("return_count") or profile.get("return_count") or 0) > 0:
-        points.append("ты возвращался к действию после залипания")
+        points.append("есть факт возврата к действию после залипания")
     if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
-        points.append("уменьшение шага сработало лучше, чем давление")
+        points.append("похоже, уменьшение шага стоит проверить дальше")
     preferred = summary.get("preferred_activation") or profile.get("preferred_activation")
     if preferred in {"small_visible_step", "phone_away", "body_doubling"} or profile.get("best_skill"):
-        points.append("тебе подходят короткие физические входы")
+        points.append("короткие физические входы выглядят перспективной гипотезой")
     if profile.get("avoidance_reason") == "fear_of_bad_result" or profile.get("main_pattern") in {"anxiety_avoidance", "shame_self_attack"}:
-        points.append("страх ошибки заметно влияет на запуск")
+        points.append("похоже, страх ошибки может влиять на запуск")
     if int(summary.get("done_count") or profile.get("done_count") or profile.get("action_done_count") or 0) > 0:
-        points.append("когда задача становится безопасной, движение появляется")
+        points.append("есть факт выполненного шага; эффект проверяем отдельно")
     fallback = [
         "ты уже начал собирать данные о своём запуске",
-        "короткий шаг выглядит перспективнее давления",
-        "страх ошибки заметно влияет на запуск",
-        "когда задача становится безопасной, движение появляется",
+        "короткий шаг выглядит перспективной гипотезой",
+        "страх оценки или ошибки пока остаётся гипотезой",
+        "нужно проверить, когда движение появляется легче",
     ]
     for item in fallback:
         if len(points) >= 5:
@@ -3891,26 +3961,42 @@ def _day3_offer_success_points(summary: Dict[str, Any], profile: Dict[str, Any])
 
 def _day3_offer_breakdown_point(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
     if summary.get("attention_pattern") == "scroll_autopilot" or int(summary.get("attention_escape_count") or 0) > 0:
-        return "чаще всего срыв повторяется в уходе в быстрый стимул, когда задача становится тревожной или слишком большой"
+        return "похоже, важная задача вызывает напряжение, а затем хочется уйти в быстрый стимул"
     if profile.get("main_pattern") in {"shame_self_attack", "anxiety_avoidance"}:
-        return "срыв повторяется там, где страх ошибки или стыд делает вход слишком дорогим"
+        return "возможно, страх ошибки или стыд делают вход дороже; это нужно проверить"
     if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
-        return "срыв повторяется, когда шаг слишком большой и мозг не видит безопасного входа"
-    return "срыв повторяется в моменте входа: важная задача становится слишком дорогой, и мозг ищет временное облегчение"
+        return "похоже, шаг может быть слишком большим; нужно проверить меньший вход"
+    return "пока данных мало: проверяем, что происходит в моменте входа в важную задачу"
 
 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
     observations = _day3_offer_profile_points(summary, profile)
-    observations_text = "\n".join(f"— {p};" for p in observations[:5]) or "— уже появились первые данные о твоём цикле запуска;"
+    observations_text = "\n".join(f"— {p};" for p in observations[:5]) or "— появились первые гипотезы, но данных пока мало;"
     success_points = _day3_offer_success_points(summary, profile)
     success_text = "\n".join(f"✔ {p};" for p in success_points[:5])
     breakdown = _day3_offer_breakdown_point(summary, profile)
+    attempts = _real_attempts_count(summary, profile)
+    if attempts < 3:
+        return (
+            "🧭 За первые дни появились первые гипотезы.\n\n"
+            "Пока данных мало, но похоже, что важная задача вызывает напряжение, "
+            "а затем хочется уйти в быстрый стимул.\n\n"
+            "Это ещё не вывод о тебе. Это то, что нужно проверить на реальных попытках.\n\n"
+            "Что уже есть в данных:\n"
+            f"{observations_text}\n\n"
+            "Что проверяем дальше:\n"
+            f"{success_text}\n\n"
+            "Полный режим нужен, чтобы проверить это на реальных попытках и не давать случайные советы.\n\n"
+            "Бесплатный режим остаётся: 1 базовый навык в день, короткая карта, кризисная самопомощь и закрытие дня.\n\n"
+            "Цена: 14.98 €/месяц.\n\n"
+            "Можно остаться бесплатно без стыда — короткий режим и карта останутся."
+        )
     return (
         "🧭 За первые дни карта уже начала собираться.\n"
-        "За первые дни я уже вижу несколько паттернов.\n\n"
-        "Я вижу не просто “ты прокрастинируешь”.\n"
-        "Вижу твой цикл:\n"
-        "важная задача → тревога/стыд → задача кажется слишком большой → уход в быстрый стимул → временное облегчение → вина → ещё сложнее вернуться.\n\n"
+        "За первые дни появились первые проверяемые паттерны.\n\n"
+        "Пока это не окончательный вывод о тебе.\n"
+        "Рабочая гипотеза:\n"
+        "важная задача → напряжение → хочется уйти в быстрый стимул → временное облегчение → сложнее вернуться.\n\n"
         "Наблюдения по твоим данным:\n"
         f"{observations_text}\n\n"
         "Что у тебя уже получилось:\n"
@@ -3920,7 +4006,7 @@ def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -
         "Что мы предлагаем дальше:\n"
         "не давать тебе случайные советы,\n"
         "а собирать твою личную систему запуска:\n"
-        "— какие шаги реально работают;\n"
+        "— какие шаги реально работают или не подходят;\n"
         "— какие состояния ломают вход;\n"
         "— какой формат поддержки подходит;\n"
         "— когда нужен плохой черновик;\n"
@@ -4137,7 +4223,7 @@ def build_full_mode_plan(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str
         hypotheses.append(str(profile.get("main_hypothesis")))
     hypotheses.extend(_profile_list_values(profile.get("secondary_hypotheses"), 3))
     hypotheses = list(dict.fromkeys([x for x in hypotheses if x]))[:4]
-    task = current_task_title(u, "текущей задаче")
+    task = current_task_title(u, "выбранной задаче")
     step = str(u.get("current_next_physical_step") or "").strip()
     if not facts:
         facts = ["пока данных мало: есть только первые ответы и нажатия"]
@@ -4191,7 +4277,12 @@ async def send_full_mode_welcome(m: Message, u: Dict[str, Any]):
     plan = build_full_mode_plan(u, profile)
     u["full_mode_plan_json"] = json.dumps(plan, ensure_ascii=False)
     await save_user(u, DB_PATH)
-    await m.answer(full_mode_welcome_text(plan), reply_markup=kb_full_mode_experiment)
+    await m.answer(
+        "Полный режим включён для теста.\n"
+        "Теперь бот будет глубже собирать повторяющиеся причины срывов и давать недельный маршрут.\n"
+        "Следующий персональный шаг — когда ты нажмёшь «Продолжить».",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True),
+    )
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -4653,13 +4744,15 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     u["has_started_training"] = 1
     u["today_started"] = 1
     u["day_closed"] = 0
+    u["daily_session_id"] = f"day_{uuid.uuid4().hex[:12]}"
+    u["current_action_id"] = None
     u["current_skill"] = sid
     u["current_skill_variant"] = skill.get("variant") or sid
     u["pending_skill_id"] = sid
     u["pending_skill_day"] = day
     u["daily_skill_id"] = sid
     u["daily_skill_name"] = skill.get("name") or sid
-    u["daily_skill_status"] = "active"
+    u["daily_skill_status"] = "in_progress"
     if not u.get("current_task_title"):
         u["today_target"] = None
     replace_day_core_skill(u, sid)
@@ -4683,6 +4776,7 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
         },
         source=f"new_day_skill_{source}",
     )
+    await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": source, "day": day})
     await log_event(u["user_id"], "training", "new_day_skill_opened", {"day": day, "skill_id": sid, "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
     await answer_with_keyboard(m, u, build_new_day_intro(u, skill, profile), action_keyboard(), "new_day_skill")
 
@@ -4728,29 +4822,31 @@ def day_closed_today(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None
 
 async def get_honest_day_counts(u: Dict[str, Any]) -> Dict[str, int]:
     day_id = str(u.get("current_day_id") or "")
-    raw_counts = {"attempt_completed_self_reported": 0, "stuck_reason_selected": 0, "returned_after_slip": 0, "step_reduced": 0}
+    raw_counts = {"attempt_started": 0, "stuck_reason_selected": 0, "returned_after_slip": 0, "skill_changed": 0}
     if day_id:
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
-                "SELECT event_type, COUNT(*) FROM action_events WHERE user_id=? AND day_id=? AND event_type IN ('attempt_completed_self_reported', 'stuck_reason_selected', 'returned_after_slip', 'step_reduced') GROUP BY event_type",
+                "SELECT event_type, COUNT(*) FROM action_events WHERE user_id=? AND day_id=? AND event_type IN ('attempt_started', 'stuck_reason_selected', 'returned_after_slip', 'skill_changed') GROUP BY event_type",
                 (u["user_id"], day_id),
             )
             for event_type, count in await cur.fetchall():
                 raw_counts[str(event_type)] = int(count or 0)
     return {
-        "completed_actions_today": raw_counts["attempt_completed_self_reported"],
+        "completed_actions_today": raw_counts["attempt_started"],
         "stuck_events_today": raw_counts["stuck_reason_selected"],
         "returns_today": raw_counts["returned_after_slip"],
-        "simplifications_today": raw_counts["step_reduced"],
+        "skill_changes_today": raw_counts["skill_changed"],
     }
 
 
 async def day_close_metrics_text(u: Dict[str, Any]) -> str:
     counts = await get_honest_day_counts(u)
+    stuck_line = f"Застреваний: {counts['stuck_events_today']}."
     return (
         f"Сегодня ты сделал: {counts['completed_actions_today']} попыток.\n"
-        f"Один раз застрял: {counts['stuck_events_today']}.\n"
-        f"Вернулся после паузы: {counts['returns_today']}.\n\n"
+        f"{stuck_line}\n"
+        f"Вернулся после паузы: {counts['returns_today']}.\n"
+        f"Сменил навык: {counts['skill_changes_today']}.\n\n"
         "Это не оценка продуктивности.\n"
         "Это данные о том, как тебе легче начинать.\n\n"
         "До завтра. Новый навык откроется после смены календарного дня."
@@ -4777,6 +4873,7 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
     u["day_closed"] = 1
     u["today_closed"] = 1
     u["last_day_closed_at"] = today
+    mark_current_skill_status(u, "closed")
     try:
         summary_counts = await get_honest_day_counts(u)
         if summary_counts.get("completed_actions_today", 0) > 0 and not int(u.get("streak_counted_today") or 0):
@@ -4800,6 +4897,9 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
 async def send_current_skill(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None):
     user = user or await get_user(user_id, DB_PATH)
     profile = await get_user_profile(user_id, DB_PATH)
+    if current_skill_completed_or_closed(user):
+        await answer_with_keyboard(message, user, STALE_ACTION_CHANGED_TEXT, kb_day_core_stop, "day_core_stop")
+        return
     sid = current_skill_for_action(user)
     if not sid:
         await start_new_day(user_id, message, user, "action_request_no_current_skill")
@@ -4815,7 +4915,7 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
     user["pending_skill_day"] = int(user.get("day") or 1)
     user["daily_skill_id"] = sid
     user["daily_skill_name"] = skill.get("name") or sid
-    user["daily_skill_status"] = "active"
+    user["daily_skill_status"] = "in_progress"
     user["success_repeat_count"] = 0
     if user.get("day_core_skill_id") != sid:
         replace_day_core_skill(user, sid)
@@ -4838,6 +4938,9 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
     if day_closed_today(user, profile):
         await message.answer(enough_for_today_text(), reply_markup=kb_day_core_stop)
         return
+    if current_skill_completed_or_closed(user):
+        await answer_with_keyboard(message, user, STALE_ACTION_CHANGED_TEXT, kb_day_core_stop, "day_core_stop")
+        return
     if not current_skill_for_action(user):
         await start_new_day(user_id, message, user, "action_request_no_current_skill")
         return
@@ -4852,7 +4955,8 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
         await save_user(user, DB_PATH)
         skill = dict(SKILLS_DB[sid])
         skill.setdefault("skill_id", sid)
-        await log_event(user_id, "training", "skill_attempt_started", {"attempt_id": attempt_id, "day_id": user.get("current_day_id"), "skill_id": sid, "action_id": user.get("current_action_id"), "state_version": user.get("state_version")}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await bot_record_action_event(user, "attempt_started", skill_id=sid, metadata={"source": "repeat_attempt", "attempt_id": attempt_id})
+        await log_event(user_id, "training", "attempt_started", {"attempt_id": attempt_id, "day_id": user.get("current_day_id"), "skill_id": sid, "action_id": user.get("current_action_id"), "state_version": user.get("state_version")}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_keyboard(message, user, build_current_skill_text(skill, "Ещё одна попытка сегодня. Продолжаем тот же навык.", user), action_keyboard(), "new_day_skill")
         return
     await send_current_skill(user_id, message, user)
@@ -5925,6 +6029,14 @@ async def close_day_from_global_button(m: Message, u: Dict[str, Any], source: st
 async def handle_full_mode_buttons(m: Message, u: Dict[str, Any], text: str) -> bool:
     if not int(u.get("full_mode") or 0):
         return False
+    if text == "Продолжить":
+        if not str(u.get("current_task_title") or u.get("today_target") or "").strip() or str(u.get("today_target") or "") == "__target_not_selected__":
+            u["stage"] = "await_training_target"
+            await save_user(u, DB_PATH)
+            await m.answer("На какой одной задаче сегодня проверим новый шаг?")
+            return True
+        await handle_action_request(u["user_id"], m, u)
+        return True
     if text not in {"📩 Скопировать текст", "✅ Отправил(а)", "↩️ Хочу другой шаг"}:
         return False
     try:
@@ -6729,6 +6841,7 @@ async def main_flow(m: Message):
                 previous_done = int(u.get("done_count") or 0)
                 u["done_count"] = previous_done + 1
                 mark_day_core_round_done(u)
+                mark_current_skill_status(u, "completed")
                 set_current_state(u, STATE_PAUSED, close_action=True)
                 gamify_apply(u, 2, "downscale_done")
                 u["stage"] = "waiting_next_day"
@@ -6742,14 +6855,14 @@ async def main_flow(m: Message):
                 sid = current_skill_id(u) or DOWNSCALE_PRIMARY_SKILL
                 await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "downscale_done"})
                 await record_profile_signal(u["user_id"], "training", {
-                    "best_skill": sid,
-                    "last_successful_skill": sid,
+                    "last_completed_skill": sid,
+                    "last_skill_effect": "unknown",
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                     **_today_profile_counter_patch(profile, "action_done_count_today", "action_done_count_date"),
                 }, source="downscale_done")
                 await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "after_downscale": True, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
-                await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
+                await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
                     return
@@ -6762,6 +6875,7 @@ async def main_flow(m: Message):
                 previous_done = int(u.get("done_count") or 0)
                 u["done_count"] = previous_done + 1
                 mark_day_core_round_done(u)
+                mark_current_skill_status(u, "completed")
                 set_current_state(u, STATE_PAUSED, close_action=True)
                 gamify_apply(u, 2, "downscale_done")
                 u["stage"] = "waiting_next_day"
@@ -6775,14 +6889,14 @@ async def main_flow(m: Message):
                 sid = current_skill_id(u) or DOWNSCALE_PRIMARY_SKILL
                 await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "downscale_name_done"})
                 await record_profile_signal(u["user_id"], "training", {
-                    "best_skill": sid,
-                    "last_successful_skill": sid,
+                    "last_completed_skill": sid,
+                    "last_skill_effect": "unknown",
                     "preferred_activation": "small_visible_step",
                     "action_done_count": int(profile.get("action_done_count") or 0) + 1,
                     **_today_profile_counter_patch(profile, "action_done_count_today", "action_done_count_date"),
                 }, source="downscale_done")
                 await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "after_downscale": True, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
-                await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
+                await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
                 if should_show_day3_offer(u, int(u.get("day") or 1)):
                     await show_day3_offer(m, u, "day3_auto")
                     return
@@ -6836,8 +6950,13 @@ async def main_flow(m: Message):
         if "clarity_up" in effect_tags:
             effect_patch["effect_clarity"] = True
         sid = current_skill_id(u)
-        await record_profile_signal(u["user_id"], "training", {**effect_patch, "best_skill": sid, "last_successful_skill": sid}, source="after_action_note_saved")
-        await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
+        helpful = bool({"relief", "confidence_up", "anxiety_down", "clarity_up"} & set(effect_tags))
+        skill_patch = {"last_effect_note": note, "last_skill_effect": "helpful" if helpful else "unknown"}
+        if helpful:
+            skill_patch.update({"best_skill": sid, "last_successful_skill": sid})
+        await record_profile_signal(u["user_id"], "training", {**effect_patch, **skill_patch}, source="after_action_note_saved")
+        if helpful:
+            await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
         await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note), "effect_tags": effect_tags}, DB_PATH, SHEETS_WEBHOOK_URL)
         await send_success_menu(m, u, source="after_action_note")
         return
@@ -7566,6 +7685,7 @@ async def main_flow(m: Message):
             previous_done = int(u.get("done_count") or 0)
             u["done_count"] = previous_done + 1
             mark_day_core_round_done(u)
+            mark_current_skill_status(u, "completed")
             set_current_state(u, STATE_PAUSED, close_action=True)
             gamify_apply(u, 2, "done")
             apply_engine_updates(u, screen)
@@ -7581,14 +7701,14 @@ async def main_flow(m: Message):
             done_count = int(profile.get("action_done_count") or 0) + 1
             preferred_activation = "body_doubling" if sid == "body_doubling_plan" else ("phone_away" if sid == "phone_far_3min" else "small_visible_step")
             await record_profile_signal(u["user_id"], "training", {
-                "best_skill": sid,
-                "last_successful_skill": sid,
+                "last_completed_skill": sid,
+                "last_skill_effect": "unknown",
                 "preferred_activation": preferred_activation,
                 "action_done_count": done_count,
                 **_today_profile_counter_patch(profile, "action_done_count_today", "action_done_count_date"),
             }, source="action_done")
             await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
-            await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
+            await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
             await log_engine_events(u, screen)
             if should_show_day3_offer(u, day):
                 await show_day3_offer(m, u, "day3_auto")
@@ -7600,6 +7720,7 @@ async def main_flow(m: Message):
             screen = engine_handle_action_result(u, "return")
             u["return_count"] = int(u.get("return_count") or 0) + 1
             mark_day_core_round_done(u)
+            mark_current_skill_status(u, "completed")
             set_current_state(u, STATE_PAUSED, close_action=True)
             gamify_apply(u, 1, "return")
             apply_engine_updates(u, screen)

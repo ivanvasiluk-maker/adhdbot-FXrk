@@ -137,16 +137,16 @@ async def run() -> None:
             # After opening the map, the same post-action menu must still work when that button
             # belongs to the current menu; stale done-menu buttons in day_core_stop fall back.
             note_msg = await send(uid, "📌 Что изменилось?")
-            assert "потерял контекст" in last_text(note_msg).lower(), last_text(note_msg)
+            assert "старый экран" in last_text(note_msg).lower(), last_text(note_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert "Ещё одна попытка сегодня" in all_text(repeat_msg) or "потерял контекст" in last_text(repeat_msg).lower(), last_text(repeat_msg)
+        assert "Ещё одна попытка сегодня" in all_text(repeat_msg) or "старый экран" in last_text(repeat_msg).lower(), last_text(repeat_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         finish_msg = await send(uid, "⏸ Пауза")
         finish_text = all_text(finish_msg).lower()
-        assert "шаг уже завершён" in finish_text, all_text(finish_msg)
+        assert "на сегодня достаточно" in finish_text, all_text(finish_msg)
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         why_msg = await send(uid, "📚 Почему это работает")
@@ -162,14 +162,14 @@ async def run() -> None:
         # Stale buttons from another screen must not launch old branches or show an empty prompt.
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         stale_repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert "потерял контекст" in last_text(stale_repeat_msg).lower() or "день уже закрыт" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
+        assert "старый экран" in last_text(stale_repeat_msg).lower() or "день уже закрыт" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
         assert "Навык дня" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
 
         u = await get_user(uid, db_path)
         u.update({"stage": "ask_name", "name": ""})
         await save_user(u, db_path)
         stale_done_msg = await send(uid, "✅ Сделал")
-        assert "шаг уже завершён" in last_text(stale_done_msg).lower(), last_text(stale_done_msg)
+        assert "на сегодня достаточно" in last_text(stale_done_msg).lower(), last_text(stale_done_msg)
         u = await get_user(uid, db_path)
         assert not u.get("name"), u.get("name")
 
@@ -179,7 +179,7 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         more_msg = await send(uid, "Ещё")
-        assert "потерял контекст" in last_text(more_msg).lower(), last_text(more_msg)
+        assert "старый экран" in last_text(more_msg).lower(), last_text(more_msg)
 
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
@@ -249,11 +249,11 @@ async def run() -> None:
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "Ещё одна попытка сегодня" in last_text(repeat1_msg) or "день" in last_text(repeat1_msg).lower(), last_text(repeat1_msg)
         done2_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(done2_msg) or "шаг уже завершён" in last_text(done2_msg), last_text(done2_msg)
+        assert "Подход засчитан" in last_text(done2_msg) or "на сегодня достаточно" in last_text(done2_msg).lower(), last_text(done2_msg)
         repeat2_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "Ещё одна попытка сегодня" in last_text(repeat2_msg) or "день" in last_text(repeat2_msg).lower(), last_text(repeat2_msg)
         done3_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(done3_msg) or "шаг уже завершён" in last_text(done3_msg), last_text(done3_msg)
+        assert "Подход засчитан" in last_text(done3_msg) or "на сегодня достаточно" in last_text(done3_msg).lower(), last_text(done3_msg)
         limit_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "На сегодня достаточно тренировать вход" in last_text(limit_msg), last_text(limit_msg)
         assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"🌙 Закрыть подход", "💪 Другое действие"}

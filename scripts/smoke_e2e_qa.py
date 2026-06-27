@@ -155,8 +155,9 @@ async def main() -> None:
             user = await get_user(uid, db_path)
             assert int(user.get("full_mode") or 0) == 1
             assert any("Полный режим включён" in x for x in payment_msg.answers)
-            assert any("На ближайшие 3 дня мы проверим" in x for x in payment_msg.answers)
-            report.append("19-20. /simulate_payment enabled full mode and returned mini-plan")
+            assert any("Следующий персональный шаг — когда ты нажмёшь" in x for x in payment_msg.answers)
+            assert not any("На ближайшие 3 дня мы проверим" in x for x in payment_msg.answers)
+            report.append("19-20. /simulate_payment enabled full mode without auto-starting a mini-plan")
 
             user, debug_state_msg = await send_admin_command(uid, user, "/debug_state")
             assert "FSM-state:" in "\n".join(debug_state_msg.answers)
