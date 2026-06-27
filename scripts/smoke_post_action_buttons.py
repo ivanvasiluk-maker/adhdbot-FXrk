@@ -72,6 +72,10 @@ async def set_post_action_user(uid: int, db_path: str, stage: str, *, rounds: in
             "state_version": 0,
             "current_action_id": None,
             "current_day_id": "day_smoke",
+            "day_closed": 1 if stage == "day_core_stop" else 0,
+            "today_closed": 1 if stage == "day_core_stop" else 0,
+            "day_status": "closed" if stage == "day_core_stop" else "open",
+            "last_day_closed_at": bot.local_date_for_user(u) if stage == "day_core_stop" else None,
         }
     )
     await save_user(u, db_path)
@@ -137,7 +141,7 @@ async def run() -> None:
             # After opening the map, the same post-action menu must still work when that button
             # belongs to the current menu; stale done-menu buttons in day_core_stop fall back.
             note_msg = await send(uid, "📌 Что изменилось?")
-            assert "старый экран" in last_text(note_msg).lower(), last_text(note_msg)
+            assert "старый экран" in last_text(note_msg).lower() or "день уже закрыт" in last_text(note_msg).lower(), last_text(note_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         repeat_msg = await send(uid, "🔁 Ещё круг")
@@ -150,26 +154,24 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         why_msg = await send(uid, "📚 Почему это работает")
-        assert "работает" in last_text(why_msg).lower() or "повтор" in last_text(why_msg).lower(), last_text(why_msg)
+        assert "сегодняшний подход уже закрыт" in last_text(why_msg).lower(), last_text(why_msg)
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         tomorrow_msg = await send(uid, "🌙 До завтра")
-        if "Что сегодня было полезнее всего?" in all_text(tomorrow_msg):
-            tomorrow_msg = await send(uid, "🧩 Маленький конкретный шаг")
-        assert "Сегодня ты сделал:" in all_text(tomorrow_msg), all_text(tomorrow_msg)
-        assert "Это не оценка продуктивности" in all_text(tomorrow_msg), all_text(tomorrow_msg)
+        assert "День уже закрыт." in all_text(tomorrow_msg), all_text(tomorrow_msg)
+        assert "Сегодня ты сделал:" not in all_text(tomorrow_msg), all_text(tomorrow_msg)
 
         # Stale buttons from another screen must not launch old branches or show an empty prompt.
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         stale_repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert "старый экран" in last_text(stale_repeat_msg).lower() or "день уже закрыт" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
+        assert "старый экран" in last_text(stale_repeat_msg).lower() or "день уже закрыт" in last_text(stale_repeat_msg).lower() or "сегодняшний подход уже закрыт" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
         assert "Навык дня" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
 
         u = await get_user(uid, db_path)
         u.update({"stage": "ask_name", "name": ""})
         await save_user(u, db_path)
         stale_done_msg = await send(uid, "✅ Сделал")
-        assert "на сегодня достаточно" in last_text(stale_done_msg).lower(), last_text(stale_done_msg)
+        assert "на сегодня достаточно" in last_text(stale_done_msg).lower() or "день уже закрыт" in last_text(stale_done_msg).lower(), last_text(stale_done_msg)
         u = await get_user(uid, db_path)
         assert not u.get("name"), u.get("name")
 
@@ -189,6 +191,10 @@ async def run() -> None:
             "state_version": 1,
             "current_action_id": "act_smoke",
             "current_day_id": "day_smoke",
+            "day_closed": 0,
+            "today_closed": 0,
+            "day_status": "open",
+            "last_day_closed_at": None,
         })
         await save_user(u, db_path)
         stuck_msg = await send(uid, "🟡 Застрял / не вышло")
@@ -199,7 +205,7 @@ async def run() -> None:
         phone_text = last_text(phone_msg)
         assert "Телефон вне руки" in phone_text, phone_text
         assert "Отодвинуть телефон на 30 секунд" in phone_text, phone_text
-        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🔄 Сменить навык"}
+        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "🌙 Закрыть подход", "🔄 Сменить навык"}
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         u = await get_user(uid, db_path)
@@ -208,6 +214,10 @@ async def run() -> None:
             "state_version": 1,
             "current_action_id": "act_smoke_voice",
             "current_day_id": "day_smoke",
+            "day_closed": 0,
+            "today_closed": 0,
+            "day_status": "open",
+            "last_day_closed_at": None,
         })
         await save_user(u, db_path)
         await send(uid, "🟡 Застрял / не вышло")
@@ -225,7 +235,7 @@ async def run() -> None:
         repeated_text = last_text(repeated_cognitive_msg)
         assert "даже маленький шаг к задаче слишком дорогой" in repeated_text, repeated_text
         assert "положи ладонь на стол" in repeated_text, repeated_text
-        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🔄 Сменить навык"}
+        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "🌙 Закрыть подход", "🔄 Сменить навык"}
 
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
@@ -235,6 +245,13 @@ async def run() -> None:
             "state_version": 1,
             "current_action_id": "act_success",
             "current_day_id": "day_success",
+            "current_core_skill_id": "open_only",
+            "current_skill_variant_id": "open_only",
+            "current_core_skill_date": bot.local_date_for_user(u),
+            "day_core_skill_id": "open_only",
+            "day_core_skill_date": bot.local_date_for_user(u),
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
             "success_repeat_count": 0,
         })
         await save_user(u, db_path)
@@ -247,16 +264,14 @@ async def run() -> None:
             assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?"}
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
-        assert "Ещё одна попытка сегодня" in last_text(repeat1_msg) or "день" in last_text(repeat1_msg).lower(), last_text(repeat1_msg)
+        assert "Ещё 2 минуты" in last_text(repeat1_msg), last_text(repeat1_msg)
+        assert "Напиши одно слово" in last_text(repeat1_msg), last_text(repeat1_msg)
         done2_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(done2_msg) or "на сегодня достаточно" in last_text(done2_msg).lower(), last_text(done2_msg)
-        repeat2_msg = await send(uid, "➕ Ещё 2 минуты")
-        assert "Ещё одна попытка сегодня" in last_text(repeat2_msg) or "день" in last_text(repeat2_msg).lower(), last_text(repeat2_msg)
-        done3_msg = await send(uid, "✅ Сделал")
-        assert "Подход засчитан" in last_text(done3_msg) or "на сегодня достаточно" in last_text(done3_msg).lower(), last_text(done3_msg)
+        assert "Ты не обязан превращать маленький вход в марафон" in last_text(done2_msg), last_text(done2_msg)
+        assert "➕ Ещё 2 минуты" not in keyboard_texts(done2_msg.answers[-1]["reply_markup"]), keyboard_texts(done2_msg.answers[-1]["reply_markup"])
         limit_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "На сегодня достаточно тренировать вход" in last_text(limit_msg), last_text(limit_msg)
-        assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"🌙 Закрыть подход", "💪 Другое действие"}
+        assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"🌙 Закрыть подход"}
 
         help_msg = await send(uid, "🗣️ Что помогло?")
         assert "добровольный вопрос" in last_text(help_msg), last_text(help_msg)
