@@ -191,7 +191,7 @@ async def main() -> None:
             onboarding_msg = FakeMessage(uid, "Лучше бы меня не было, я не вижу выхода")
             await bot.main_flow(onboarding_msg)
             onboarding_after = await get_user(uid, bot.DB_PATH)
-            assert bot.safety_mode(onboarding_after) == "urgent"
+            assert bot.safety_mode(onboarding_after) == "active"
             assert onboarding_after["stage"] == "safety_mode"
             assert "Сейчас не режим продуктивности" in joined_answers(onboarding_msg)
             assert "Как тебя зовут" not in joined_answers(onboarding_msg)
@@ -203,7 +203,7 @@ async def main() -> None:
             task_msg = FakeMessage(task_uid, "Мне страшно оставаться одному")
             await bot.main_flow(task_msg)
             task_after = await get_user(task_uid, bot.DB_PATH)
-            assert bot.safety_mode(task_after) in {"triage", "urgent"}
+            assert bot.safety_mode(task_after) in {"triage", "active"}
             assert "Сейчас не режим продуктивности" in joined_answers(task_msg)
             assert "открыть задачу" not in joined_answers(task_msg).lower()
 
@@ -219,13 +219,13 @@ async def main() -> None:
 
             urgent_uid = 42004
             urgent_user = default_user(urgent_uid)
-            urgent_user.update({"chat_id": urgent_uid, "stage": "safety_mode", "safety_mode": "urgent", "safety_last_risk": "yes"})
+            urgent_user.update({"chat_id": urgent_uid, "stage": "safety_mode", "safety_mode": "active", "safety_last_risk": "yes"})
             await save_user(urgent_user, bot.DB_PATH)
             old_button_msg = FakeMessage(urgent_uid, "💪 Давай действие")
             await bot.main_flow(old_button_msg)
             urgent_after = await get_user(urgent_uid, bot.DB_PATH)
-            assert bot.safety_mode(urgent_after) == "urgent"
-            assert "Сейчас только безопасность" in joined_answers(old_button_msg)
+            assert bot.safety_mode(urgent_after) == "active"
+            assert "Сейчас важнее не разбираться с задачами" in joined_answers(old_button_msg)
             assert "Навык дня" not in joined_answers(old_button_msg)
 
             close_uid = 42005
@@ -234,13 +234,46 @@ async def main() -> None:
             day_id = await ensure_user_day(close_user, bot.DB_PATH, calendar_date="2026-06-26", skill_id="open_only", skill_name="Открыть задачу")
             close_user["current_day_id"] = day_id
             await save_user(close_user, bot.DB_PATH)
-            close_msg = FakeMessage(close_uid, "🛑 На сегодня достаточно")
+            close_msg = FakeMessage(close_uid, "🌙 Закрыть день без оценки")
             await bot.main_flow(close_msg)
             close_after = await get_user(close_uid, bot.DB_PATH)
             assert bot.safety_mode(close_after) == "none"
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             assert "Никаких новых навыков сейчас" in joined_answers(close_msg)
             assert "Навык дня" not in joined_answers(close_msg)
+
+            scenario_uid = 42006
+            scenario_user = default_user(scenario_uid)
+            scenario_user.update({"chat_id": scenario_uid, "stage": "training", "has_started_training": 1})
+            await save_user(scenario_user, bot.DB_PATH)
+            start_msg = FakeMessage(scenario_uid, "🆘 Мне небезопасно")
+            await bot.main_flow(start_msg)
+            uncertain_msg = FakeMessage(scenario_uid, "🟨 Не уверен(а)")
+            await bot.main_flow(uncertain_msg)
+            scenario_after_uncertain = await get_user(scenario_uid, bot.DB_PATH)
+            assert scenario_after_uncertain["safety_mode"] == "active"
+            assert "Сейчас важнее не разбираться с задачами" in joined_answers(uncertain_msg)
+
+            map_msg = FakeMessage(scenario_uid, "🧭 Моя карта")
+            await bot.main_flow(map_msg)
+            assert "Сейчас важнее не разбираться с задачами" in joined_answers(map_msg)
+            assert "Навык дня" not in joined_answers(map_msg)
+
+            wrote_msg = FakeMessage(scenario_uid, "💬 Я написал живому человеку")
+            await bot.main_flow(wrote_msg)
+            assert "Останься на связи" in joined_answers(wrote_msg)
+
+            safer_msg = FakeMessage(scenario_uid, "↩️ Стало безопаснее")
+            await bot.main_flow(safer_msg)
+            scenario_after_safer = await get_user(scenario_uid, bot.DB_PATH)
+            assert scenario_after_safer["safety_mode"] == "active"
+            assert "Сегодня не нужно возвращаться к задаче" in joined_answers(safer_msg)
+
+            later_msg = FakeMessage(scenario_uid, "🧭 Вернуться к задаче позже")
+            await bot.main_flow(later_msg)
+            scenario_after_later = await get_user(scenario_uid, bot.DB_PATH)
+            assert scenario_after_later["safety_mode"] == "inactive"
+            assert scenario_after_later["return_mode"] == "later"
         finally:
             bot.DB_PATH = old_db_path
 
@@ -272,7 +305,7 @@ async def main() -> None:
     assert "💪 Сделать следующий шаг" in short_mode_buttons
     assert "⚡ Я застрял" in short_mode_buttons
     assert "💳 Полный режим" not in short_mode_buttons
-    assert "Ограничения короткого режима" in bot.stay_free_text()
+    assert "Короткий режим остаётся рабочим" in bot.stay_free_text()
     assert bot.choose_replacement_skill({"current_skill": "open_without_timer"}, ["open_without_timer"]) != "open_without_timer"
     assert bot.day_closed_today({"today_closed": 1, "last_day_closed_at": bot.local_date_for_user({})}, {}) is True
     assert "На сегодня достаточно" in bot.enough_for_today_text()

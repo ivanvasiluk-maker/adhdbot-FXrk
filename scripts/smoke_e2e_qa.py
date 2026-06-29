@@ -130,11 +130,11 @@ async def main() -> None:
             user = await get_user(uid, db_path)
             await bot.start_safety_interceptor(crisis_msg, user, crisis_msg.text, "qa_e2e", explicit=False)
             user = await get_user(uid, db_path)
-            assert bot.safety_mode(user) in {"triage", "urgent"}
+            assert bot.safety_mode(user) in {"triage", "active"}
             assert any("Сейчас не режим продуктивности" in x for x in crisis_msg.answers)
             report.append("13-14. crisis text interrupted productivity and opened safety flow")
 
-            close_msg = FakeMessage(uid, "🛑 На сегодня достаточно")
+            close_msg = FakeMessage(uid, "🌙 Закрыть день без оценки")
             await bot.complete_safety_day(close_msg, user)
             user = await get_user(uid, db_path)
             assert await get_user_day_status(day_id, db_path) == "closed"
