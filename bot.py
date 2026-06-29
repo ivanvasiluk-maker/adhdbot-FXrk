@@ -112,9 +112,9 @@ TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
 STARTUP_CHECK = env_bool("BOT_STARTUP_CHECK")
 MAX_CRISIS_MATCHES_PER_DAY = 3
 CRISIS_WAITING_INPUT = "crisis_waiting_input"
-SAFETY_MODES = {"none", "triage", "urgent", "support"}
+SAFETY_MODES = {"none", "inactive", "triage", "active", "support"}
 SAFETY_RISK_VALUES = {"unknown", "no", "yes", "uncertain"}
-SAFETY_CONTACT_VALUES = {"not_asked", "offered", "sent_message", "called", "unavailable"}
+SAFETY_CONTACT_VALUES = {"not_asked", "offered", "sent_message", "called", "unavailable", "aftercare"}
 DEFAULT_EMERGENCY_NUMBER_BY_COUNTRY = {
     "US": "911",
     "USA": "911",
@@ -663,11 +663,30 @@ kb_safety_support_check = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_safety_crisis_actions = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="👥 Я рядом с людьми")],
+        [KeyboardButton(text="💬 Я написал живому человеку")],
+        [KeyboardButton(text="📞 Мне нужна срочная помощь")],
+        [KeyboardButton(text="🟥 Мне всё ещё небезопасно")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_safety_message_followup = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="👥 Я уже не один(одна)")],
+        [KeyboardButton(text="🟥 Мне всё ещё небезопасно")],
+        [KeyboardButton(text="↩️ Стало безопаснее")],
+    ],
+    resize_keyboard=True,
+)
+
 kb_safety_aftercare = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🛑 На сегодня достаточно")],
+        [KeyboardButton(text="🌙 Закрыть день без оценки")],
         [KeyboardButton(text="💬 Остаться в поддержке")],
-        [KeyboardButton(text="↩️ Вернуться к задаче позже")],
+        [KeyboardButton(text="🧭 Вернуться к задаче позже")],
     ],
     resize_keyboard=True,
 )
@@ -691,6 +710,20 @@ SAFETY_MESSAGE_TEMPLATE = (
     "позвонить мне в ближайшие 10 минут? Мне не нужен совет, мне важно не быть одному(одной)."
 )
 
+SAFETY_ACTIVE_TEXT = (
+    "Сейчас важнее не разбираться с задачами, а сделать ближайшие 10 минут безопаснее."
+)
+
+SAFETY_MESSAGE_FOLLOWUP_TEXT = (
+    "Хорошо. Останься на связи с этим человеком.\n\n"
+    "Сейчас не нужно решать ничего про работу, отношения или будущее."
+)
+
+SAFETY_AFTERCARE_TEXT = (
+    "Хорошо. Сегодня не нужно возвращаться к задаче.\n\n"
+    "Можно просто остаться в спокойном режиме."
+)
+
 SAFETY_SUPPORT_PROTOCOL = (
     "Короткий протокол на 10 минут:\n\n"
     "1. Поставь обе ноги на пол.\n"
@@ -705,6 +738,8 @@ SAFETY_SUPPORT_PROTOCOL = (
 
 def safety_mode(u: Dict[str, Any]) -> str:
     mode = str(u.get("safety_mode") or "none")
+    if mode == "inactive":
+        return "none"
     return mode if mode in SAFETY_MODES else "none"
 
 
@@ -768,7 +803,7 @@ async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, sou
         return False
     if safety_mode(u) == "none":
         u["safety_resume_context"] = safety_resume_snapshot(u, source)
-    u["safety_mode"] = "urgent" if details.get("high") else "triage"
+    u["safety_mode"] = "active" if details.get("high") else "triage"
     u["safety_last_risk"] = "yes" if details.get("high") else "unknown"
     u["safety_contact_status"] = u.get("safety_contact_status") or "not_asked"
     u["stage"] = "safety_mode"
@@ -778,19 +813,19 @@ async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, sou
     await log_event(u["user_id"], "safety", "safety_interceptor_started", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
     await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
     if details.get("high"):
-        await m.answer("Пока считаем риск высоким. Выбери ближайший безопасный шаг:", reply_markup=kb_safety_urgent)
+        await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
     return True
 
 
 async def show_safety_urgent(m: Message, u: Dict[str, Any], reason: str = ""):
-    u["safety_mode"] = "urgent"
+    u["safety_mode"] = "active"
     if u.get("safety_last_risk") != "no":
         u["safety_last_risk"] = "yes" if reason != "uncertain" else "uncertain"
     u["stage"] = "safety_mode"
     set_current_state(u, STATE_SAFETY_LOCK, close_action=True)
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "safety", "safety_urgent_shown", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await m.answer("Сейчас только безопасность. Выбери один ближайший шаг:", reply_markup=kb_safety_urgent)
+    await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
 
 
 async def show_safety_support(m: Message, u: Dict[str, Any], reason: str = ""):
@@ -814,13 +849,56 @@ async def complete_safety_day(m: Message, u: Dict[str, Any]):
     await answer_with_keyboard(m, u, "Ок. На сегодня достаточно. Никаких новых навыков сейчас.", kb_day_core_stop, "waiting_next_day")
 
 
+
+
+def active_safety_allowed_buttons() -> set[str]:
+    return {
+        "👥 Я рядом с людьми",
+        "💬 Я написал живому человеку",
+        "📞 Мне нужна срочная помощь",
+        "🟥 Мне всё ещё небезопасно",
+        "👥 Я уже не один(одна)",
+        "↩️ Стало безопаснее",
+        "🌙 Закрыть день без оценки",
+        "💬 Остаться в поддержке",
+        "🧭 Вернуться к задаче позже",
+        # Legacy crisis-only buttons from older keyboards remain safe to swallow in the same lock.
+        "🟦 Написать человеку сейчас",
+        "📞 Позвонить человеку",
+        "🚶 Перейти туда, где есть люди",
+        "🧹 Убрать опасные предметы подальше",
+        "🚨 Связаться с экстренной помощью",
+        "🟨 Я не знаю, кому написать",
+        "✅ Да, отправил(а)",
+        "⏳ Отправляю сейчас",
+        "❌ Не могу",
+        "Близкий человек",
+        "Партнёр",
+        "Коллега",
+        "Сосед",
+        "Родственник",
+        "Кризисная / экстренная служба",
+    }
+
+
+async def repeat_active_safety_screen(m: Message, u: Dict[str, Any]) -> None:
+    if u.get("safety_contact_status") == "aftercare":
+        await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+    elif u.get("safety_contact_status") == "sent_message":
+        await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
+    else:
+        await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
+
+
 async def handle_safety_callback(c: CallbackQuery, u: Dict[str, Any], data: str) -> bool:
     """Prevent stale inline callbacks from bypassing an active safety block."""
     mode = safety_mode(u)
     if mode == "none":
         return False
     await log_event(u["user_id"], "safety", "safety_blocked_callback", {"data": (data or "")[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
-    if mode == "urgent":
+    if mode == "active":
+        await repeat_active_safety_screen(c.message, u)
+    elif mode == "urgent":
         await show_safety_urgent(c.message, u, "blocked_callback")
     elif mode == "support":
         await c.message.answer("Сейчас ещё режим поддержки, не продуктивности.", reply_markup=kb_safety_aftercare)
@@ -835,10 +913,19 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
     if mode == "none":
         return False
     low = (text or "").lower().strip()
-    # Old productivity buttons are intentionally swallowed while safety mode is active.
-    if should_route_action_request(text, low, u) or "полный режим" in low or "моя карта" in low or "прогресс" in low or "тренер" in low or "карта" in low:
+    # While safety_mode=active, no productivity UI is allowed: skills, map, trainers, offer,
+    # progress, productive day closing, or skill switching are all swallowed.
+    if mode == "active" and text not in active_safety_allowed_buttons():
+        await log_event(u["user_id"], "safety", "safety_blocked_non_crisis_input", {"text": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await repeat_active_safety_screen(m, u)
+        return True
+
+    # Old productivity buttons are intentionally swallowed while any safety mode is active.
+    if text not in active_safety_allowed_buttons() and (should_route_action_request(text, low, u) or any(x in low for x in ("полный режим", "оффер", "моя карта", "прогресс", "тренер", "карта", "закрыть день", "до завтра", "сменить навык", "навык"))):
         await log_event(u["user_id"], "safety", "safety_blocked_productivity_button", {"text": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
-        if mode == "urgent":
+        if mode == "active":
+            await repeat_active_safety_screen(m, u)
+        elif mode == "urgent":
             await show_safety_urgent(m, u, "blocked_productivity")
         elif mode == "support":
             await m.answer("Сейчас ещё режим поддержки, не продуктивности.", reply_markup=kb_safety_aftercare)
@@ -866,7 +953,53 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
         await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
         return True
 
-    if mode == "urgent":
+    if mode in {"urgent", "active"}:
+        if text == "👥 Я рядом с людьми":
+            await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
+            return True
+        if text == "👥 Я уже не один(одна)":
+            await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
+            return True
+        if text in {"💬 Я написал живому человеку", "✅ Да, отправил(а)"}:
+            u["safety_contact_status"] = "sent_message"
+            await save_user(u, DB_PATH)
+            await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
+            return True
+        if text in {"📞 Мне нужна срочная помощь", "🚨 Связаться с экстренной помощью"}:
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            number = emergency_number_for_user(u, profile)
+            await m.answer(f"Свяжись с экстренной помощью: {number}. Если можешь, делай это там, где рядом есть люди.", reply_markup=kb_safety_crisis_actions)
+            return True
+        if text == "🟥 Мне всё ещё небезопасно":
+            await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
+            return True
+        if text == "↩️ Стало безопаснее":
+            # Stay in safety_mode=active: do not reopen productivity until explicit return-later.
+            u["safety_mode"] = "active"
+            u["safety_last_risk"] = "no"
+            u["safety_contact_status"] = "aftercare"
+            await save_user(u, DB_PATH)
+            await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+            return True
+        if text in {"🛑 На сегодня достаточно", "🌙 Закрыть день без оценки"}:
+            await complete_safety_day(m, u)
+            return True
+        if text == "💬 Остаться в поддержке":
+            u["safety_contact_status"] = "aftercare"
+            await save_user(u, DB_PATH)
+            await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+            return True
+        if text in {"↩️ Вернуться к задаче позже", "🧭 Вернуться к задаче позже"}:
+            if u.get("safety_last_risk") != "no":
+                await m.answer("Пока не возвращаемся к задаче: риск не отмечен как 'нет'. Остаёмся в поддержке.", reply_markup=kb_safety_aftercare)
+                return True
+            u["safety_mode"] = "inactive"
+            u["return_mode"] = "later"
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_user_chose_resume_later", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Вернуться можно позже явным действием. Сейчас без давления.", kb_training_main, "training_main")
+            return True
         if text == "🟦 Написать человеку сейчас":
             u["safety_contact_status"] = "offered"
             await save_user(u, DB_PATH)
@@ -879,15 +1012,15 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             await m.answer("Позвони живому человеку сейчас. Если не отвечает — выбирай другого или экстренную службу.", reply_markup=kb_safety_contact_choices)
             return True
         if text == "🚶 Перейти туда, где есть люди":
-            await m.answer("Перейди в место, где рядом есть люди: кухня, подъезд, улица, ресепшен, сосед, магазин. Потом выбери следующий безопасный шаг.", reply_markup=kb_safety_urgent)
+            await m.answer("Перейди в место, где рядом есть люди: кухня, подъезд, улица, ресепшен, сосед, магазин. Потом выбери следующий безопасный шаг.", reply_markup=kb_safety_crisis_actions)
             return True
         if text == "🧹 Убрать опасные предметы подальше":
-            await m.answer("Отойди от опасных предметов или положи их за дверь / в другую комнату / рядом с другим человеком. Потом выбери контакт с живым человеком.", reply_markup=kb_safety_urgent)
+            await m.answer("Отойди от опасных предметов или положи их за дверь / в другую комнату / рядом с другим человеком. Потом выбери контакт с живым человеком.", reply_markup=kb_safety_crisis_actions)
             return True
         if text == "🚨 Связаться с экстренной помощью":
             profile = await get_user_profile(u["user_id"], DB_PATH)
             number = emergency_number_for_user(u, profile)
-            await m.answer(f"Свяжись с экстренной помощью: {number}. Если можешь, делай это там, где рядом есть люди.", reply_markup=kb_safety_urgent)
+            await m.answer(f"Свяжись с экстренной помощью: {number}. Если можешь, делай это там, где рядом есть люди.", reply_markup=kb_safety_crisis_actions)
             return True
         if text == "🟨 Я не знаю, кому написать" or text == "❌ Не могу":
             u["safety_contact_status"] = "unavailable"
@@ -915,17 +1048,23 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             else:
                 await m.answer("Тогда остаёмся в поддержке. Повтори протокол ещё 10 минут или выбери живой контакт.", reply_markup=kb_safety_aftercare)
             return True
-        if text == "🛑 На сегодня достаточно":
+        if text in {"🛑 На сегодня достаточно", "🌙 Закрыть день без оценки"}:
             await complete_safety_day(m, u)
             return True
         if text == "💬 Остаться в поддержке":
-            await show_safety_support(m, u, "stay_support")
+            if mode == "active":
+                u["safety_contact_status"] = "aftercare"
+                await save_user(u, DB_PATH)
+                await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+            else:
+                await show_safety_support(m, u, "stay_support")
             return True
-        if text == "↩️ Вернуться к задаче позже":
+        if text in {"↩️ Вернуться к задаче позже", "🧭 Вернуться к задаче позже"}:
             if u.get("safety_last_risk") != "no":
                 await m.answer("Пока не возвращаемся к задаче: риск не отмечен как 'нет'. Остаёмся в поддержке.", reply_markup=kb_safety_aftercare)
                 return True
-            u["safety_mode"] = "none"
+            u["safety_mode"] = "inactive"
+            u["return_mode"] = "later"
             u["stage"] = "waiting_next_day"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "safety", "safety_user_chose_resume_later", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -4150,69 +4289,33 @@ def _day3_offer_breakdown_point(summary: Dict[str, Any], profile: Dict[str, Any]
 
 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    observations = _day3_offer_profile_points(summary, profile)
-    observations_text = "\n".join(f"— {p};" for p in observations[:5]) or "— появились первые гипотезы, но данных пока мало;"
-    success_points = _day3_offer_success_points(summary, profile)
-    success_text = "\n".join(f"✔ {p};" for p in success_points[:5])
-    breakdown = _day3_offer_breakdown_point(summary, profile)
-    attempts = _real_attempts_count(summary, profile)
-    if attempts < 3:
-        return (
-            "🧭 За первые дни появились первые гипотезы.\n\n"
-            "Пока данных мало, но похоже, что важная задача вызывает напряжение, "
-            "а затем хочется уйти в быстрый стимул.\n\n"
-            "Это ещё не вывод о тебе. Это то, что нужно проверить на реальных попытках.\n\n"
-            "Что уже есть в данных:\n"
-            f"{observations_text}\n\n"
-            "Что проверяем дальше:\n"
-            f"{success_text}\n\n"
-            "Полный режим нужен, чтобы проверить это на реальных попытках и не давать случайные советы.\n\n"
-            "Бесплатный режим остаётся: 1 базовый навык в день, короткая карта, кризисная самопомощь и закрытие дня.\n\n"
-            "Цена: 14.98 €/месяц.\n\n"
-            "Можно остаться бесплатно без стыда — короткий режим и карта останутся."
-        )
     return (
-        "🧭 За первые дни карта уже начала собираться.\n"
-        "За первые дни появились первые проверяемые паттерны.\n\n"
-        "Пока это не окончательный вывод о тебе.\n"
-        "Рабочая гипотеза:\n"
-        "важная задача → напряжение → хочется уйти в быстрый стимул → временное облегчение → сложнее вернуться.\n\n"
-        "Наблюдения по твоим данным:\n"
-        f"{observations_text}\n\n"
-        "Что у тебя уже получилось:\n"
-        f"{success_text}\n\n"
-        "Где повторяется срыв:\n"
-        f"— {breakdown}.\n\n"
-        "Что мы предлагаем дальше:\n"
-        "не давать тебе случайные советы,\n"
-        "а собирать твою личную систему запуска:\n"
-        "— какие шаги реально работают или не подходят;\n"
-        "— какие состояния ломают вход;\n"
-        "— какой формат поддержки подходит;\n"
-        "— когда нужен плохой черновик;\n"
-        "— когда сначала нужно успокоить тело;\n"
-        "— когда нужен внешний старт;\n"
-        "— как возвращаться после срыва.\n\n"
-        "Бесплатный режим остаётся:\n"
-        "— 1 базовый навык в день;\n"
-        "— короткая карта;\n"
-        "— кризисная самопомощь;\n"
-        "— закрытие дня.\n\n"
-        "Полный режим — это не “ещё набор техник”.\n"
-        "Это адаптивная система:\n"
-        "— ежедневная персональная карта;\n"
-        "— разбор залипаний;\n"
-        "— подбор шага под твои реакции;\n"
-        "— замена навыков, если текущий не подходит;\n"
-        "— еженедельный новый стек навыков;\n"
-        "— выводы по повторяющимся паттернам;\n"
-        "— план на следующую неделю;\n"
-        "— больше обратной связи после действий.\n\n"
-        "Цель:\n"
-        "не просто знать техники,\n"
-        "а иметь систему, которая помогает делать, когда мозг сопротивляется.\n\n"
+        "За эти дни ты уже сделал несколько маленьких входов в задачу.\n\n"
+        "Но пока неясно, что именно сильнее мешает: страх оценки, телефон, перегруз или слишком большой шаг.\n\n"
+        "В коротком режиме бот даёт один базовый шаг в день.\n\n"
+        "В полном режиме мы не просто даём новый совет.\n"
+        "Мы проверяем разные входы, сравниваем эффект и собираем твою личную систему возвращения к делу.\n\n"
+        "Например: если тебя ломает страх оценки — бот даст «плохой черновик».\n"
+        "Если ты уходишь в телефон — сначала изменит среду.\n"
+        "Если шаг слишком большой — уменьшит его до физического действия.\n\n"
+        "Полный режим нужен не для большего количества техник.\n"
+        "Он нужен, чтобы понять, какие из них реально работают именно у тебя.\n\n"
+        "Короткий режим:\n"
+        "• один основной навык в день;\n"
+        "• один короткий маршрут после застревания;\n"
+        "• короткая карта;\n"
+        "• кризисная самопомощь;\n"
+        "• закрытие дня.\n\n"
+        "Полный режим:\n"
+        "• несколько вариантов входа в зависимости от причины срыва;\n"
+        "• больше замен навыков в течение дня;\n"
+        "• сравнение: что помогло, а что не помогло;\n"
+        "• персональные выводы по повторяющимся срывам;\n"
+        "• недельный план;\n"
+        "• более подробный разбор паттернов;\n"
+        "• персонализация под страх оценки, отвлечения, перегруз, самокритику, избегание.\n\n"
         "Цена: 14.98 €/месяц.\n\n"
-        "Можно остаться бесплатно без стыда — короткий режим и карта останутся."
+        "Можно остаться бесплатно без стыда — короткий режим останется."
     )
 
 
@@ -4275,35 +4378,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "source": source,
         "day": int(u.get("day") or 0),
         "price_month": "14.98",
-        "main_pattern": summary["main_pattern"],
-        "avoidance_trigger": summary["avoidance_trigger"],
-        "energy_pattern": summary["energy_pattern"],
-        "best_skill": summary["best_skill"],
-        "worst_skill": summary["worst_skill"],
-        "failed_skill": summary["failed_skill"],
-        "preferred_activation": summary["preferred_activation_code"],
-        "slip_pattern": summary["slip_pattern"],
-        "return_pattern": summary["return_pattern"],
-        "attention_pattern": summary["attention_pattern"],
-        "side_skill_interest": summary["side_skill_interest"],
-        "system_day_opened": summary["system_day_opened"],
-        "system_day_useful": summary["system_day_useful"],
-        "system_day_already": summary["system_day_already"],
-        "system_day_signals": summary["system_day_signals"],
-        "most_common_crisis_pattern": summary["most_common_crisis_pattern"],
-        "most_effective_crisis_skill": summary["most_effective_crisis_skill"],
-        "crisis_count": summary["crisis_count"],
-        "crisis_success_rate": summary["crisis_success_rate"],
-        "done_count": summary["done_count"],
-        "downscale_count": summary["downscale_count"],
-        "return_count": summary["return_count"],
-        "downscale_pattern": summary["downscale_pattern"],
-        "main_hypothesis": summary.get("main_hypothesis", ""),
-        "successful_skills": summary.get("successful_skills", []),
-        "failed_skills": summary.get("failed_skills", []),
-        "trainer_current_mode": summary.get("trainer_current_mode", ""),
-        "trainer_switch_count": summary.get("trainer_switch_count", 0),
-        "trainer_fit_signal": summary.get("trainer_fit_signal", ""),
+        **profile_patch,
     }
     await log_event(u["user_id"], "offer", "offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "offer", "profile_map_updated", {"source": source, **profile_patch}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -4311,7 +4386,6 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     await log_event(u["user_id"], "offer", "adaptive_offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
 
     await answer_with_inline_screen(m, u, day3_conclusion_and_map_text(summary, profile), offer_inline_keyboard(u["user_id"]), "offer")
-
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
     """Day 3 offer is shown only for unpaid users outside free mode.
@@ -4522,33 +4596,34 @@ def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_full_mode_text() -> str:
     return (
-        "📚 Что входит в полный режим\n\n"
-        "— ежедневная персональная карта\n"
-        "— подбор шага под твои реакции\n"
-        "— разбор залипаний\n"
-        "— замена навыков, если текущий не подходит\n"
-        "— выводы по повторяющимся паттернам\n"
-        "— план следующих проверок\n"
-        "— больше гибкости, чем в коротком режиме\n\n"
-        "Короткий режим остаётся рабочим: 1 навык, короткая карта, кризис и закрытие дня.\n"
-        "Полный режим не открывает «доступ к боту», а усиливает персонализацию."
+        "📚 Честная разница режимов\n\n"
+        "Короткий режим:\n"
+        "• один основной навык в день;\n"
+        "• один короткий маршрут после застревания;\n"
+        "• короткая карта;\n"
+        "• кризисная самопомощь;\n"
+        "• закрытие дня.\n\n"
+        "Полный режим:\n"
+        "• несколько вариантов входа в зависимости от причины срыва;\n"
+        "• больше замен навыков в течение дня;\n"
+        "• сравнение: что помогло, а что не помогло;\n"
+        "• персональные выводы по повторяющимся срывам;\n"
+        "• недельный план;\n"
+        "• более подробный разбор паттернов;\n"
+        "• персонализация под страх оценки, отвлечения, перегруз, самокритику, избегание."
     )
 
 
 def stay_free_text() -> str:
     return (
         "Ок. Продолжаем в коротком режиме.\n\n"
-        "Он остаётся рабочим:\n"
-        "— 1 основной навык в день;\n"
-        "— короткая карта;\n"
-        "— кризисная самопомощь;\n"
-        "— закрытие дня;\n"
-        "— сохранение прогресса.\n\n"
-        "Ограничения короткого режима:\n"
-        "— меньше замен навыков;\n"
-        "— без подробного разбора паттернов;\n"
-        "— без недельного плана;\n"
-        "— без глубокой персонализации под состояния.\n\n"
+        "Короткий режим остаётся рабочим:\n"
+        "• один основной навык в день;\n"
+        "• один короткий маршрут после застревания;\n"
+        "• короткая карта;\n"
+        "• кризисная самопомощь;\n"
+        "• закрытие дня.\n\n"
+        "Полный режим добавляет не просто больше техник, а сравнение эффектов, недельный план и персонализацию под повторяющиеся причины срывов.\n\n"
         "Сегодня можно продолжить без оплаты."
     )
 

@@ -107,7 +107,7 @@ async def main() -> None:
             assert u2["stage"] == "stuck_validation_choice"
             u2, safety = await send(uid2, "🟡 Не уверен(а), насколько я в безопасности")
             assert "Сейчас не режим продуктивности" in safety
-            assert u2["safety_mode"] in {"triage", "urgent"}
+            assert u2["safety_mode"] in {"triage", "active"}
 
             uid3 = 9303
             await seed_user(uid3, stage="stuck_reason_text")

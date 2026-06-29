@@ -142,7 +142,7 @@ async def main() -> None:
             assert "разницу" in rows[0]["comment"]
 
             safety_user = default_user(9006)
-            safety_user.update({"safety_mode": "urgent", "current_day_id": "day-feedback-6", "done_count": 1})
+            safety_user.update({"safety_mode": "active", "current_day_id": "day-feedback-6", "done_count": 1})
             await save_user(safety_user, db_path)
             safety_prompt = FakeMessage(9006)
             assert await bot.ask_instruction_clarity_feedback(safety_prompt, safety_user) is False
