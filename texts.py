@@ -1001,15 +1001,25 @@ kb_more_actions = ReplyKeyboardMarkup(
 kb_action_outcome = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
-        [KeyboardButton(text="🟡 Застрял / не вышло")],
-        [KeyboardButton(text="⏸ Пауза")],
+        [KeyboardButton(text="🟡 Не вышло")],
+        [KeyboardButton(text="🤷 Не моё"), KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧠 Почему этот навык")],
+        [KeyboardButton(text="🌙 Закрыть подход")],
     ],
     resize_keyboard=True,
 )
 
-# After every skill card we deliberately keep only three choices.
-kb_skill_card = kb_action_outcome
-kb_new_day_skill = kb_action_outcome
+kb_first_day_skill = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Начать тренировку")],
+        [KeyboardButton(text="🤷 Не моё"), KeyboardButton(text="🔄 Выбрать другой навык")],
+        [KeyboardButton(text="🧠 Почему этот навык"), KeyboardButton(text="⚡ Я уже застрял")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_card = kb_first_day_skill
+kb_new_day_skill = kb_first_day_skill
 kb_done = kb_action_outcome
 
 kb_success_next = ReplyKeyboardMarkup(
