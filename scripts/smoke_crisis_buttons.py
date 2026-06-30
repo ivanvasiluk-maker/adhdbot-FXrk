@@ -297,13 +297,14 @@ async def main() -> None:
     new_day_text = bot.build_new_day_intro({"user_id": 1}, {"skill_id": "phone_away_3_min", "name": "Телефон вне руки на 3 минуты"}, {})
     assert "🌱 Новый день" in new_day_text
     assert "🧩 Навык дня" in new_day_text
+    assert "📚 Мини-урок" in new_day_text
     assert bot.action_keyboard() is bot.kb_active_skill
     assert bot.should_route_action_request("💪 Давай действие", "💪 давай действие", {"stage": "training", "has_started_training": 1}) is True
     assert bot.should_route_action_request("💪 Дать сегодняшний навык", "💪 дать сегодняшний навык", {}) is True
     assert bot.should_route_action_request("🔁 Ещё круг", "🔁 ещё круг", {}) is True
     short_mode_buttons = [b.text for row in bot.kb_short_mode_main.keyboard for b in row]
     assert "💪 Сделать следующий шаг" in short_mode_buttons
-    assert "⚡ Я застрял" in short_mode_buttons
+    assert "⚡ Застревание в работе" in short_mode_buttons
     assert "💳 Полный режим" not in short_mode_buttons
     assert "Короткий режим остаётся рабочим" in bot.stay_free_text()
     assert bot.choose_replacement_skill({"current_skill": "open_without_timer"}, ["open_without_timer"]) != "open_without_timer"

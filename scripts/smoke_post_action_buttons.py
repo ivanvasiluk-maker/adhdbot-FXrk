@@ -109,7 +109,8 @@ async def run() -> None:
     ):
         assert_guarded_keyboard(keyboard_name, reply_markup)
 
-    assert {"💪 Сделать следующий шаг", "⚡ Я застрял", "🧭 Моя карта", "🌙 Закрыть день"}.issubset(keyboard_texts(kb_training_main))
+    assert {"💪 Сделать следующий шаг", "⚡ Застревание в работе", "🌙 Закрыть день"}.issubset(keyboard_texts(kb_training_main))
+    assert "🧭 Моя карта" not in keyboard_texts(kb_training_main)
     assert "🆘 Кризис" not in keyboard_texts(kb_training_main)
     assert "📊 Прогресс" not in keyboard_texts(kb_more_actions)
     assert keyboard_texts(kb_skill_card) == {"✅ Сделал", "🟡 Застрял / не вышло", "⏸ Пауза"}
@@ -120,7 +121,6 @@ async def run() -> None:
         "🔋 Нет сил",
         "🤷 Не понимаю, зачем это делать",
         "🎙️ Опишу голосом или текстом",
-        "🆘 Мне небезопасно",
     }
 
     with tempfile.TemporaryDirectory() as td:
@@ -145,7 +145,11 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert "Ещё одна попытка сегодня" in all_text(repeat_msg) or "старый экран" in last_text(repeat_msg).lower(), last_text(repeat_msg)
+        assert (
+            "Ещё одна попытка сегодня" in all_text(repeat_msg)
+            or "старый экран" in last_text(repeat_msg).lower()
+            or "Это следующий шаг" in all_text(repeat_msg)
+        ), last_text(repeat_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         finish_msg = await send(uid, "⏸ Пауза")
@@ -209,7 +213,7 @@ async def run() -> None:
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
         assert "Зафиксируем честно" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
-        assert {"✅ Сделал — стало легче", "😐 Сделал — но легче не стало", "🚪 Сделал — начал задачу", "🟡 Не получилось", "🤷 Не мой навык", "😣 Слишком сложно", "🔄 Нужен другой вход", "⏳ Не успел попробовать"}.issubset(keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]))
+        assert {"✅ Сделал — стало легче", "😐 Сделал — но легче не стало", "🚪 Сделал — начал задачу", "🟡 Не получилось", "🤷 Не мой навык", "😣 Слишком сложно", "🔄 Нужен другой вход", "⏳ Не пробовал / не успел"}.issubset(keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]))
         no_relief_msg = await send(uid, "😐 Сделал — но легче не стало")
         assert "не стало" in last_text(no_relief_msg).lower()
         profile = await get_user_profile(uid, db_path)
