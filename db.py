@@ -448,7 +448,7 @@ def development_map_event_patch(profile: Dict[str, Any], signal_patch: Dict[str,
     for item in _as_list(signal_patch.get("secondary_hypotheses")):
         dev_map["hypotheses"] = _map_touch_item(dev_map.get("hypotheses"), str(item), source=source, status="testing")
 
-    skill = _skill_label_for_map(signal_patch.get("best_skill") or signal_patch.get("last_successful_skill") or signal_patch.get("best_variant"))
+    skill = _skill_label_for_map(signal_patch.get("best_skill") or signal_patch.get("last_successful_skill"))
     failed_skill = _skill_label_for_map(signal_patch.get("failed_skill") or signal_patch.get("worst_skill"))
     trigger = signal_patch.get("avoidance_trigger") or signal_patch.get("avoidance_reason")
 
@@ -2144,6 +2144,7 @@ ACTION_EVENT_TYPES = {
     "returned_after_slip",
     "day_closed",
     "stuck_reason_selected",
+    "skill_result_reported",
     "crisis_started",
     "crisis_resolved_or_paused",
 }
@@ -2536,9 +2537,10 @@ def profile_contradiction_prompt(profile: Dict[str, Any]) -> str:
 def _skill_status_wording(status: str) -> str:
     return {
         "proposed": "Пока проверяем, помогает ли этот вход.",
-        "tested_once": "Пока проверяем, помогает ли этот вход.",
-        "promising": "Есть первый сигнал, что этот шаг может помогать.",
-        "confirmed": "Этот вход уже несколько раз помог тебе вернуться к задаче.",
+        "tested_once": "Шаг был сделан, эффект пока не подтверждён.",
+        "started_task": "Шаг помог начать задачу; проверяем, станет ли легче повторять.",
+        "promising": "Есть первый сигнал, что этот вход тебе помогает.",
+        "confirmed": "Этот вход часто помогает тебе вернуться к задаче.",
         "not_helpful": "Этот навык пока не дал эффекта. Не будем повторять его автоматически.",
     }.get(str(status or "proposed"), "Пока проверяем, помогает ли этот вход.")
 

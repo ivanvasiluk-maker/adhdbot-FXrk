@@ -20,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import bot
-from db import get_user, init_db, migrate_db, save_user
+from db import get_user, get_user_profile, init_db, migrate_db, save_user
 from texts import (
     MAX_KEYBOARD_BUTTONS,
     kb_done,
@@ -207,6 +207,15 @@ async def run() -> None:
         assert "Отодвинуть телефон на 30 секунд" in phone_text, phone_text
         assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Застрял / не вышло", "🌙 Закрыть подход", "🔄 Сменить навык"}
 
+        done_feedback_prompt = await send(uid, "✅ Сделал")
+        assert "Зафиксируем честно" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
+        assert {"✅ Сделал — стало легче", "😐 Сделал — но легче не стало", "🚪 Сделал — начал задачу", "🟡 Не получилось", "🤷 Не мой навык", "😣 Слишком сложно", "🔄 Нужен другой вход", "⏳ Не успел попробовать"}.issubset(keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]))
+        no_relief_msg = await send(uid, "😐 Сделал — но легче не стало")
+        assert "не стало" in last_text(no_relief_msg).lower()
+        profile = await get_user_profile(uid, db_path)
+        assert profile.get("last_skill_effect") == "not_helpful", profile
+        assert "successful_skills" not in profile or not profile.get("successful_skills"), profile
+
         await set_post_action_user(uid, db_path, "training", rounds=1)
         u = await get_user(uid, db_path)
         u.update({
@@ -224,8 +233,11 @@ async def run() -> None:
         describe_msg = await send(uid, "🎙️ Опишу голосом или текстом")
         assert "опиши как есть" in last_text(describe_msg).lower(), last_text(describe_msg)
         reflected_msg = await send(uid, "Боюсь сделать плохо и стыдно")
-        assert "Не надо сразу требовать" in last_text(reflected_msg), last_text(reflected_msg)
-        reflected_msg = await send(uid, "📂 Открыть файл на 10 секунд")
+        assert "Главный механизм" in last_text(reflected_msg), last_text(reflected_msg)
+        assert "Рабочая гипотеза" in last_text(reflected_msg), last_text(reflected_msg)
+        assert "Минимальный физический шаг" in last_text(reflected_msg), last_text(reflected_msg)
+        assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(reflected_msg.answers[-1]["reply_markup"]))
+        reflected_msg = await send(uid, "✅ Да, похоже")
         assert "Плохой черновик" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Написать одну плохую строку" in last_text(reflected_msg), last_text(reflected_msg)
 
@@ -256,12 +268,10 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         success_msg = await send(uid, "✅ Сделал")
-        if "бот понял" in last_text(success_msg) or "было понятно" in last_text(success_msg):
-            success_msg = await send(uid, "🟢 Да, очень похоже")
-        assert "Подход засчитан" in last_text(success_msg) or "Спасибо, записал" in last_text(success_msg), last_text(success_msg)
-        if "Подход засчитан" in last_text(success_msg):
-            assert "доказывать, что ты продуктивный" in last_text(success_msg), last_text(success_msg)
-            assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?"}
+        assert "Зафиксируем честно" in last_text(success_msg), last_text(success_msg)
+        success_msg = await send(uid, "✅ Сделал — стало легче")
+        assert "Есть первый сигнал" in last_text(success_msg), last_text(success_msg)
+        assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?"}
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "Ещё 2 минуты" in last_text(repeat1_msg), last_text(repeat1_msg)

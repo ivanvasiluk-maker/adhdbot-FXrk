@@ -401,6 +401,18 @@ kb_active_skill = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_skill_result_feedback = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал — стало легче")],
+        [KeyboardButton(text="😐 Сделал — но легче не стало")],
+        [KeyboardButton(text="🚪 Сделал — начал задачу")],
+        [KeyboardButton(text="🟡 Не получилось"), KeyboardButton(text="🤷 Не мой навык")],
+        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🔄 Нужен другой вход")],
+        [KeyboardButton(text="⏳ Не успел попробовать")],
+    ],
+    resize_keyboard=True,
+)
+
 kb_success_no_extra = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🌙 Закрыть подход")],
@@ -1200,9 +1212,10 @@ def _skill_label(skill_id: Optional[str], fallback: str = "маленький в
 
 SKILL_STATUS_WORDING = {
     "proposed": "Пока проверяем, помогает ли этот вход.",
-    "tested_once": "Пока проверяем, помогает ли этот вход.",
-    "promising": "Есть первый сигнал, что этот шаг может помогать.",
-    "confirmed": "Этот вход уже несколько раз помог тебе вернуться к задаче.",
+    "tested_once": "Шаг был сделан, эффект пока не подтверждён.",
+    "started_task": "Шаг помог начать задачу; проверяем, станет ли легче повторять.",
+    "promising": "Есть первый сигнал, что этот вход тебе помогает.",
+    "confirmed": "Этот вход часто помогает тебе вернуться к задаче.",
     "not_helpful": "Этот навык пока не дал эффекта. Не будем повторять его автоматически.",
 }
 
@@ -1211,14 +1224,16 @@ def skill_status_wording(status: str) -> str:
     return SKILL_STATUS_WORDING.get(str(status or "proposed"), SKILL_STATUS_WORDING["proposed"])
 
 
-def _skill_status_from_counts(attempt_count: int, completed_count: int, stuck_count: int, effect_rating: int) -> str:
+def _skill_status_from_counts(attempt_count: int, completed_count: int, stuck_count: int, effect_rating: int, helpful_count: int = 0, started_count: int = 0) -> str:
+    if helpful_count >= 2:
+        return "confirmed"
+    if helpful_count >= 1 or effect_rating > 0:
+        return "promising"
     if attempt_count >= 2 and completed_count == 0 and stuck_count >= 2:
         return "not_helpful"
-    if completed_count >= 2:
-        return "confirmed"
-    if completed_count >= 1 or effect_rating > 0:
-        return "promising"
-    if attempt_count >= 1:
+    if started_count >= 1:
+        return "started_task"
+    if completed_count >= 1 or attempt_count >= 1:
         return "tested_once"
     return "proposed"
 
@@ -1245,6 +1260,8 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
             "completed_count": 0,
             "stuck_count": 0,
             "effect_rating": 0,
+            "helpful_count": 0,
+            "started_count": 0,
             "last_result": "proposed",
         })
         return item
@@ -1265,7 +1282,7 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
         sid, event_type, metadata, _created_at = row
         item = rec(sid)
         event_type = str(event_type or "")
-        if event_type in {"attempt_started", "attempt_completed_self_reported", "action_failed", "step_reduced", "too_hard_reported", "no_energy_reported", "slip_reported"}:
+        if event_type in {"attempt_started", "attempt_completed_self_reported", "skill_result_reported", "action_failed", "step_reduced", "too_hard_reported", "no_energy_reported", "slip_reported"}:
             item["attempt_count"] += 1
         if event_type in {"attempt_completed_self_reported", "returned_after_slip"}:
             item["completed_count"] += 1
@@ -1279,12 +1296,23 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
             meta = {}
         rating = int(meta.get("effect_rating") or meta.get("rating") or 0) if isinstance(meta, dict) else 0
         item["effect_rating"] = max(int(item.get("effect_rating") or 0), rating)
+        if event_type == "skill_result_reported" and isinstance(meta, dict):
+            result_status = str(meta.get("result_status") or "")
+            if rating > 0 or result_status == "done_relief":
+                item["helpful_count"] = int(item.get("helpful_count") or 0) + 1
+                item["last_result"] = "helpful"
+            elif result_status == "done_started_task":
+                item["started_count"] = int(item.get("started_count") or 0) + 1
+                item["last_result"] = "started_task"
+            elif result_status in {"done_no_relief", "not_completed", "not_my_skill", "too_hard", "needs_other_entry", "not_tried"}:
+                item["last_result"] = result_status
 
     for sid in helpful_ids:
         if sid:
             item = rec(sid)
             item["completed_count"] = max(int(item["completed_count"]), 1)
             item["effect_rating"] = max(int(item["effect_rating"]), 1)
+            item["helpful_count"] = max(int(item.get("helpful_count") or 0), 1)
             item["last_result"] = "helpful"
     for sid in unknown_done_ids:
         if sid:
@@ -1299,7 +1327,7 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
 
     for item in records.values():
         item["attempt_count"] = max(int(item["attempt_count"]), int(item["completed_count"]), int(item["stuck_count"]))
-        item["status"] = _skill_status_from_counts(int(item["attempt_count"]), int(item["completed_count"]), int(item["stuck_count"]), int(item["effect_rating"]))
+        item["status"] = _skill_status_from_counts(int(item["attempt_count"]), int(item["completed_count"]), int(item["stuck_count"]), int(item["effect_rating"]), int(item.get("helpful_count") or 0), int(item.get("started_count") or 0))
         item["status_text"] = skill_status_wording(item["status"])
         item["title"] = _skill_label(item["skill_id"], item["skill_id"])
     ordered = sorted(records.values(), key=lambda x: (x["status"] == "proposed", -int(x["completed_count"]), -int(x["attempt_count"]), x["title"]))
@@ -2687,7 +2715,7 @@ def _reply_keyboard_texts(markup) -> set[str]:
 def known_reply_button_texts() -> set[str]:
     keyboard_names = (
         "kb_training_main", "kb_more_actions", "kb_skill_card", "kb_new_day_skill", "kb_done", "kb_active_skill",
-        "kb_day_core_stop", "kb_failed", "kb_action_clarify", "kb_downscale",
+        "kb_day_core_stop", "kb_failed", "kb_action_clarify", "kb_downscale", "kb_skill_result_feedback", "kb_skill_result_feedback",
         "kb_downscale_name_task", "kb_microstep", "kb_skeptic", "kb_crisis_mode",
         "kb_crisis_stabilize", "kb_crisis_tool_select", "kb_crisis_effect", "kb_short_mode_main",
         "kb_day_menu", "kb_day_pause_confirm", "kb_skill_change_reason", "kb_skill_change_meaning", "kb_map_with_trainer", "kb_trainers", "kb_input_mode", "kb_yes_no",
@@ -3194,7 +3222,81 @@ async def handle_feedback_response(m: Message, u: Dict[str, Any], text: str) -> 
     return False
 
 
+SKILL_RESULT_STATUS_BY_BUTTON = {
+    "✅ Сделал — стало легче": ("done_relief", 1),
+    "😐 Сделал — но легче не стало": ("done_no_relief", 0),
+    "🚪 Сделал — начал задачу": ("done_started_task", 0),
+    "🟡 Не получилось": ("not_completed", 0),
+    "🤷 Не мой навык": ("not_my_skill", 0),
+    "😣 Слишком сложно": ("too_hard", 0),
+    "🔄 Нужен другой вход": ("needs_other_entry", 0),
+    "⏳ Не успел попробовать": ("not_tried", 0),
+}
+
+
+def skill_result_feedback_text(source: str = "done") -> str:
+    return (
+        "Зафиксируем честно, что произошло с навыком.\n\n"
+        "Выбери ближайший вариант — я не буду считать навык полезным без подтверждённого эффекта."
+    )
+
+
+async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: str = "done") -> bool:
+    if source not in {"action_done", "downscale_done", "downscale_name_done", "return"}:
+        return False
+    u["stage"] = "skill_result_feedback"
+    set_current_state(u, STATE_PAUSED, close_action=True)
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, skill_result_feedback_text(source), kb_skill_result_feedback, "skill_result_feedback")
+    return True
+
+
+async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str) -> bool:
+    if u.get("stage") != "skill_result_feedback":
+        return False
+    if text not in SKILL_RESULT_STATUS_BY_BUTTON:
+        await answer_with_keyboard(m, u, "Выбери, что реально произошло с навыком:", kb_skill_result_feedback, "skill_result_feedback")
+        return True
+    result_status, effect_rating = SKILL_RESULT_STATUS_BY_BUTTON[text]
+    sid = current_skill_id(u)
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    helpful_count = int(profile.get("skill_helpful_confirmation_count") or 0)
+    patch = {
+        "last_skill_result_status": result_status,
+        "last_skill_effect": "helpful" if effect_rating > 0 else ("started_task" if result_status == "done_started_task" else "not_helpful"),
+    }
+    if effect_rating > 0:
+        helpful_count += 1
+        patch.update({
+            "best_skill": sid,
+            "last_successful_skill": sid,
+            "skill_helpful_confirmation_count": helpful_count,
+        })
+    elif result_status in {"not_completed", "not_my_skill", "too_hard", "needs_other_entry"}:
+        patch.update({"failed_skill": sid, "worst_skill": sid})
+    u["stage"] = "success_menu"
+    await save_user(u, DB_PATH)
+    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": result_status, "effect_rating": effect_rating, "button": text})
+    await record_profile_signal(u["user_id"], "training", patch, source="skill_result_feedback")
+    if effect_rating > 0:
+        await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
+        msg = "Этот вход часто помогает тебе вернуться к задаче." if helpful_count >= 2 else "Есть первый сигнал, что этот вход тебе помогает."
+    elif result_status == "done_started_task":
+        msg = "Записал честно: шаг помог начать задачу. Эффект ещё не считаю подтверждённым."
+    elif result_status == "done_no_relief":
+        msg = "Записал честно: шаг сделан, но легче не стало. Не буду считать навык помогающим."
+    elif result_status == "not_tried":
+        msg = "Записал: не успел попробовать. Это не провал и не сигнал, что навык помогает."
+    else:
+        await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
+        msg = "Записал: этот вход сейчас не подошёл. Не буду считать его помогающим."
+    await answer_with_keyboard(m, u, msg, success_menu_keyboard(u), "success_menu")
+    return True
+
+
 async def send_success_menu(m: Message, u: Dict[str, Any], *, source: str = "done"):
+    if await ask_skill_result_feedback(m, u, source=source):
+        return
     pending_validation = pop_pending_validation_feedback(u)
     if pending_validation and await ask_validation_feedback(
         m,
@@ -3255,6 +3357,14 @@ kb_stuck_validation_safety = ReplyKeyboardMarkup(
         [KeyboardButton(text="🟢 Я в безопасности, просто очень устал")],
         [KeyboardButton(text="🟡 Не уверен(а), насколько я в безопасности")],
         [KeyboardButton(text="🆘 Мне небезопасно")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_stuck_analysis_confirm = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Да, похоже"), KeyboardButton(text="🟡 Не совсем")],
+        [KeyboardButton(text="🔄 Сменить навык"), KeyboardButton(text="🧠 Уточнить")],
     ],
     resize_keyboard=True,
 )
@@ -3388,72 +3498,121 @@ def reflect_stuck_text(text: str) -> str:
     return clamp_str(clean, 140) if clean else "сейчас сложно продолжать"
 
 
+def pending_stuck_clarification(u: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        data = json.loads(u.get("pending_feedback_json") or "{}")
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) and data.get("type") == "stuck_clarification" else {}
+
+
+def stuck_text_needs_clarification(text: str) -> bool:
+    low = (text or "").strip().lower()
+    if not low:
+        return True
+    clear_markers = (
+        "нахуя", "нахуй", "зачем", "смысл", "бессмыс", "должен", "должна", "бесит",
+        "страш", "стыд", "боюсь", "оцен", "ошиб", "телефон", "ютуб", "youtube",
+        "скрол", "залип", "устал", "устала", "нет сил", "выжат", "сон", "небезопас",
+        "суицид", "не хочу жить", "хочу умереть", "ненавижу себя", "тупой", "тупая", "ничтож",
+    )
+    if any(marker in low for marker in clear_markers):
+        return False
+    words = re.findall(r"[\wёа-яА-Я-]+", low, flags=re.IGNORECASE)
+    if len(words) <= 3:
+        return True
+    vague_markers = {"застрял", "застряла", "не могу", "сложно", "тяжело", "плохо", "не идет", "не идёт", "ступор", "ничего"}
+    return len(words) <= 6 and any(marker in low for marker in vague_markers)
+
+
+def stuck_clarification_question(count: int) -> str:
+    questions = [
+        "Сейчас тяжелее выбрать, с чего начать, или начать уже выбранное?",
+        "Тревога больше про ошибку, последствия или ощущение, что всего слишком много?",
+        "Тебе сейчас нужен толчок, спокойствие или понятный план?",
+    ]
+    index = max(0, min(count, len(questions) - 1))
+    return questions[index]
+
+
 def stuck_validation_response(kind: str, text: str) -> tuple[str, ReplyKeyboardMarkup]:
     heard = reflect_stuck_text(text)
+    config = STUCK_REASON_CONFIG.get(stuck_reason_code_from_text(text)) or STUCK_REASON_CONFIG["overwhelm"]
     if kind == "meaning":
-        return (
-            f"Я слышу: {heard}\n"
-            "Похоже, сейчас ты упёрся не в сложность шага, а в вопрос: зачем вообще на это тратить силы.\n"
-            "В таком состоянии бессмысленно просто сильнее себя давить.\n"
-            "Что ближе?",
-            kb_stuck_validation_meaning,
-        )
-    if kind == "self_attack":
-        return (
-            f"Я слышу: {heard}\n"
-            "Похоже, сейчас тебя сильнее блокирует самокритика, чем сама задача.\n"
-            "Когда мозг атакует тебя, вход в дело становится ещё дороже.\n"
-            "Не будем спорить с тобой и не будем заставлять тебя работать прямо сейчас.",
-            kb_stuck_validation_self_attack,
-        )
-    if kind == "file_fear":
-        return (
-            f"Я слышу: {heard}\n"
-            "Похоже, файл сейчас воспринимается не как документ, а как доказательство того, справляешься ты или нет.\n"
-            "Это тяжело. Не надо сразу требовать от себя работы.",
-            kb_stuck_validation_file_fear,
-        )
-    if kind == "safety":
-        return (
-            f"Я слышу: {heard}\n"
-            "Сейчас важнее не продуктивность, а понять, насколько тебе безопасно и есть ли хоть немного ресурса.",
-            kb_stuck_validation_safety,
-        )
-    if kind == "phone":
-        return (
-            f"Я слышу: {heard}\n"
-            "Это может быть не лень, а автопилот быстрых стимулов.\n"
-            "Сейчас не будем решать задачу силой воли. Сначала меняем среду.\n"
-            "Что ближе?",
-            kb_stuck_validation_meaning,
-        )
-    return (
-        f"Я слышу: {heard}\n"
-        "Это может быть не лень, а перегруз: задача выглядит не как один вход, а как ком.\n"
-        "Сейчас не будем делать вид, что это решается давлением.\n"
-        "Что ближе?",
-        kb_stuck_validation_meaning,
+        mechanism = "сейчас стопор может быть не в размере шага, а в вопросе смысла или внутреннем сопротивлении"
+        hypothesis = "пока есть гипотеза, что сначала нужно вернуть связь с ближайшим полезным результатом"
+        config = {**STUCK_REASON_CONFIG["overwhelm"], "skill_name": "Один следующий шаг", "minimum_step": "Назвать один ближайший полезный результат и одно физическое действие на 10 минут"}
+    elif kind == "self_attack":
+        mechanism = "самокритика может делать вход в задачу ещё дороже"
+        hypothesis = "пока есть гипотеза, что сначала нужен возврат без самонаказания"
+        config = STUCK_REASON_CONFIG["energy"]
+    elif kind == "file_fear":
+        mechanism = "страх ошибки или оценки может превращать первый шаг в риск"
+        hypothesis = "пока есть гипотеза, что важнее снизить цену ошибки, а не давить на дисциплину"
+        config = STUCK_REASON_CONFIG["shame"]
+    elif kind == "safety":
+        mechanism = "сейчас продуктивность может быть вторичной: сначала важно проверить безопасность и ресурс"
+        hypothesis = "пока есть гипотеза, что нужен самый мягкий телесный шаг и проверка безопасности"
+        config = STUCK_REASON_CONFIG["energy"]
+    elif kind == "phone":
+        mechanism = "внимание может уходить в быстрый стимул вместо входа в задачу"
+        hypothesis = "пока есть гипотеза, что поможет короткий барьер перед отвлечением"
+        config = STUCK_REASON_CONFIG["phone"]
+    else:
+        mechanism = "задача может выглядеть не как один вход, а как слишком большой ком"
+        hypothesis = "пока есть гипотеза, что поможет сузить всё до одного следующего действия"
+        config = STUCK_REASON_CONFIG["overwhelm"]
+
+    response = (
+        f"Я услышал: {heard}\n\n"
+        f"Главный механизм: {mechanism}.\n\n"
+        f"Рабочая гипотеза: {hypothesis}.\n\n"
+        f"Навык: {config['skill_name']}.\n"
+        f"Минимальный физический шаг: {config['minimum_step']}.\n\n"
+        "Если я попал мимо — поправь разбор."
     )
+    return response, kb_stuck_analysis_confirm
 
 
 async def start_stuck_text_validation(m: Message, u: Dict[str, Any], text: str):
-    kind = classify_free_stuck_text(text)
-    response, keyboard = stuck_validation_response(kind, text)
+    pending_clarification = pending_stuck_clarification(u)
+    previous_text = str(pending_clarification.get("text") or "").strip()
+    combined_text = " ".join(x for x in (previous_text, (text or "").strip()) if x).strip()
+    clarification_count = int(pending_clarification.get("count") or 0)
+
+    if stuck_text_needs_clarification(combined_text) and clarification_count < 3:
+        question = stuck_clarification_question(clarification_count)
+        u["stage"] = "stuck_reason_text"
+        u["pending_feedback_json"] = json.dumps({"type": "stuck_clarification", "count": clarification_count + 1, "text": combined_text[:500]}, ensure_ascii=False)
+        set_current_state(u, STATE_AWAITING_STUCK_REASON)
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "training", "stuck_clarification_asked", {"count": clarification_count + 1, "text": combined_text[:240]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(
+            "Пока данных мало, не хочу угадывать.\n\n"
+            f"{question}\n\n"
+            "Ответь коротко одним сообщением или голосом — после уточнения я дам действие."
+        )
+        return
+
+    text_for_analysis = combined_text or text
+    kind = classify_free_stuck_text(text_for_analysis)
+    response, keyboard = stuck_validation_response(kind, text_for_analysis)
     u["stage"] = "stuck_validation_choice"
-    u["pending_feedback_json"] = json.dumps({"type": "stuck_validation", "kind": kind, "text": text[:500]}, ensure_ascii=False)
+    u["pending_feedback_json"] = json.dumps({"type": "stuck_validation", "kind": kind, "text": text_for_analysis[:500]}, ensure_ascii=False)
     set_current_state(u, STATE_AWAITING_STUCK_REASON)
     await save_user(u, DB_PATH)
     await record_profile_signal(
         u["user_id"],
         "training",
         {
-            "last_free_stuck_text": text[:240],
+            "last_free_stuck_text": text_for_analysis[:240],
             "last_free_stuck_hypothesis": kind,
-            "user_model_events": [user_model_event(u["user_id"], "barrier_reported", text[:240], confidence=0.8)],
+            "stuck_clarification_count": clarification_count,
+            "user_model_events": [user_model_event(u["user_id"], "barrier_reported", text_for_analysis[:240], confidence=0.8)],
         },
         source="stuck_free_text_validation",
     )
-    await log_event(u["user_id"], "training", "stuck_free_text_validated", {"kind": kind, "text": text[:240]}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "training", "stuck_free_text_validated", {"kind": kind, "text": text_for_analysis[:240], "clarification_count": clarification_count}, DB_PATH, SHEETS_WEBHOOK_URL)
     await answer_with_keyboard(m, u, response, keyboard, f"stuck_validation_{kind}")
 
 
@@ -3482,6 +3641,18 @@ async def handle_stuck_validation_choice(m: Message, u: Dict[str, Any], text: st
     )
     u["pending_feedback_json"] = None
     await save_user(u, DB_PATH)
+    if text == "✅ Да, похоже":
+        await send_stuck_reason_skill(m, u, stuck_reason_code_from_text(original_text), user_text=original_text)
+        return True
+    if text in {"🟡 Не совсем", "🧠 Уточнить"}:
+        u["stage"] = "stuck_reason_text"
+        u["pending_feedback_json"] = json.dumps({"type": "stuck_validation_more", "previous": original_text[:300]}, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await m.answer("Ок, уточни одним сообщением или голосом: что именно мимо и что важнее учесть? Я пересоберу разбор по твоим словам.")
+        return True
+    if text == "🔄 Сменить навык":
+        await send_stuck_reason_skill(m, u, stuck_reason_code_from_text(original_text or text), user_text=original_text or text)
+        return True
     if text in {"🟡 Не уверен(а), насколько я в безопасности", "🆘 Мне небезопасно"}:
         await start_safety_interceptor(m, u, original_text or text, "stuck_validation_choice", explicit=True)
         return True
@@ -6603,6 +6774,16 @@ async def main_flow(m: Message):
         set_current_state(u, STATE_PAUSED, close_action=True)
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, SUCCESS_SECOND_STEP_DONE_TEXT, kb_success_limit, "success_limit")
+        return
+
+    if u.get("stage") == "stuck_reason_text":
+        if not text:
+            await m.answer("Опиши как есть — одним сообщением или голосом. Не нужно формулировать красиво.")
+            return
+        await start_stuck_text_validation(m, u, text)
+        return
+
+    if await handle_skill_result_feedback(m, u, text):
         return
 
     if await handle_feedback_response(m, u, text):
