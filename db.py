@@ -1230,6 +1230,8 @@ USER_FIELDS = [
     "full_mode_plan_json",
     "pending_feedback_json",
     "current_screen_id",
+    "closed_day_extra_step_date",
+    "closed_day_extra_step_count",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1392,6 +1394,8 @@ def default_user(uid: int) -> Dict[str, Any]:
         "full_mode_plan_json": None,
         "pending_feedback_json": None,
         "current_screen_id": None,
+        "closed_day_extra_step_date": None,
+        "closed_day_extra_step_count": 0,
     }
 
 async def init_db(db_path: str):
@@ -1490,7 +1494,9 @@ async def init_db(db_path: str):
                 full_mode_until TEXT,
                 full_mode_plan_json TEXT,
                 pending_feedback_json TEXT,
-                current_screen_id TEXT
+                current_screen_id TEXT,
+                closed_day_extra_step_date TEXT,
+                closed_day_extra_step_count INTEGER DEFAULT 0
             )
             """
         )
@@ -1781,7 +1787,9 @@ EXTRA_USER_COLS = {
     "full_mode_until": "TEXT",
     "full_mode_plan_json": "TEXT",
     "pending_feedback_json": "TEXT",
-    "current_screen_id": "TEXT"
+    "current_screen_id": "TEXT",
+    "closed_day_extra_step_date": "TEXT",
+    "closed_day_extra_step_count": "INTEGER DEFAULT 0"
 }
 
 async def migrate_db(db_path: str):

@@ -296,6 +296,14 @@ kb_day_pause_confirm = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_closed_day_continue = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Да, ещё один короткий шаг")],
+        [KeyboardButton(text="🌙 Нет, оставить день закрытым")],
+    ],
+    resize_keyboard=True,
+)
+
 kb_feedback_instruction_clarity = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟢 Да, очень понятно")],
@@ -5260,14 +5268,70 @@ DAY_CLOSED_ACTION_TEXT = (
     "Это не откат. Завтра откроется следующий короткий шаг."
 )
 DAY_ALREADY_CLOSED_TEXT = "День уже закрыт.\nДо завтра."
+DAY_CLOSED_CONTINUE_PROMPT = (
+    "День уже закрыт, и минимум ты выполнил.\n"
+    "Хочешь сделать ещё один короткий добровольный подход?"
+)
 DAY_CLOSED_ALLOWED_KINDS = {"map", "trainer_switch", "crisis", "tomorrow"}
-DAY_CLOSED_BLOCKED_KINDS = {"action", "repeat", "other_skill", "change_skill", "stuck", "more", "details", "why", "enough", "close_day"}
+DAY_CLOSED_BLOCKED_KINDS = {"other_skill", "change_skill", "stuck", "more", "details", "why", "enough", "close_day"}
+DAY_CLOSED_VOLUNTARY_ACTIONS = {"action", "repeat"}
+
+
+def closed_day_extra_used_today(u: Dict[str, Any]) -> bool:
+    return is_same_calendar_day(u.get("closed_day_extra_step_date"), u) and int(u.get("closed_day_extra_step_count") or 0) >= 1
+
+
+def next_step_prefix(u: Dict[str, Any], repeat: bool = False, voluntary: bool = False) -> str:
+    task = current_task_title(u, "выбранной задаче")
+    step = str(u.get("current_next_physical_step") or "").strip()
+    done = int(u.get("done_count") or 0)
+    if voluntary:
+        base = "Добровольный короткий подход. Он не обязанность и не новая норма."
+    elif repeat or done > 0 or step:
+        base = "Это следующий шаг, не повтор старта."
+    else:
+        base = "Лучший доступный шаг сейчас."
+    if step:
+        return f"{base}\n\nЛогичное продолжение по задаче «{task}»: {step}. Сделай только 60–120 секунд или подготовь вход и снова можешь закрыть день."
+    if done > 0:
+        return f"{base}\n\nЛогичное продолжение по задаче «{task}»: открой нужное место и напиши один плохой тезис / сделай 2 минуты работы. Остановиться можно сразу после этого."
+    return f"{base}\n\nВыбери один физический вход в задачу «{task}»: открыть файл, написать одну сырую строку или убрать телефон на 2 минуты."
+
+
+async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
+    if closed_day_extra_used_today(u):
+        await answer_with_keyboard(m, u, "На сегодня достаточно: добровольный дополнительный подход уже был. День остаётся закрытым.", kb_day_core_stop, "day_core_stop")
+        return
+    sid = current_skill_for_action(u) or "visible_next_step"
+    if sid not in SKILLS_DB:
+        sid = next(iter(SKILLS_DB))
+    skill = dict(SKILLS_DB[sid])
+    skill.setdefault("skill_id", sid)
+    u["stage"] = "training"
+    u["closed_day_extra_step_date"] = local_date_for_user(u)
+    u["closed_day_extra_step_count"] = int(u.get("closed_day_extra_step_count") or 0) + 1
+    u["daily_skill_status"] = "voluntary_extra"
+    mark_action_card_active(u)
+    await save_user(u, DB_PATH)
+    await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": "closed_day_continue", "voluntary": True})
+    await answer_with_keyboard(m, u, build_current_skill_text(skill, next_step_prefix(u, voluntary=True), u), action_keyboard(), "closed_day_voluntary_step")
 
 
 async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low: str) -> bool:
     if not day_closed_today(u):
         return False
+    if u.get("stage") == "closed_day_voluntary_step" and text in ACTION_OUTCOME_BUTTONS:
+        return False
     kind = global_button_kind(text, low) if is_known_reply_button(text) or text else ""
+    if u.get("stage") == "closed_day_continue_confirm":
+        if text == "✅ Да, ещё один короткий шаг" or low.startswith("да"):
+            await open_closed_day_voluntary_step(m, u)
+            return True
+        if text == "🌙 Нет, оставить день закрытым" or low.startswith("нет"):
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок. Оставляем день закрытым. До завтра.", kb_day_core_stop, "day_core_stop")
+            return True
     if kind == "map":
         await send_user_map(m, u, "day_closed")
         return True
@@ -5282,7 +5346,17 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
         return True
-    if kind in DAY_CLOSED_BLOCKED_KINDS or should_route_action_request(text, low, u) or text in {"➕ Ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие"}:
+    if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "💪 Продолжить тренировку"}:
+        if closed_day_extra_used_today(u):
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "День уже закрыт, и один добровольный дополнительный подход сегодня уже был. Лучше оставить день закрытым.", kb_day_core_stop, "day_core_stop")
+            return True
+        u["stage"] = "closed_day_continue_confirm"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+        return True
+    if kind in DAY_CLOSED_BLOCKED_KINDS:
         u["stage"] = "day_core_stop"
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, DAY_CLOSED_ACTION_TEXT, kb_day_core_stop, "day_core_stop")
@@ -5411,7 +5485,7 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
     skill_map = await build_skill_map_data(user, profile_for_map)
     user["current_skill_status_text"] = current_skill_status_note(user, skill_map)
     await log_event(user_id, "training", "current_skill_resent", {"skill_id": sid, "day_id": user.get("current_day_id"), "action_id": user.get("current_action_id"), "state_version": user.get("state_version")}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await answer_with_keyboard(message, user, build_current_skill_text(skill, u=user), action_keyboard(), "new_day_skill")
+    await answer_with_keyboard(message, user, build_current_skill_text(skill, next_step_prefix(user), user), action_keyboard(), "new_day_skill")
 
 
 async def handle_action_request(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None, *, repeat: bool = False):
@@ -5441,7 +5515,7 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
         skill.setdefault("skill_id", sid)
         await bot_record_action_event(user, "attempt_started", skill_id=sid, metadata={"source": "repeat_attempt", "attempt_id": attempt_id})
         await log_event(user_id, "training", "attempt_started", {"attempt_id": attempt_id, "day_id": user.get("current_day_id"), "skill_id": sid, "action_id": user.get("current_action_id"), "state_version": user.get("state_version")}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(message, user, build_current_skill_text(skill, "Ещё одна попытка сегодня. Продолжаем тот же навык.", user), action_keyboard(), "new_day_skill")
+        await answer_with_keyboard(message, user, build_current_skill_text(skill, next_step_prefix(user, repeat=True), user), action_keyboard(), "new_day_skill")
         return
     await send_current_skill(user_id, message, user)
 
