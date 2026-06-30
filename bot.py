@@ -415,7 +415,8 @@ kb_skill_result_feedback = ReplyKeyboardMarkup(
 
 kb_success_no_extra = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="💪 Продолжить тренировку")],
+        [KeyboardButton(text="🌙 На сегодня достаточно")],
         [KeyboardButton(text="🗣️ Что помогло?")],
     ],
     resize_keyboard=True,
@@ -2733,7 +2734,7 @@ def known_reply_button_texts() -> set[str]:
         "🔁 Другой навык", "🧩 Уменьшить шаг", "🔁 Ещё круг", "📌 Что изменилось?",
         "📱 Ушёл в телефон / YouTube", "📱 Ушёл в телефон", "😬 Страшно, стыдно, боюсь ошибиться", "😬 Страх ошибки / оценки",
         "🧠 Слишком много всего", "🌀 Слишком много вариантов", "😶 Не понимаю, с чего начать", "🔋 Нет сил", "😵 Слишком тяжело", "🎙️ Опишу голосом или текстом",
-        "➕ Ещё 2 минуты", "🌙 Закрыть подход", "🔄 Сменить навык", "🗣️ Что помогло?", "💪 Другое действие",
+        "➕ Ещё 2 минуты", "💪 Продолжить тренировку", "🌙 На сегодня достаточно", "🌙 Закрыть подход", "🔄 Сменить навык", "🗣️ Что помогло?", "💪 Другое действие",
         "💪 Сделать следующий шаг", "🆘 Мне небезопасно", "🎭 Сменить тренера", "🔄 Сменить тренера", "Ещё", "Еще",
     })
     return texts
@@ -2876,15 +2877,15 @@ async def show_action_changed_fallback(m: Message, u: Dict[str, Any], source: st
     await m.answer(STALE_ACTION_CHANGED_TEXT, reply_markup=kb_context_fallback)
 
 SUCCESS_APPROACH_TEXT = (
-    "Есть. Подход засчитан.\n\n"
-    "Не нужно сейчас доказывать, что ты продуктивный.\n"
-    "Ты сделал главное: вернулся в контакт с задачей."
+    "Минимум на сегодня уже выполнен. Это успех.\n\n"
+    "Можно остановиться и спокойно закрыть день.\n"
+    "Если хочешь, можем сделать ещё один короткий шаг без обязательства."
 )
 
 SUCCESS_REPEAT_LIMIT_TEXT = (
-    "На сегодня достаточно тренировать вход.\n\n"
-    "Лучше сохранить ощущение,\n"
-    "что задача не съела тебя."
+    "Минимум на сегодня уже выполнен. Это успех.\n\n"
+    "Можно остановиться и спокойно закрыть день.\n"
+    "Если хочешь, можем продолжить тренировку без обязательства."
 )
 
 SUCCESS_HELP_PROMPT = (
@@ -2895,8 +2896,9 @@ SUCCESS_HELP_PROMPT = (
 
 
 SUCCESS_SECOND_STEP_DONE_TEXT = (
-    "На сегодня достаточно.\n"
-    "Ты не обязан превращать маленький вход в марафон."
+    "Ещё один короткий шаг засчитан.\n\n"
+    "Можно остановиться и спокойно закрыть день.\n"
+    "Если хочешь, можем продолжить тренировку без обязательства."
 )
 
 
@@ -5444,7 +5446,7 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
     await send_current_skill(user_id, message, user)
 
 
-ACTION_REQUEST_LABELS = {"💪 Давай действие", "💪 Дать сегодняшний навык", "💪 Сделать следующий шаг", "💪 Дать следующий шаг", "🔁 Ещё круг"}
+ACTION_REQUEST_LABELS = {"💪 Давай действие", "💪 Дать сегодняшний навык", "💪 Сделать следующий шаг", "💪 Дать следующий шаг", "💪 Продолжить тренировку", "🔁 Ещё круг"}
 
 
 def is_action_request(text: str, low: str) -> bool:
@@ -5452,6 +5454,7 @@ def is_action_request(text: str, low: str) -> bool:
         text in ACTION_REQUEST_LABELS
         or "давай действие" in low
         or "сделать следующий шаг" in low
+        or "продолжить тренировку" in low
         or "дать следующий шаг" in low
         or "дать сегодняшний навык" in low
         or "ещё круг" in low
@@ -6831,14 +6834,14 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, prompt, kb_extra_microstep_done, "extra_microstep")
         return
 
-    if text == "🌙 Закрыть подход":
+    if text in {"🌙 Закрыть подход", "🌙 На сегодня достаточно"}:
         u["stage"] = "waiting_next_day"
         set_current_state(u, STATE_PAUSED, close_action=True)
         await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, "Подход закрыт. Этого достаточно: вход в задачу уже потренирован.", kb_training_main, "training_main")
+        await answer_with_keyboard(m, u, "Ок. День можно закрыть спокойно: минимум уже выполнен. Если позже захочешь — тренировка остаётся доступной.", kb_training_main, "training_main")
         return
 
-    if text == "💪 Другое действие":
+    if text in {"💪 Другое действие", "💪 Продолжить тренировку"}:
         u["success_repeat_count"] = 0
         await save_user(u, DB_PATH)
         await handle_action_request(u["user_id"], m, u)

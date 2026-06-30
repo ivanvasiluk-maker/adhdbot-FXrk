@@ -1016,15 +1016,16 @@ kb_done = kb_action_outcome
 kb_success_next = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Ещё 2 минуты")],
-        [KeyboardButton(text="🌙 Закрыть подход")],
-        [KeyboardButton(text="🗣️ Что помогло?")],
+        [KeyboardButton(text="💪 Продолжить тренировку")],
+        [KeyboardButton(text="🌙 На сегодня достаточно")],
     ],
     resize_keyboard=True,
 )
 
 kb_success_limit = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="💪 Продолжить тренировку")],
+        [KeyboardButton(text="🌙 На сегодня достаточно")],
     ],
     resize_keyboard=True,
 )
