@@ -136,7 +136,7 @@ async def run() -> None:
         for stage in ("waiting_next_day", "done", "day_core_stop"):
             await set_post_action_user(uid, db_path, stage, rounds=1)
             map_msg = await send(uid, "🧭 Моя карта")
-            assert "Твоя карта" in last_text(map_msg) or "Твоя рабочая карта" in last_text(map_msg) or "Коротко по карте сегодня" in last_text(map_msg), last_text(map_msg)
+            assert "Твоя карта" in last_text(map_msg) or "Твоя рабочая карта" in last_text(map_msg) or "Коротко по карте сегодня" in last_text(map_msg) or "Твоя короткая карта" in last_text(map_msg), last_text(map_msg)
 
             # After opening the map, the same post-action menu must still work when that button
             # belongs to the current menu; stale done-menu buttons in day_core_stop fall back.
@@ -271,22 +271,20 @@ async def run() -> None:
         assert "Зафиксируем честно" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "✅ Сделал — стало легче")
         assert "Есть первый сигнал" in last_text(success_msg), last_text(success_msg)
-        assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "🌙 Закрыть подход", "🗣️ Что помогло?"}
+        assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "💪 Продолжить тренировку", "🌙 На сегодня достаточно"}
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "Ещё 2 минуты" in last_text(repeat1_msg), last_text(repeat1_msg)
         assert "Напиши одно слово" in last_text(repeat1_msg), last_text(repeat1_msg)
         done2_msg = await send(uid, "✅ Сделал")
-        assert "Ты не обязан превращать маленький вход в марафон" in last_text(done2_msg), last_text(done2_msg)
+        assert "Ещё один короткий шаг засчитан" in last_text(done2_msg), last_text(done2_msg)
         assert "➕ Ещё 2 минуты" not in keyboard_texts(done2_msg.answers[-1]["reply_markup"]), keyboard_texts(done2_msg.answers[-1]["reply_markup"])
         limit_msg = await send(uid, "➕ Ещё 2 минуты")
-        assert "На сегодня достаточно тренировать вход" in last_text(limit_msg), last_text(limit_msg)
-        assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"🌙 Закрыть подход"}
+        assert "Минимум на сегодня уже выполнен" in last_text(limit_msg), last_text(limit_msg)
+        assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"💪 Продолжить тренировку", "🌙 На сегодня достаточно"}
 
-        help_msg = await send(uid, "🗣️ Что помогло?")
-        assert "добровольный вопрос" in last_text(help_msg), last_text(help_msg)
-        helper_note_msg = await send(uid, "таймер")
-        assert "Записал" in last_text(helper_note_msg), last_text(helper_note_msg)
+        enough_msg = await send(uid, "🌙 На сегодня достаточно")
+        assert "тренировка остаётся доступной" in last_text(enough_msg), last_text(enough_msg)
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         skip_msg = await send(uid, "Пропустить")
