@@ -5399,12 +5399,38 @@ async def build_admin_stats_text(db_path: str) -> str:
     return "\n".join(lines)
 
 async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
+    """Fully erase one user's durable run state and recreate a clean profile.
+
+    This is intentionally stronger than overwriting the users row: tester resets
+    must not leave old maps, skill outcomes, helpfulness signals, tasks, action
+    history, feedback, paid/test flags, streaks, or points in side tables.
+    """
     fresh = default_user(uid)
     fresh["chat_id"] = chat_id
     # Keep reset as a true pre-start state: /start must rebuild onboarding,
     # not resume a stale/default skill card.
     fresh["stage"] = "start"
     fresh["current_step"] = "start"
+    # A profile reset must not preserve or re-grant per-user QA/payment state,
+    # even when the bot process itself runs with TEST_MODE enabled.
+    fresh["trial_phase"] = "trial3"
+    fresh["payment_status"] = "trial"
+    fresh["access_status"] = "trial"
+    fresh["paid_until"] = None
+    fresh["is_test_user"] = 0
+    fresh["fast_forward_enabled"] = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for table in (
+            "events",
+            "user_days",
+            "skill_attempts",
+            "action_events",
+            "user_feedback",
+            "user_tasks",
+            "user_sessions",
+        ):
+            await db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+        await db.commit()
     await save_user(fresh, DB_PATH)
     return fresh
 
@@ -5604,14 +5630,12 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return True
 
     if command == "/reset_me":
-        fresh = await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "onboarding", "reset_me", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await reset_current_user(uid, m.chat.id)
         await m.answer("Профиль полностью сброшен для нового прогона. Напиши /start.")
         return True
 
     if command == "/start_over":
-        fresh = await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "onboarding", "start_over", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await reset_current_user(uid, m.chat.id)
         await m.answer(
             start_over_confirm_text(),
             reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
@@ -5680,7 +5704,6 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             await m.answer("Сначала включи тестовый режим для этого пользователя: /testmode_on 30. Боевые данные не трогаю.")
             return True
         await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "admin", "admin_reset_test_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("Тестовые данные этого пользователя очищены. Боевые пользователи не затронуты. Напиши /start.")
         return True
 
@@ -5709,7 +5732,6 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             await m.answer("Сначала включи тестовый режим для этого пользователя: /testmode_on 30. Боевые данные не трогаю.")
             return True
         await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "admin", "admin_reset_test_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("Тестовые данные этого пользователя очищены. Боевые пользователи не затронуты. Напиши /start.")
         return True
 
@@ -5810,8 +5832,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
 
     if command == "/reset":
-        fresh = await reset_current_user(uid, m.chat.id)
-        await log_event(uid, "admin", "admin_reset_user", {"command": command}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await reset_current_user(uid, m.chat.id)
         await m.answer("Твой тестовый профиль полностью сброшен. Напиши /start.")
         return True
 
