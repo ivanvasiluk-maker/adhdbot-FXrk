@@ -79,7 +79,7 @@ async def main() -> None:
             await migrate_db(bot.DB_PATH)
             failed_buttons = keyboard_texts(kb_failed)
             assert "🤷 Не понимаю, зачем это делать" in failed_buttons
-            assert "🆘 Мне небезопасно" in failed_buttons
+            assert "🆘 Мне небезопасно" not in failed_buttons
 
             uid = 9301
             await seed_user(uid)
