@@ -18,6 +18,7 @@ from flows import (  # noqa: E402
     render_analysis_details_by_trainer,
     safe_analysis_memory,
 )
+from texts import preliminary_diagnosis_conclusion_text  # noqa: E402
 
 SAMPLE = """Я журналист. Мне нужно сдать статью сегодня, а я завис. Уже два часа открываю документ и закрываю. Внутри паника: “сейчас все поймут, что я слабый автор”.
 
@@ -42,8 +43,21 @@ async def main() -> None:
     details_text = render_analysis_details_by_trainer(comp, "beck")
     for marker in ("Коротко", "Моя рабочая гипотеза", "проверяем"):
         assert marker in analysis_text, analysis_text
-    for marker in ("Факты из твоего описания", "Гипотеза", "Что проверяем"):
+    for marker in ("1. Что произошло", "7. Что даёт избегание прямо сейчас", "13. Почему выбран текущий навык", "14. Какие навыки могут быть следующими"):
         assert marker in details_text, details_text
+    for marker in ("статью нужно сдать сегодня", "паника", "Плохой черновик"):
+        assert marker in details_text, details_text
+
+    conclusion_text = preliminary_diagnosis_conclusion_text(
+        comp.get("specific_pattern") or "",
+        comp.get("useful_signal") or "",
+        comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else [],
+        analysis_result.get("first_check") or "",
+        analysis_result.get("recommended_skill_reason") or "",
+    )
+    for marker in ("Короткое заключение", "Главный узел сейчас", "Ресурс, который уже есть", "Что проверим первым", "Почему выбран этот навык"):
+        assert marker in conclusion_text, conclusion_text
+    assert "1. Что произошло" not in conclusion_text, conclusion_text
 
     vague = "мне страшно ошибиться, когда думаю обо всём сразу тревожно, не могу выбрать с чего начать"
     vague_comp = normalize_analysis({}, vague, {})
