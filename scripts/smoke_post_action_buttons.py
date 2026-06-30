@@ -151,7 +151,6 @@ async def run() -> None:
         "🔋 Нет сил",
         "🤷 Не понимаю, зачем это делать",
         "🎙️ Опишу голосом или текстом",
-        "🆘 Мне небезопасно",
     }
 
     with tempfile.TemporaryDirectory() as td:
@@ -253,7 +252,7 @@ async def run() -> None:
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
         assert "Зафиксируем честно" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
-        assert {"✅ Сделал — стало легче", "😐 Сделал — но легче не стало", "🚪 Сделал — начал задачу", "🟡 Не получилось", "🤷 Не мой навык", "😣 Слишком сложно", "🔄 Нужен другой вход", "⏳ Не успел попробовать"}.issubset(keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]))
+        assert {"✅ Сделал — стало легче", "😐 Сделал — но легче не стало", "🚪 Сделал — начал задачу", "🟡 Не получилось", "🤷 Не мой навык", "😣 Слишком сложно", "🔄 Нужен другой вход", "⏳ Не пробовал / не успел"}.issubset(keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]))
         no_relief_msg = await send(uid, "😐 Сделал — но легче не стало")
         assert "не стало" in last_text(no_relief_msg).lower()
         profile = await get_user_profile(uid, db_path)

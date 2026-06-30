@@ -263,9 +263,8 @@ FREE_AFTER_DAY_3 = {
 kb_day_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="⚡ Застревание в работе")],
         [KeyboardButton(text="🌙 Закрыть день")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -282,7 +281,7 @@ kb_short_map_repeat = ReplyKeyboardMarkup(
 kb_short_mode_main = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="⚡ Застревание в работе")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -426,7 +425,7 @@ kb_skill_result_feedback = ReplyKeyboardMarkup(
         [KeyboardButton(text="🚪 Сделал — начал задачу")],
         [KeyboardButton(text="🟡 Не получилось"), KeyboardButton(text="🤷 Не мой навык")],
         [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🔄 Нужен другой вход")],
-        [KeyboardButton(text="⏳ Не успел попробовать")],
+        [KeyboardButton(text="⏳ Не пробовал / не успел")],
     ],
     resize_keyboard=True,
 )
@@ -2719,7 +2718,7 @@ CONTEXT_FALLBACK_TEXT = (
 kb_context_fallback = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="⚡ Застревание в работе")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -2747,13 +2746,13 @@ def known_reply_button_texts() -> set[str]:
         if markup is not None:
             texts.update(_reply_keyboard_texts(markup))
     texts.update({
-        "💪 Дать следующий шаг", "⚡ Я застрял", "🌙 Закрыть день",
+        "💪 Дать следующий шаг", "⚡ Я застрял", "⚡ Застревание в работе", "🌙 Закрыть день",
         "📱 Залип", "😣 Слишком сложно", "😵 Нет сил", "❌ Не сделал",
         "🔁 Другой навык", "🧩 Уменьшить шаг", "🔁 Ещё круг", "📌 Что изменилось?",
         "📱 Ушёл в телефон / YouTube", "📱 Ушёл в телефон", "😬 Страшно, стыдно, боюсь ошибиться", "😬 Страх ошибки / оценки",
         "🧠 Слишком много всего", "🌀 Слишком много вариантов", "😶 Не понимаю, с чего начать", "🔋 Нет сил", "😵 Слишком тяжело", "🎙️ Опишу голосом или текстом",
         "➕ Ещё 2 минуты", "💪 Продолжить тренировку", "🌙 На сегодня достаточно", "🌙 Закрыть подход", "🔄 Сменить навык", "🗣️ Что помогло?", "💪 Другое действие",
-        "💪 Сделать следующий шаг", "🆘 Мне небезопасно", "🎭 Сменить тренера", "🔄 Сменить тренера", "Ещё", "Еще",
+        "💪 Сделать следующий шаг", "🎭 Сменить тренера", "🔄 Сменить тренера", "Ещё", "Еще",
     })
     return texts
 
@@ -3292,7 +3291,9 @@ SKILL_RESULT_STATUS_BY_BUTTON = {
     "🤷 Не мой навык": ("not_my_skill", 0),
     "😣 Слишком сложно": ("too_hard", 0),
     "🔄 Нужен другой вход": ("needs_other_entry", 0),
+    "⏳ Не пробовал / не успел": ("not_tried", 0),
     "⏳ Не успел попробовать": ("not_tried", 0),
+    "🚫 Не пробовал": ("not_tried", 0),
 }
 
 
@@ -3418,7 +3419,6 @@ kb_stuck_validation_safety = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟢 Я в безопасности, просто очень устал")],
         [KeyboardButton(text="🟡 Не уверен(а), насколько я в безопасности")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -4327,6 +4327,7 @@ async def apply_skill_change(
         f"{intro}\n\n"
         f"Новый навык:\n🧩 {new_name}\n\n"
         f"Минимум:\n{minimum}\n\n"
+        f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
         "Что получилось?"
     )
     await answer_with_keyboard(m, u, text, action_keyboard(), "skill_card")
@@ -5076,20 +5077,39 @@ def new_day_context_header(profile: Dict[str, Any]) -> str:
     )
 
 
-def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    header = new_day_context_header(profile)
+def new_day_context_message(profile: Dict[str, Any]) -> str:
+    return (
+        new_day_context_header(profile) +
+        "Проверим новый вход: не “заставить себя”, а создать условия для старта."
+    )
+
+
+
+def daily_learning_text(skill: Dict[str, Any]) -> str:
+    sid = str(skill.get("skill_id") or skill.get("id") or "")
+    name = str(skill.get("name") or "").lower()
+    if sid in {"open_only", "open_without_timer", "minimum_contact"} or "открыть" in name:
+        return "Полезная привычка: дневник достижений. Запиши один факт без оценки: «я открыл(а) место задачи». Так мозг видит прогресс, а не только долг."
+    if sid in {"phone_far_3min", "phone_away_3_min", "one_tab_focus"} or "телефон" in name or "фокус" in name:
+        return "ДБТ-навык: однонаправленность. На короткий подход держим одно окно, одно действие и один следующий шаг — без параллельного самоконтроля."
+    if sid in {"body_first", "body_before_task", "one_breath", "crisis_grounding"} or "тело" in name:
+        return "ДБТ-навык для быстрого успокоения: стопы на пол, длинный выдох, назови один предмет вокруг. Сначала снижаем пик, потом выбираем шаг."
+    if sid in {"bad_draft", "bad_first_step", "check_the_facts_light", "self_criticism_to_instruction"} or "черновик" in name:
+        return "ДБТ-навык: безоценочность. Отделяем факт от приговора: не «я провалился», а «документ ещё не открыт; следующий шаг — открыть»."
+    if sid in {"minimum_viable_day", "choose_one", "task_cut"} or "миним" in name:
+        return "ДБТ-навык: эффективность. Вопрос не «как правильно?», а «что сработает на 1% прямо сейчас?» — это можно занести в планер как минимум дня."
+    return "ДБТ-навык: участие. На 60–120 секунд входишь в действие полностью, без требования идеального настроя; после отмечаешь один факт прогресса в дневнике или планере."
+
+def new_day_skill_card_text(skill: Dict[str, Any]) -> str:
     if skill.get("daily_text"):
         return (
-            header +
-            "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
             f"{skill.get('daily_text')}\n\n"
+            f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
             "Что получилось?"
         )
     skill_name = skill.get("name") or "Телефон вне руки на 3 минуты"
     if (skill.get("skill_id") or "") in {"phone_far_3min", "phone_away_3_min"} or "телефон" in skill_name.lower():
         return (
-            header +
-            "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
             "🧩 Навык дня: Телефон вне руки на 3 минуты\n\n"
             "Попробуй:\n"
             "1. Положи телефон вне досягаемости руки.\n"
@@ -5097,6 +5117,7 @@ def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
             "3. Не работай идеально. Просто побудь рядом с задачей 3 минуты.\n\n"
             "Минимум:\n"
             "положить телефон экраном вниз на расстояние вытянутой руки.\n\n"
+            f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
             "Что получилось?"
         )
     steps = skill.get("simple") or skill.get("steps") or []
@@ -5106,12 +5127,18 @@ def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
         step_text = skill.get("how") or skill.get("how_more") or "Сделай самый маленький вход в задачу 60–120 секунд."
     minimum = skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу"
     return (
-        header +
-        "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
         f"🧩 Навык дня: {skill_name}\n\n"
         f"Попробуй:\n{step_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
+        f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
         "Что получилось?"
+    )
+
+
+def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    return (
+        f"{new_day_context_message(profile)}\n\n"
+        f"{new_day_skill_card_text(skill)}"
     )
 
 
@@ -5215,6 +5242,7 @@ def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optiona
         f"🧩 Навык дня: {skill_name}\n\n"
         f"Попробуй:\n{step_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
+        f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
         "Что получилось?"
     )
 
@@ -5760,40 +5788,42 @@ async def build_admin_stats_text(db_path: str) -> str:
         lines.append("- нет данных")
     return "\n".join(lines)
 
-async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
-    """Fully erase one user's durable run state and recreate a clean profile.
+def _sqlite_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
 
-    This is intentionally stronger than overwriting the users row: tester resets
-    must not leave old maps, skill outcomes, helpfulness signals, tasks, action
-    history, feedback, paid/test flags, streaks, or points in side tables.
+
+async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
+    """Fully erase one user's durable run state and leave no user row behind.
+
+    /reset_me must behave like a real fresh install for that Telegram id: all
+    rows tied to user_id are removed, including the users row itself. The next
+    /start will create a brand-new default user through get_user(), with no
+    previous profile, tasks, events, payments, test flags, or counters.
     """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        )).fetchall()
+        for row in rows:
+            table = str(row["name"] if isinstance(row, aiosqlite.Row) else row[0])
+            columns = await (await db.execute(f"PRAGMA table_info({_sqlite_ident(table)})")).fetchall()
+            column_names = {str(col["name"] if isinstance(col, aiosqlite.Row) else col[1]) for col in columns}
+            if "user_id" in column_names:
+                await db.execute(f"DELETE FROM {_sqlite_ident(table)} WHERE user_id=?", (uid,))
+            elif table == "users" and "telegram_id" in column_names:
+                await db.execute(f"DELETE FROM {_sqlite_ident(table)} WHERE telegram_id=?", (uid,))
+        await db.commit()
     fresh = default_user(uid)
     fresh["chat_id"] = chat_id
-    # Keep reset as a true pre-start state: /start must rebuild onboarding,
-    # not resume a stale/default skill card.
     fresh["stage"] = "start"
     fresh["current_step"] = "start"
-    # A profile reset must not preserve or re-grant per-user QA/payment state,
-    # even when the bot process itself runs with TEST_MODE enabled.
     fresh["trial_phase"] = "trial3"
     fresh["payment_status"] = "trial"
     fresh["access_status"] = "trial"
     fresh["paid_until"] = None
     fresh["is_test_user"] = 0
     fresh["fast_forward_enabled"] = 0
-    async with aiosqlite.connect(DB_PATH) as db:
-        for table in (
-            "events",
-            "user_days",
-            "skill_attempts",
-            "action_events",
-            "user_feedback",
-            "user_tasks",
-            "user_sessions",
-        ):
-            await db.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
-        await db.commit()
-    await save_user(fresh, DB_PATH)
     return fresh
 
 
@@ -6943,7 +6973,7 @@ async def main_flow(m: Message):
         await m.answer("Слушаю голосовое и сначала проверяю безопасность…")
         global_voice_text = await whisper_transcribe(m)
         if not global_voice_text:
-            await m.answer("Не смог разобрать голосовое. Если тебе небезопасно — нажми 🆘 Мне небезопасно или напиши коротко текстом.")
+            await m.answer("Не смог разобрать голосовое. Напиши коротко текстом, что сейчас мешает работе.")
             return
         text = global_voice_text.strip()
         low = text.lower()
@@ -7686,14 +7716,14 @@ async def main_flow(m: Message):
         if "clarity_up" in effect_tags:
             effect_patch["effect_clarity"] = True
         sid = current_skill_id(u)
-        helpful = bool({"relief", "confidence_up", "anxiety_down", "clarity_up"} & set(effect_tags))
-        skill_patch = {"last_effect_note": note, "last_skill_effect": "helpful" if helpful else "unknown"}
-        if helpful:
-            skill_patch.update({"best_skill": sid, "last_successful_skill": sid})
+        observed_effect = bool({"relief", "confidence_up", "anxiety_down", "clarity_up"} & set(effect_tags))
+        skill_patch = {
+            "last_effect_note": note,
+            "last_skill_effect": "unknown",
+            "last_unconfirmed_skill_effect": "observed" if observed_effect else "unknown",
+        }
         await record_profile_signal(u["user_id"], "training", {**effect_patch, **skill_patch}, source="after_action_note_saved")
-        if helpful:
-            await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
-        await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note), "effect_tags": effect_tags}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(u["user_id"], "training", "after_action_note_saved", {"len": len(note), "effect_tags": effect_tags, "helpful_confirmed": False}, DB_PATH, SHEETS_WEBHOOK_URL)
         await send_success_menu(m, u, source="after_action_note")
         return
 
@@ -8065,8 +8095,8 @@ async def main_flow(m: Message):
         await show_context_fallback(m, u, "working_map_invalid_button")
         return
 
-    # confirm_analysis
-    if u["stage"] == "confirm_analysis":
+    # confirm_analysis / analysis_details share the same action buttons.
+    if u.get("stage") in {"confirm_analysis", "analysis_details"}:
         low = text.lower()
         if "давай действие" in low or text == "💪 Давай действие":
             await log_event(u["user_id"], "analysis", "analysis_action_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)

@@ -980,9 +980,8 @@ kb_trainers = ReplyKeyboardMarkup(
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="⚡ Застревание в работе")],
         [KeyboardButton(text="🌙 Закрыть день")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -1044,7 +1043,6 @@ kb_day_core_stop = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🎭 Сменить тренера")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
         [KeyboardButton(text="🌙 До завтра")],
     ],
     resize_keyboard=True
@@ -1058,7 +1056,6 @@ kb_failed = ReplyKeyboardMarkup(
         [KeyboardButton(text="🧠 Слишком много всего")],
         [KeyboardButton(text="🤷 Не понимаю, зачем это делать")],
         [KeyboardButton(text="🎙️ Опишу голосом или текстом")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -1075,7 +1072,7 @@ kb_downscale = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
-        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Мне небезопасно")],
+        [KeyboardButton(text="🧭 Моя карта")],
     ],
     resize_keyboard=True
 )
@@ -1083,7 +1080,6 @@ kb_downscale = ReplyKeyboardMarkup(
 kb_downscale_name_task = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Написал")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True
 )
@@ -1715,7 +1711,7 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Мне небезопасно».',
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nЕсли стало совсем тяжело — обратись к живому человеку или в экстренную службу.',
     'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
 
