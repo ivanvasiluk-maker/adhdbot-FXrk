@@ -253,7 +253,6 @@ def check_launch_week_invariants() -> list[str]:
             errors.append(f"daily profile invariant: missing marker: {marker!r}")
 
     sales_analysis_required = (
-        "не общий совет, а первую персональную модель",
         "не просто выдавать упражнения",
         "уточнять твою персональную модель",
         "что помогает именно тебе",

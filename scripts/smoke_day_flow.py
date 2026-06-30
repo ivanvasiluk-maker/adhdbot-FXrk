@@ -92,7 +92,7 @@ async def main() -> None:
             for _ in range(3):
                 user, repeat_msg = await send(uid, "🔁 Ещё круг")
                 assert user["current_day_id"] == day_id
-                assert "Ещё одна попытка сегодня. Продолжаем тот же навык." in joined(repeat_msg)
+                assert "Это следующий шаг, не повтор старта." in joined(repeat_msg)
                 assert "🌱 Новый день" not in joined(repeat_msg)
                 assert "Вчера мы увидели" not in joined(repeat_msg)
             assert await attempt_count_for_day(day_id, bot.DB_PATH) == 3
@@ -104,13 +104,18 @@ async def main() -> None:
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             if "Что сегодня было полезнее всего?" in joined(close_msg):
                 user, close_msg = await send(uid, "🧩 Маленький конкретный шаг")
-            assert "До завтра. Новый навык откроется после смены календарного дня." in joined(close_msg)
+            assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
 
-            # 3. Action after close is blocked until a real next day/test transition.
+            # 3. Action after close asks for consent, then opens one voluntary short step.
             user, blocked_msg = await send(uid, "💪 Давай действие")
             assert user["current_day_id"] == day_id
-            assert "день уже закрыт" in joined(blocked_msg).lower() or "На сегодня достаточно" in joined(blocked_msg)
+            assert "Хочешь сделать ещё один короткий добровольный подход?" in joined(blocked_msg)
             assert "🧩 Навык дня" not in joined(blocked_msg)
+            user, voluntary_msg = await send(uid, "✅ Да, ещё один короткий шаг")
+            assert "Добровольный короткий подход" in joined(voluntary_msg)
+            assert "🧩 Навык дня" in joined(voluntary_msg)
+            user, second_extra_msg = await send(uid, "💪 Давай действие")
+            assert "добровольный дополнительный подход сегодня уже был" in joined(second_extra_msg)
 
             # 4-5. force_next_day closes/opens atomically, preserves total progress, resets daily attempts.
             before_done = int(user.get("done_count") or 0)
