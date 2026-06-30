@@ -23,15 +23,22 @@ def main() -> None:
         "🆘 Кризис": "crisis",
         "🧭 Моя карта": "map",
         "💪 Давай действие": "action",
+        "🧭 Давай действие": "action",
+        "💪 Сделать следующий шаг": "action",
+        "💪 Продолжить тренировку": "action",
+        "💪 Начать тренировку": "action",
         "🌙 Хватит на сегодня": "enough",
         "🌙 Закрыть день": "close_day",
         "🌙 До завтра": "tomorrow",
         "🔁 Ещё круг": "repeat",
         "🔁 Другой навык": "other_skill",
         "🔄 Сменить навык": "change_skill",
+        "🔄 Выбрать другой навык": "change_skill",
+        "🤷 Не моё": "change_skill",
         "🎭 Сменить тренера": "trainer_switch",
         "Ещё": "more",
         "📚 Почему это работает": "why",
+        "🧠 Почему этот навык": "why_skill",
         "📚 Подробнее": "details",
         "Пропустить": "skip",
     }
@@ -41,7 +48,7 @@ def main() -> None:
             assert bot.global_button_kind(text, text.lower()) == kind, (state, text, kind)
 
     assert "handle_global_button(m, u, text)" in BOT_SOURCE
-    assert "Сейчас день уже закрыт. Новый навык откроется завтра" in BOT_SOURCE
+    assert "День уже закрыт, и минимум ты выполнил" in BOT_SOURCE
     assert "Пропуск записал как данные" in BOT_SOURCE
     assert "Ок. Не будем повторять навык, который сейчас не ложится." in BOT_SOURCE
     assert "Задача, карта и прогресс сохранятся." in BOT_SOURCE
