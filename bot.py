@@ -9097,6 +9097,8 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
         comp_for_message.get("specific_pattern") or comp_for_message.get("live_pattern") or "",
         comp_for_message.get("useful_signal") or "",
         comp_for_message.get("skills_focus") if isinstance(comp_for_message.get("skills_focus"), list) else [],
+        (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
+        (analysis_result.get("recommended_skill_reason") or ""),
     )
     set_last_explanation_context(
         u,
@@ -9107,7 +9109,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
         "Подтверди, похоже ли это на тебя, или нажми «Подробнее», чтобы разобрать гипотезу."
     )
     await save_user(u, DB_PATH)
-    msg = f"{preliminary_conclusion}\n\n{format_comprehensive_analysis(comp_for_message, trainer_key=u.get('trainer_key', 'marsha'))}\n\nЭто похоже на тебя?"
+    msg = f"{preliminary_conclusion}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 
 # ============================================================

@@ -603,27 +603,22 @@ def preliminary_diagnosis_conclusion_text(
     main_pattern: str = "",
     useful_signal: str = "",
     skills_focus: list | None = None,
+    first_check: str = "",
+    skill_reason: str = "",
 ) -> str:
-    """Short post-diagnosis conclusion: explicitly preliminary, not a diagnosis."""
+    """Short post-diagnosis conclusion; detailed analysis lives behind «📚 Подробнее»."""
     skills_focus = skills_focus or []
-    focus_lines = "\n".join(f"— {x}" for x in skills_focus[:3] if x) or "— уменьшить вход в задачу\n— проверить, что помогает возвращаться\n— подобрать рабочий формат старта"
-    main_line = main_pattern or "вход в действие сейчас требует слишком много усилия"
-    useful_line = f"\nЧто уже можно использовать как ресурс:\n— {useful_signal}\n" if useful_signal else ""
+    main_line = main_pattern or "пока вход в действие выглядит слишком дорогим"
+    useful_line = useful_signal or "ты уже заметил(а), где именно ломается старт"
+    check_line = first_check or (str(skills_focus[0]) if skills_focus else "один маленький вход в задачу")
+    reason_line = skill_reason or "он проверяет главный стопор без длинной подготовки"
     return (
-        "📌 ПРЕДВАРИТЕЛЬНОЕ ЗАКЛЮЧЕНИЕ\n\n"
-        "Это первая рабочая модель.\n"
-        "Мы ещё собираем данные.\n\n"
-        "Сейчас это не медицинское заключение и не окончательный вывод.\n"
-        "Это рабочая гипотеза, которую мы будем уточнять по твоим действиям.\n\n"
-        f"Что сейчас похоже на главный узел:\n— {main_line}\n"
-        f"{useful_line}\n"
-        "Основные направления развития на ближайшие дни:\n"
-        f"{focus_lines}\n\n"
-        "Почему это важно:\n"
-        "— ты получаешь не общий совет, а первую персональную модель\n"
-        "— дальше я буду подбирать навык, размер шага и объяснение по твоим реакциям\n"
-        "— каждый выполненный или не выполненный шаг делает карту точнее\n\n"
-        "Через несколько дней модель станет точнее: я буду смотреть, что сработало, где шаг оказался большим, где был возврат и какие навыки реально подходят."
+        "📌 Короткое заключение\n\n"
+        f"Главный узел сейчас:\n— {main_line}\n\n"
+        f"Ресурс, который уже есть:\n— {useful_line}\n\n"
+        f"Что проверим первым:\n— {check_line}\n\n"
+        f"Почему выбран этот навык:\n— {reason_line}\n\n"
+        "Если хочешь разбор по механизму — нажми «📚 Подробнее»."
     )
 
 

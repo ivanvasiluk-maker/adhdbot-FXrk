@@ -695,6 +695,120 @@ def _analysis_facts(evidence: List[str], limit: int = 6) -> str:
     return "\n".join(f"— {x}" for x in clean[:limit]) or "— данных пока мало"
 
 
+def _skill_display_name(skill_id: str) -> str:
+    skill = SKILLS_DB.get(str(skill_id or ""), {})
+    return str(skill.get("name") or skill_id or "маленький вход")
+
+
+def _skill_reason(skill_id: str, pattern: str = "") -> str:
+    skill = SKILLS_DB.get(str(skill_id or ""), {})
+    if skill.get("why_short"):
+        return str(skill.get("why_short"))
+    if pattern == "perfectionism_visibility_fear":
+        return "он снижает цену ошибки и помогает начать без идеального результата"
+    if pattern == "attention_escape":
+        return "он создаёт короткую паузу перед быстрым отвлечением"
+    if pattern == "low_energy_overload":
+        return "он уменьшает требование к себе до уровня текущего ресурса"
+    if pattern == "shame_self_attack":
+        return "он переводит самокритику в проверяемый следующий шаг"
+    return "он проверяет вход в задачу без давления на результат"
+
+
+def _analysis_line_or_unknown(items: List[str], fallback: str = "данных пока нет") -> str:
+    clean = [str(x).strip() for x in items if str(x).strip()]
+    return "; ".join(clean[:2]) if clean else fallback
+
+
+def _detailed_section_lines(pattern: str, signals: Dict[str, Any], evidence: List[str], core_hypothesis: str, recommended_variant: str, skills_focus: List[str]) -> List[str]:
+    facts_text = _analysis_line_or_unknown(evidence, "данных пока мало — не добавляю факты от себя")
+    trigger = "момент перед стартом задачи"
+    if signals.get("fear_bad") or signals.get("fear_visible") or pattern == "perfectionism_visibility_fear":
+        trigger = "риск сделать плохо или быть оценённым"
+    elif signals.get("attention_escape") or pattern == "attention_escape":
+        trigger = "быстрый доступ к отвлечениям"
+    elif signals.get("overload") or pattern == "low_energy_overload":
+        trigger = "перегруз до первого действия"
+    elif signals.get("too_many_options"):
+        trigger = "слишком много вариантов перед стартом"
+
+    thoughts = []
+    if signals.get("fear_bad"):
+        thoughts.append(str(signals.get("fear_bad")))
+    if signals.get("fear_visible"):
+        thoughts.append(str(signals.get("fear_visible")))
+    if signals.get("meaning_gap"):
+        thoughts.append(str(signals.get("meaning_gap")))
+    if not thoughts and pattern == "perfectionism_visibility_fear":
+        thoughts.append("пока похоже: результат может быть оценён как плохой")
+
+    emotions = []
+    evidence_joined = " ".join(evidence).lower()
+    if "паник" in evidence_joined:
+        emotions.append("паника")
+    if signals.get("self_anger"):
+        emotions.append(str(signals.get("self_anger")))
+    if signals.get("fear_bad") or signals.get("fear_visible") or pattern == "perfectionism_visibility_fear":
+        emotions.append("страх оценки")
+
+    body = "данных пока нет"
+    if "паник" in evidence_joined:
+        body = "паника может ощущаться телесно, но конкретные телесные признаки ты пока не описал(а)"
+    elif signals.get("overload"):
+        body = "пока видно только ощущение перегруза; телесные признаки ещё надо уточнить"
+
+    avoidance = str(signals.get("escapes") and " / ".join(signals.get("escapes")[:3]) or "")
+    if not avoidance:
+        if signals.get("preparation"):
+            avoidance = str(signals.get("preparation"))
+        elif pattern == "perfectionism_visibility_fear":
+            avoidance = "откладывание первого чернового следа"
+        else:
+            avoidance = "откладывание или подготовка вместо первого действия"
+
+    immediate_gain = "сразу становится меньше напряжения или риска ошибиться"
+    later_cost = "задача остаётся стоять, а давление растёт"
+    if signals.get("escapes"):
+        immediate_gain = "быстрые стимулы дают облегчение прямо сейчас"
+        later_cost = "время уходит, а возвращаться к задаче становится тяжелее"
+
+    cycle = f"триггер → {core_hypothesis} → {avoidance} → короткое облегчение → больше давления перед следующим стартом"
+    resources = []
+    if signals.get("starts_environment"):
+        resources.append(str(signals.get("starts_environment")))
+    if signals.get("not_hard"):
+        resources.append(str(signals.get("not_hard")))
+    resources.append("ты уже можешь описать момент, где ломается старт")
+
+    already_helps = []
+    useful = signals.get("useful_signal")
+    if useful:
+        already_helps.append(str(useful))
+
+    next_skills = [x for x in skills_focus[1:4] if x]
+    if not next_skills:
+        next_skills = ["уменьшение шага", "возврат после выпадения", "проверка внешней опоры"]
+
+    skill_name = _skill_display_name(recommended_variant)
+    reason = _skill_reason(recommended_variant, pattern)
+    return [
+        f"1. Что произошло.\n— {facts_text}",
+        f"2. Что стало триггером.\n— пока похоже: {trigger}",
+        f"3. Какие мысли или оценки включаются.\n— {_analysis_line_or_unknown(thoughts)}",
+        f"4. Какие эмоции возникают.\n— {_analysis_line_or_unknown(emotions)}",
+        f"5. Что происходит в теле.\n— {body}",
+        f"6. Как человек начинает избегать.\n— {avoidance}",
+        f"7. Что даёт избегание прямо сейчас.\n— {immediate_gain}",
+        f"8. Какую цену оно создаёт потом.\n— {later_cost}",
+        f"9. Повторяющийся цикл прокрастинации.\n— {cycle}",
+        f"10. Ресурсы человека.\n— {_analysis_line_or_unknown(resources)}",
+        f"11. Что уже помогает.\n— {_analysis_line_or_unknown(already_helps, 'данных пока мало — проверим по действиям')}",
+        f"12. Какие гипотезы ещё надо проверить.\n— помогает ли выбранный вход; что сильнее: страх оценки, перегруз, отвлечение или низкий ресурс",
+        f"13. Почему выбран текущий навык.\n— {skill_name}: {reason}",
+        f"14. Какие навыки могут быть следующими.\n— {_analysis_line_or_unknown(next_skills)}",
+    ]
+
+
 def _primary_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str) -> Dict[str, str]:
     """Render analysis without inventing unreported life details.
 
@@ -723,23 +837,15 @@ def _primary_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis
     return base
 
 
-def _detailed_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str) -> Dict[str, str]:
-    """Detailed analysis with facts/hypotheses clearly separated."""
-    facts = _analysis_facts(evidence, 8)
-    check = "помогает ли сначала сузить выбор до одного действия"
-    if pattern == "perfectionism_visibility_fear":
-        check = "помогает ли снизить цену ошибки через черновой, необязательный первый шаг"
-    elif pattern == "attention_escape":
-        check = "помогает ли короткий барьер перед быстрым отвлечением"
-    elif pattern == "low_energy_overload":
-        check = "помогает ли уменьшить шаг до уровня текущей энергии"
-
+def _detailed_analysis_scripts(pattern: str, evidence: List[str], core_hypothesis: str, signals: Optional[Dict[str, Any]] = None, recommended_variant: str = "", skills_focus: Optional[List[str]] = None) -> Dict[str, str]:
+    """Detailed product-grade analysis grounded in extracted user facts."""
+    signals = signals or {}
+    skills_focus = skills_focus or []
+    sections = _detailed_section_lines(pattern, signals, evidence, core_hypothesis, recommended_variant, skills_focus)
     text = (
-        "Разделяю факты и гипотезы.\n\n"
-        f"Факты из твоего описания:\n{facts}\n\n"
-        f"Гипотеза:\n— пока есть гипотеза, что {core_hypothesis}.\n\n"
-        f"Что проверяем:\n— {check}.\n\n"
-        "Если проверка не сработает, это не говорит ничего плохого о тебе — просто гипотеза была неточной, и мы выберем другой вход."
+        "📚 Подробнее: психологический разбор\n\n"
+        "Я опираюсь на твои слова. Где данных мало — так и пишу, без додумывания.\n\n"
+        + "\n\n".join(sections)
     )
     return {"skinny": text, "beck": text, "marsha": text}
 
@@ -784,14 +890,23 @@ def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str
         "помогает ли внешний контакт / body doubling",
     ]
     rec = _recommended_skill_for_pattern(pattern)
+    recommended_variant = rec.get("recommended_variant", "open_only")
+    skill_name = _skill_display_name(recommended_variant)
+    skill_reason = _skill_reason(recommended_variant, pattern)
+    skills_focus = data.get("skills_focus") if isinstance(data.get("skills_focus"), list) else []
+    if data.get("useful_signal") and isinstance(signals, dict):
+        signals = {**signals, "useful_signal": data.get("useful_signal")}
     return {
         "pattern": pattern,
         "evidence_signals": evidence,
         "core_hypothesis": core_hypothesis,
         "secondary_hypotheses": secondary,
         **rec,
+        "recommended_skill_name": skill_name,
+        "recommended_skill_reason": skill_reason,
+        "first_check": skill_name,
         "primary_analysis_by_trainer": _primary_analysis_scripts(pattern, evidence, core_hypothesis),
-        "detailed_analysis_by_trainer": _detailed_analysis_scripts(pattern, evidence, core_hypothesis),
+        "detailed_analysis_by_trainer": _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus),
         "working_map_by_trainer": _working_map_scripts(pattern, core_hypothesis),
     }
 
@@ -814,7 +929,10 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
             "Сигналов мало. Я не буду добавлять детали от себя.\n"
             "Нужны 2–3 конкретных факта: что происходит перед стартом, куда уходит внимание и чего становится страшно."
         )
-    return _detailed_analysis_scripts(pattern, evidence, core_hypothesis).get(trainer_key) or _detailed_analysis_scripts(pattern, evidence, core_hypothesis)["marsha"]
+    recommended_variant = str((comp.get("analysis_result") or {}).get("recommended_variant") or _recommended_skill_for_pattern(pattern).get("recommended_variant") or "open_only")
+    skills_focus = comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else []
+    details = _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus)
+    return details.get(trainer_key) or details["marsha"]
 
 
 def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Dict[str, Any]] = None) -> str:
@@ -1104,14 +1222,15 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "initial_diagnosis", **profile_patch}, db_path, sheets_webhook)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, db_path, sheets_webhook)
 
-    # Show the actual precise analysis before asking for confirmation.
-    analysis_text = format_comprehensive_analysis(comp_to_store, r, u.get('trainer_key', 'marsha'))
+    # Show only the short conclusion; the full mechanism is behind «📚 Подробнее».
     preliminary_conclusion = preliminary_diagnosis_conclusion_text(
         comp_to_store.get("specific_pattern") or comp_to_store.get("live_pattern") or "",
         comp_to_store.get("useful_signal") or "",
         comp_to_store.get("skills_focus") if isinstance(comp_to_store.get("skills_focus"), list) else [],
+        (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
+        (analysis_result.get("recommended_skill_reason") or ""),
     )
-    msg = f"{preliminary_conclusion}\n\n{analysis_text}\n\nЭто похоже на тебя?"
+    msg = f"{preliminary_conclusion}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)
     await log_event(
