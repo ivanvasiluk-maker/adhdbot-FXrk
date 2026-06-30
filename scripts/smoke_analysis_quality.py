@@ -40,10 +40,20 @@ async def main() -> None:
 
     analysis_text = format_comprehensive_analysis(comp, quick, "beck")
     details_text = render_analysis_details_by_trainer(comp, "beck")
-    for marker in ("Моя гипотеза", "Механизм", "Как справляемся", "плохой черновик"):
+    for marker in ("Коротко", "Моя рабочая гипотеза", "проверяем"):
         assert marker in analysis_text, analysis_text
-    for marker in ("Почему такая гипотеза", "Связка выглядит так", "Что проверяем"):
+    for marker in ("Факты из твоего описания", "Гипотеза", "Что проверяем"):
         assert marker in details_text, details_text
+
+    vague = "мне страшно ошибиться, когда думаю обо всём сразу тревожно, не могу выбрать с чего начать"
+    vague_comp = normalize_analysis({}, vague, {})
+    vague_comp.update(safe_analysis_memory(vague, vague_comp))
+    vague_result = build_analysis_result(vague_comp, vague)
+    vague_comp["analysis_result"] = vague_result
+    vague_text = format_comprehensive_analysis(vague_comp, {}, "marsha")
+    forbidden = ("письмо", "ноутбук", "дедлайн", "почта", "новости", "Telegram", "YouTube", "черновик")
+    assert not any(word.lower() in vague_text.lower() for word in forbidden), vague_text
+    assert "Пока" in vague_text or "гипотеза" in vague_text, vague_text
 
     print("[SMOKE] analysis quality OK")
 

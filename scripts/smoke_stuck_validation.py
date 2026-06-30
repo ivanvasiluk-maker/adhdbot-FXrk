@@ -36,10 +36,10 @@ class FakeMessage:
         self.chat = FakeChat(uid)
         self.text = text
         self.voice = None
-        self.answers: list[str] = []
+        self.answers: list[dict] = []
 
     async def answer(self, text: str, reply_markup=None, **kwargs):
-        self.answers.append(text)
+        self.answers.append({"text": text, "reply_markup": reply_markup})
 
 
 def keyboard_texts(markup) -> set[str]:
@@ -49,7 +49,7 @@ def keyboard_texts(markup) -> set[str]:
 async def send(uid: int, text: str):
     msg = FakeMessage(uid, text)
     await bot.main_flow(msg)
-    return await get_user(uid, bot.DB_PATH), "\n".join(msg.answers)
+    return await get_user(uid, bot.DB_PATH), "\n".join(item["text"] for item in msg.answers), msg
 
 
 async def seed_user(uid: int, *, stage: str = "failed_options"):
@@ -83,39 +83,66 @@ async def main() -> None:
 
             uid = 9301
             await seed_user(uid)
-            u, prompt = await send(uid, "🎙️ Опишу голосом или текстом")
+            u, prompt, _ = await send(uid, "🎙️ Опишу голосом или текстом")
             assert "Я сначала попробую понять" in prompt
             assert u["stage"] == "stuck_reason_text"
 
-            u, validation = await send(uid, "не понимаю нахуя")
-            assert "Похоже" in validation
-            assert "зачем вообще" in validation
-            assert "Что ближе?" in validation
-            assert "Минимальный шаг" not in validation
+            u, validation, validation_msg = await send(uid, "не понимаю нахуя")
+            assert "Я услышал" in validation
+            assert "Главный механизм" in validation
+            assert "Рабочая гипотеза" in validation
+            assert "Навык:" in validation
+            assert "Минимальный физический шаг" in validation
+            buttons = keyboard_texts(validation_msg.answers[-1]["reply_markup"])
+            assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(buttons)
             assert u["stage"] == "stuck_validation_choice"
             profile = await get_user_profile(uid, bot.DB_PATH)
             assert profile.get("last_free_stuck_hypothesis") == "meaning"
 
-            u, changed = await send(uid, "🧭 Не вижу смысла в самой задаче")
-            assert "Навык заменён" in changed
-            assert "Вернуть смысл шага" in changed
+            u, changed, _ = await send(uid, "✅ Да, похоже")
+            assert "Минимальный шаг" in changed or "возвращение контроля" in changed
 
             uid2 = 9302
             await seed_user(uid2, stage="stuck_reason_text")
-            u2, safety_validation = await send(uid2, "я устал, ничего не хочу, всё бессмысленно")
-            assert "насколько тебе безопасно" in safety_validation
+            u2, safety_validation, _ = await send(uid2, "я устал, ничего не хочу, всё бессмысленно")
+            assert "безопас" in safety_validation
+            assert "Минимальный физический шаг" in safety_validation
             assert u2["stage"] == "stuck_validation_choice"
-            u2, safety = await send(uid2, "🟡 Не уверен(а), насколько я в безопасности")
-            assert "Сейчас не режим продуктивности" in safety
-            assert u2["safety_mode"] in {"triage", "active"}
+            u2, уточнить, _ = await send(uid2, "🧠 Уточнить")
+            assert "уточни" in уточнить.lower()
+            assert u2["stage"] == "stuck_reason_text"
 
             uid3 = 9303
             await seed_user(uid3, stage="stuck_reason_text")
-            u3, self_attack = await send(uid3, "я опять всё просрал, ненавижу себя")
+            u3, self_attack, _ = await send(uid3, "я опять всё просрал, ненавижу себя")
             assert "самокритика" in self_attack
-            assert "Минимальный шаг" not in self_attack
-            u3, calm = await send(uid3, "🤍 Нужно сначала успокоиться")
+            assert "Минимальный физический шаг" in self_attack
+            u3, calm, _ = await send(uid3, "✅ Да, похоже")
             assert "Минимальный шаг" in calm or "возвращение контроля" in calm
+
+            uid4 = 9304
+            await seed_user(uid4, stage="stuck_reason_text")
+            u4, question, _ = await send(uid4, "застрял")
+            assert "Пока данных мало" in question
+            assert "Сейчас тяжелее выбрать" in question
+            assert u4["stage"] == "stuck_reason_text"
+            u4, clarified, clarified_msg = await send(uid4, "выбрать с чего начать, слишком много задач")
+            assert "Главный механизм" in clarified
+            assert "Навык:" in clarified
+            assert "Минимальный физический шаг" in clarified
+            assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(clarified_msg.answers[-1]["reply_markup"]))
+
+            uid5 = 9305
+            await seed_user(uid5, stage="stuck_reason_text")
+            u5, q1, _ = await send(uid5, "застрял")
+            assert "Сейчас тяжелее выбрать" in q1
+            u5, q2, _ = await send(uid5, "не могу")
+            assert "Тревога больше" in q2
+            u5, q3, _ = await send(uid5, "сложно")
+            assert "Тебе сейчас нужен" in q3
+            u5, final_after_three, _ = await send(uid5, "плохо")
+            assert "Навык:" in final_after_three
+            assert "Минимальный физический шаг" in final_after_three
         finally:
             bot.DB_PATH = old_db_path
 
