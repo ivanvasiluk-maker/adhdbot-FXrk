@@ -137,8 +137,9 @@ async def run() -> None:
     assert action_context["skill_history"]["did_not_work"] == ["open_only"]
     assert action_context["trainer_key"] == "beck"
 
-    assert {"💪 Сделать следующий шаг", "⚡ Я застрял", "🧭 Моя карта", "🌙 Закрыть день"}.issubset(keyboard_texts(kb_training_main))
+    assert {"💪 Сделать следующий шаг", "⚡ Я застрял", "🆘 Кризис прокрастинации", "🧭 Моя карта", "🌙 Закрыть день"}.issubset(keyboard_texts(kb_training_main))
     assert "🆘 Кризис" not in keyboard_texts(kb_training_main)
+    assert "🆘 Мне небезопасно" not in keyboard_texts(kb_training_main)
     assert "📊 Прогресс" not in keyboard_texts(kb_more_actions)
     assert keyboard_texts(kb_skill_card) == {"💪 Начать тренировку", "🤷 Не моё", "🔄 Выбрать другой навык", "🧠 Почему этот навык", "⚡ Я уже застрял"}
     assert bot.STALE_ACTION_CHANGED_TEXT == bot.POST_MINIMUM_CONTINUE_TEXT
@@ -149,6 +150,8 @@ async def run() -> None:
         "😬 Страшно, стыдно, боюсь ошибиться",
         "🧠 Слишком много всего",
         "🔋 Нет сил",
+        "🫨 Тревога и перегруз",
+        "🧨 Самокритика после срыва",
         "🤷 Не понимаю, зачем это делать",
         "🎙️ Опишу голосом или текстом",
     }
@@ -172,6 +175,15 @@ async def run() -> None:
             # belongs to the current menu; stale done-menu buttons in day_core_stop fall back.
             note_msg = await send(uid, "📌 Что изменилось?")
             assert "старый экран" in last_text(note_msg).lower() or "день уже закрыт" in last_text(note_msg).lower(), last_text(note_msg)
+
+        await set_post_action_user(uid, db_path, "training", rounds=1)
+        not_my_msg = await send(uid, "🤷 Не моё")
+        assert "Это не откат" in last_text(not_my_msg), last_text(not_my_msg)
+        assert "Новый навык" in last_text(not_my_msg), last_text(not_my_msg)
+        profile = await get_user_profile(uid, db_path)
+        assert profile.get("last_not_fit_reason") == "not_my_skill", profile
+        assert profile.get("last_not_fit_skill"), profile
+        assert profile.get("last_better_entry_type") == "not_my_skill", profile
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         repeat_msg = await send(uid, "🔁 Ещё круг")
@@ -288,9 +300,15 @@ async def run() -> None:
         assert "не провал" in last_text(repeat_stuck_msg).lower(), last_text(repeat_stuck_msg)
         repeated_cognitive_msg = await send(uid, "🧠 Слишком много всего")
         repeated_text = last_text(repeated_cognitive_msg)
+        assert "Это не откат" in repeated_text, repeated_text
         assert "даже маленький шаг к задаче слишком дорогой" in repeated_text, repeated_text
         assert "положи ладонь на стол" in repeated_text, repeated_text
         assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не вышло", "🤷 Не моё", "🔄 Сменить навык", "⚡ Я застрял", "🧠 Почему этот навык", "🌙 Закрыть подход"}
+        profile = await get_user_profile(uid, db_path)
+        assert profile.get("last_not_fit_skill"), profile
+        assert profile.get("last_not_fit_reason") in {"overwhelm", "shame", "phone", "energy", "not_my_skill"}, profile
+        assert profile.get("last_better_entry_type"), profile
+        assert profile.get("current_tolerable_difficulty"), profile
 
 
         await set_post_action_user(uid, db_path, "training", rounds=1)

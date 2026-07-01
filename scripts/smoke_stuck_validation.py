@@ -79,7 +79,15 @@ async def main() -> None:
             await migrate_db(bot.DB_PATH)
             failed_buttons = keyboard_texts(kb_failed)
             assert "🤷 Не понимаю, зачем это делать" in failed_buttons
+            assert "🫨 Тревога и перегруз" in failed_buttons
+            assert "🧨 Самокритика после срыва" in failed_buttons
             assert "🆘 Мне небезопасно" not in failed_buttons
+            assert bot.classify_free_stuck_text("залип в YouTube и новости") == "phone"
+            assert bot.classify_free_stuck_text("страшно ошибиться, стыдно показать черновик") == "file_fear"
+            assert bot.classify_free_stuck_text("слишком много задач, не могу выбрать") == "overwhelm"
+            assert bot.classify_free_stuck_text("тревога и перегруз, накрывает") == "anxiety"
+            assert bot.classify_free_stuck_text("самокритика после срыва") == "self_attack"
+            assert bot.classify_free_stuck_text("не вижу зачем это делать") == "meaning"
 
             uid = 9301
             await seed_user(uid)
@@ -105,7 +113,7 @@ async def main() -> None:
             uid2 = 9302
             await seed_user(uid2, stage="stuck_reason_text")
             u2, safety_validation, _ = await send(uid2, "я устал, ничего не хочу, всё бессмысленно")
-            assert "безопас" in safety_validation
+            assert "безопас" not in safety_validation.lower()
             assert "Минимальный физический шаг" in safety_validation
             assert u2["stage"] == "stuck_validation_choice"
             u2, уточнить, _ = await send(uid2, "🧠 Уточнить")
