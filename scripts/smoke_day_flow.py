@@ -121,6 +121,10 @@ async def main() -> None:
             before_done = int(user.get("done_count") or 0)
             user, force_msg = await send(uid, "/force_next_day")
             assert "Тестовый переход выполнен. Открыт День 2." in joined(force_msg)
+            assert "🌱 Новый день" in force_msg.answers[-2]
+            assert "🧩 Навык дня" not in force_msg.answers[-2]
+            assert "🧩 Навык дня" in force_msg.answers[-1]
+            assert "📚 Мини-урок" in force_msg.answers[-1]
             assert user["current_day_id"] != day_id
             assert int(user.get("done_count") or 0) == before_done
             assert int(user.get("skill_attempts_today") or 0) == 0

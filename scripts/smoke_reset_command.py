@@ -88,6 +88,9 @@ async def main() -> None:
             msg = FakeMessage(uid, "/reset_me")
             assert await bot.handle_admin_command(msg, u, msg.text) is False
             assert await bot.handle_user_command(msg, u, msg.text) is True
+            async with bot.aiosqlite.connect(db_path) as db:
+                users_count = (await (await db.execute("SELECT COUNT(*) FROM users WHERE user_id=?", (uid,))).fetchone())[0]
+                assert users_count == 0, users_count
             saved = await get_user(uid, db_path)
             assert saved["stage"] == "start"
             assert saved["current_task_title"] is None
