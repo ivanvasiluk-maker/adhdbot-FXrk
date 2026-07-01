@@ -139,13 +139,13 @@ def keyboard_button_count(reply_markup) -> int:
 CRISIS_LIMIT = 3
 
 MENTAL_HEALTH_BOUNDARY_NOTE = (
-    "Я могу дать только навык самопомощи и не заменяю психолога, врача или экстренную службу."
+    "Я могу дать только навык самопомощи и не заменяю психолога, врача или живую помощь."
 )
 
 CRISIS_SAFETY_NOTE = (
     "Если есть риск причинить вред себе или кому-то, угроза насилия, потеря контроля "
     "или состояние резко ухудшается — пожалуйста, обратись за срочной живой помощью: "
-    "позвони в местный экстренный номер или напиши/позвони близкому человеку рядом."
+    "обратись к живой помощи вне SKILLER или напиши/позвони близкому человеку рядом."
 )
 
 # Praise phrases per trainer
@@ -935,9 +935,8 @@ def user_help_text() -> str:
         "— уменьшает шаг, если сложно начать\n"
         "— вечером закрывает день без стыда\n"
         "— показывает прогресс и маршрут\n"
-        "— показывает зеркало развития по /mirror\n"
-        "— включает кризисный режим по /crisis\n\n"
-        "Команды: /progress, /mirror, /settings, /stop, /start_over, /crisis."
+        "— показывает зеркало развития по /mirror\n\n"
+        "Команды: /progress, /mirror, /settings, /stop, /start_over."
     )
 
 
@@ -980,9 +979,9 @@ kb_trainers = ReplyKeyboardMarkup(
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🆘 Кризис прокрастинации")],
+        [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🌙 Закрыть день")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -1002,15 +1001,25 @@ kb_more_actions = ReplyKeyboardMarkup(
 kb_action_outcome = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
-        [KeyboardButton(text="🟡 Застрял / не вышло")],
-        [KeyboardButton(text="⏸ Пауза")],
+        [KeyboardButton(text="🟡 Не вышло")],
+        [KeyboardButton(text="🤷 Не моё"), KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧠 Почему этот навык")],
+        [KeyboardButton(text="🌙 Закрыть подход")],
     ],
     resize_keyboard=True,
 )
 
-# After every skill card we deliberately keep only three choices.
-kb_skill_card = kb_action_outcome
-kb_new_day_skill = kb_action_outcome
+kb_first_day_skill = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Начать тренировку")],
+        [KeyboardButton(text="🤷 Не моё"), KeyboardButton(text="🔄 Выбрать другой навык")],
+        [KeyboardButton(text="🧠 Почему этот навык"), KeyboardButton(text="⚡ Я уже застрял")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_card = kb_first_day_skill
+kb_new_day_skill = kb_first_day_skill
 kb_done = kb_action_outcome
 
 kb_success_next = ReplyKeyboardMarkup(
@@ -1034,7 +1043,6 @@ kb_day_core_stop = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🎭 Сменить тренера")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
         [KeyboardButton(text="🌙 До завтра")],
     ],
     resize_keyboard=True
@@ -1044,11 +1052,12 @@ kb_failed = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="😬 Страшно, стыдно, боюсь ошибиться")],
         [KeyboardButton(text="📱 Ушёл в телефон / YouTube")],
+        [KeyboardButton(text="🫨 Тревога и перегруз")],
         [KeyboardButton(text="🔋 Нет сил")],
         [KeyboardButton(text="🧠 Слишком много всего")],
+        [KeyboardButton(text="🧨 Самокритика после срыва")],
         [KeyboardButton(text="🤷 Не понимаю, зачем это делать")],
         [KeyboardButton(text="🎙️ Опишу голосом или текстом")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True,
 )
@@ -1065,7 +1074,7 @@ kb_downscale = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="😣 Даже это сложно"), KeyboardButton(text="🤔 Зачем так мало?")],
-        [KeyboardButton(text="🧭 Моя карта"), KeyboardButton(text="🆘 Мне небезопасно")],
+        [KeyboardButton(text="🧭 Моя карта")],
     ],
     resize_keyboard=True
 )
@@ -1073,7 +1082,6 @@ kb_downscale = ReplyKeyboardMarkup(
 kb_downscale_name_task = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Написал")],
-        [KeyboardButton(text="🆘 Мне небезопасно")],
     ],
     resize_keyboard=True
 )
@@ -1266,8 +1274,7 @@ def crisis_tool_text(pattern: str) -> str:
             "Если риск есть:\n"
             "— отойди от опасных предметов;\n"
             "— выйди к людям / открой дверь / перейди в более безопасное место;\n"
-            "— напиши или позвони живому человеку;\n"
-            "— обратись в экстренную службу.\n\n"
+            "— напиши или позвони живому человеку.\n\n"
             "Я могу помочь сделать ближайший безопасный шаг, но не заменяю живую помощь."
         ),
         "UNKNOWN": (
@@ -1361,8 +1368,7 @@ def crisis_tool_text(pattern: str) -> str:
             "Если риск есть:\n"
             "Отойди от опасных предметов.\n"
             "Перейди туда, где есть люди, или открой дверь.\n"
-            "Напиши/позвони живому человеку.\n"
-            "Обратись в экстренную службу.\n\n"
+            "Напиши/позвони живому человеку.\n\n"
             "Я помогу сделать ближайший безопасный шаг, но не заменяю живую помощь."
         ),
         "unknown": (
@@ -1705,7 +1711,7 @@ def payment_inline(payment_url: str) -> InlineKeyboardMarkup:
     )
 
 ONBOARDING_SCREENS = [
-    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nВ кризис — жми «🆘 Мне небезопасно».',
+    '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nЕсли нужна срочная психологическая или медицинская помощь, SKILLER не заменяет живые службы и не ведёт такой сценарий.',
     'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
 

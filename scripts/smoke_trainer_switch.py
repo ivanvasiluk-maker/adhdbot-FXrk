@@ -93,6 +93,8 @@ async def main() -> None:
 
             u, changed = await send(uid, "🧠 Бек — с объяснениями")
             assert "Теперь с тобой Бек" in changed
+            assert "Текущий подход остаётся тем же" in changed
+            assert "с объяснением механизма" in changed
             assert "Текущий подход на месте" in changed
             assert u["trainer_key"] == "beck"
             assert u["current_action_id"] == "action-stays-active"
@@ -105,6 +107,36 @@ async def main() -> None:
             u, map_text = await send(uid, "🧭 Моя карта")
             assert "Текущий тренер:" in map_text
             assert "Бек" in map_text
+
+            u, _ = await send(uid, "🎭 Сменить тренера")
+            u, same_text = await send(uid, "🧠 Бек — с объяснениями")
+            assert "Бек уже активен. Оставляем текущий стиль." in same_text
+            assert "Твой текущий тренер" not in same_text
+            assert u["trainer_key"] == "beck"
+
+            closed_uid = 9202
+            closed = default_user(closed_uid)
+            closed.update({
+                "chat_id": closed_uid,
+                "stage": "waiting_next_day",
+                "has_started_training": 1,
+                "trainer_key": "skinny",
+                "day": 1,
+                "current_day_id": "day-trainer-switch-closed",
+                "current_state": bot.STATE_DAY_CLOSED,
+                "day_closed": 1,
+                "today_closed": 1,
+                "day_status": "closed",
+            })
+            await save_user(closed, bot.DB_PATH)
+            closed, screen = await send(closed_uid, "🎭 Сменить тренера")
+            assert "Твой текущий тренер" in screen
+            closed, closed_text = await send(closed_uid, "🧠 Бек — с объяснениями")
+            assert "Стиль сохранён. Завтра тебя будет вести Бек." in closed_text
+            assert closed["trainer_key"] == "beck"
+            assert closed["stage"] == "waiting_next_day"
+            closed_profile = await get_user_profile(closed_uid, bot.DB_PATH)
+            assert closed_profile.get("trainer_current_mode") == "beck"
         finally:
             bot.DB_PATH = old_db_path
 

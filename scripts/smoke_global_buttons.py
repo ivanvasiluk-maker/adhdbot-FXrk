@@ -20,18 +20,25 @@ BOT_SOURCE = (REPO_ROOT / "bot.py").read_text(encoding="utf-8")
 
 def main() -> None:
     expected = {
-        "🆘 Кризис": "crisis",
         "🧭 Моя карта": "map",
         "💪 Давай действие": "action",
+        "🧭 Давай действие": "action",
+        "💪 Сделать следующий шаг": "action",
+        "💪 Продолжить тренировку": "action",
+        "💪 Начать тренировку": "action",
         "🌙 Хватит на сегодня": "enough",
         "🌙 Закрыть день": "close_day",
         "🌙 До завтра": "tomorrow",
         "🔁 Ещё круг": "repeat",
         "🔁 Другой навык": "other_skill",
         "🔄 Сменить навык": "change_skill",
+        "🔄 Выбрать другой навык": "change_skill",
+        "🤷 Не моё": "change_skill",
         "🎭 Сменить тренера": "trainer_switch",
+        "🆘 Кризис прокрастинации": "stuck",
         "Ещё": "more",
         "📚 Почему это работает": "why",
+        "🧠 Почему этот навык": "why_skill",
         "📚 Подробнее": "details",
         "Пропустить": "skip",
     }
@@ -40,12 +47,24 @@ def main() -> None:
         for text, kind in expected.items():
             assert bot.global_button_kind(text, text.lower()) == kind, (state, text, kind)
 
+    assert "стыд" in bot.trainer_style_line("marsha", "stuck")
+    assert "один шаг" in bot.trainer_style_line("skinny", "general")
+    assert "Гипотеза" in bot.trainer_style_line("beck", "general")
+    for scenario in ("stuck", "change", "map", "continue", "close", "offer", "curator"):
+        assert bot.trainer_style_line("marsha", scenario)
+        assert bot.trainer_style_line("skinny", scenario)
+        assert bot.trainer_style_line("beck", scenario)
+    assert bot.trainer_wrap({"trainer_key": "skinny"}, "Текст", "continue").startswith("Если продолжаем")
+
     assert "handle_global_button(m, u, text)" in BOT_SOURCE
-    assert "Сейчас день уже закрыт. Новый навык откроется завтра" in BOT_SOURCE
+    assert "День уже закрыт, и минимум ты выполнил" in BOT_SOURCE
     assert "Пропуск записал как данные" in BOT_SOURCE
     assert "Ок. Не будем повторять навык, который сейчас не ложится." in BOT_SOURCE
     assert "Задача, карта и прогресс сохранятся." in BOT_SOURCE
-    assert "start_safety_interceptor(m, u, text, \"global_button\", explicit=True)" in BOT_SOURCE
+    assert bot.global_button_kind("🆘 Кризис", "🆘 кризис") == ""
+    assert bot.global_button_kind("🆘 Мне небезопасно", "🆘 мне небезопасно") == ""
+    assert bot.has_crisis_safety_signal("не хочу жить", "training") is False
+    assert bot.should_open_global_crisis("у меня кризис", "training") is False
 
     for key in ("marsha", "skinny", "beck"):
         trainer = TRAINERS[key]
