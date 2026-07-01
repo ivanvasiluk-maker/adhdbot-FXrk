@@ -73,6 +73,7 @@ async def main() -> None:
                 "chat_id": uid,
                 "stage": "training",
                 "has_started_training": 1,
+                "done_count": 1,
                 "trainer_key": "marsha",
                 "day": 1,
                 "current_day_id": "day-trainer-switch",

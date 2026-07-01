@@ -156,124 +156,34 @@ async def main() -> None:
     assert "Социальные опоры:" in social_support_map_text()
     assert "нужен ли внешний старт" in social_support_map_text()
 
-    assert bot.should_open_global_crisis("🆘 Кризис", "waiting_next_day") is True
-    assert bot.should_open_global_crisis("у меня кризис", "training") is True
+    # Legacy emergency/safety routing is suppressed for the product test: SKILLER
+    # keeps only the procrastination-crisis branch.
+    assert bot.should_open_global_crisis("🆘 Кризис", "waiting_next_day") is False
+    assert bot.should_open_global_crisis("у меня кризис", "training") is False
     assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "await_problem_text") is False
-    assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "run_analysis") is False
-    assert bot.has_crisis_safety_signal("не хочу жить, есть план сегодня", "training") is True
-    assert bot.has_crisis_safety_signal("паническая атака, не могу дышать", "training") is True
-    assert bot.has_crisis_safety_signal("проверь оффер и кризис в тексте диагностики", "await_problem_text") is False
-    assert bot.has_crisis_safety_signal("Лучше бы меня не было, я не вижу выхода", "ask_name") is True
+    assert bot.has_crisis_safety_signal("не хочу жить, есть план сегодня", "training") is False
+    assert bot.has_crisis_safety_signal("паническая атака, не могу дышать", "training") is False
     assert bot.safety_signal_details("Лучше бы меня не было, я не вижу выхода")["high"] is True
-    assert bot.has_crisis_safety_signal("Мне страшно оставаться одному", "await_training_target") is True
     assert bot.safety_signal_details("🆘 Кризис", explicit=True)["triggered"] is True
-    assert "crisis_return_blocked_until_safety_done" in BOT_SOURCE
-    assert "crisis_productivity_return_deferred_until_safety_aftercare" in BOT_SOURCE
-    assert 'await start_safety_interceptor(m, u, reason_text, "crisis_tool_high_risk", explicit=True)' in BOT_SOURCE
-    assert 'json.dumps({"type": "crisis_aftercare"}' in BOT_SOURCE
-    assert "safety_blocked_productivity_button" in BOT_SOURCE
-    assert "safety_blocked_callback" in BOT_SOURCE
-    assert "await handle_safety_callback(c, u, data)" in BOT_SOURCE
-    assert 'await start_safety_interceptor(m, u, text, "training_main", explicit=True)' in BOT_SOURCE
+    assert "legacy_safety_interceptor_suppressed" in BOT_SOURCE
 
-    # Dynamic global-interceptor checks: crisis text/button must preempt normal states.
     with tempfile.TemporaryDirectory() as tmp:
         old_db_path = bot.DB_PATH
         bot.DB_PATH = str(Path(tmp) / "bot.db")
         try:
             await init_db(bot.DB_PATH)
             await migrate_db(bot.DB_PATH)
-
             uid = 42001
-            onboarding_user = default_user(uid)
-            onboarding_user.update({"chat_id": uid, "stage": "ask_name"})
-            await save_user(onboarding_user, bot.DB_PATH)
-            onboarding_msg = FakeMessage(uid, "Лучше бы меня не было, я не вижу выхода")
-            await bot.main_flow(onboarding_msg)
-            onboarding_after = await get_user(uid, bot.DB_PATH)
-            assert bot.safety_mode(onboarding_after) == "active"
-            assert onboarding_after["stage"] == "safety_mode"
-            assert "Сейчас не режим продуктивности" in joined_answers(onboarding_msg)
-            assert "Как тебя зовут" not in joined_answers(onboarding_msg)
-
-            task_uid = 42002
-            task_user = default_user(task_uid)
-            task_user.update({"chat_id": task_uid, "stage": "training", "has_started_training": 1, "current_skill": "open_only"})
-            await save_user(task_user, bot.DB_PATH)
-            task_msg = FakeMessage(task_uid, "Мне страшно оставаться одному")
-            await bot.main_flow(task_msg)
-            task_after = await get_user(task_uid, bot.DB_PATH)
-            assert bot.safety_mode(task_after) in {"triage", "active"}
-            assert "Сейчас не режим продуктивности" in joined_answers(task_msg)
-            assert "открыть задачу" not in joined_answers(task_msg).lower()
-
-            button_uid = 42003
-            button_user = default_user(button_uid)
-            button_user.update({"chat_id": button_uid, "stage": "offer"})
-            await save_user(button_user, bot.DB_PATH)
-            button_msg = FakeMessage(button_uid, "🆘 Кризис")
-            await bot.main_flow(button_msg)
-            button_after = await get_user(button_uid, bot.DB_PATH)
-            assert bot.safety_mode(button_after) == "triage"
-            assert "Сейчас не режим продуктивности" in joined_answers(button_msg)
-
-            urgent_uid = 42004
-            urgent_user = default_user(urgent_uid)
-            urgent_user.update({"chat_id": urgent_uid, "stage": "safety_mode", "safety_mode": "active", "safety_last_risk": "yes"})
-            await save_user(urgent_user, bot.DB_PATH)
-            old_button_msg = FakeMessage(urgent_uid, "💪 Давай действие")
-            await bot.main_flow(old_button_msg)
-            urgent_after = await get_user(urgent_uid, bot.DB_PATH)
-            assert bot.safety_mode(urgent_after) == "active"
-            assert "Сейчас важнее не разбираться с задачами" in joined_answers(old_button_msg)
-            assert "Навык дня" not in joined_answers(old_button_msg)
-
-            close_uid = 42005
-            close_user = default_user(close_uid)
-            close_user.update({"chat_id": close_uid, "stage": "safety_mode", "safety_mode": "support", "safety_last_risk": "no", "day": 1})
-            day_id = await ensure_user_day(close_user, bot.DB_PATH, calendar_date="2026-06-26", skill_id="open_only", skill_name="Открыть задачу")
-            close_user["current_day_id"] = day_id
-            await save_user(close_user, bot.DB_PATH)
-            close_msg = FakeMessage(close_uid, "🌙 Закрыть день без оценки")
-            await bot.main_flow(close_msg)
-            close_after = await get_user(close_uid, bot.DB_PATH)
-            assert bot.safety_mode(close_after) == "none"
-            assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
-            assert "Никаких новых навыков сейчас" in joined_answers(close_msg)
-            assert "Навык дня" not in joined_answers(close_msg)
-
-            scenario_uid = 42006
-            scenario_user = default_user(scenario_uid)
-            scenario_user.update({"chat_id": scenario_uid, "stage": "training", "has_started_training": 1})
-            await save_user(scenario_user, bot.DB_PATH)
-            start_msg = FakeMessage(scenario_uid, "🆘 Мне небезопасно")
-            await bot.main_flow(start_msg)
-            uncertain_msg = FakeMessage(scenario_uid, "🟨 Не уверен(а)")
-            await bot.main_flow(uncertain_msg)
-            scenario_after_uncertain = await get_user(scenario_uid, bot.DB_PATH)
-            assert scenario_after_uncertain["safety_mode"] == "active"
-            assert "Сейчас важнее не разбираться с задачами" in joined_answers(uncertain_msg)
-
-            map_msg = FakeMessage(scenario_uid, "🧭 Моя карта")
-            await bot.main_flow(map_msg)
-            assert "Сейчас важнее не разбираться с задачами" in joined_answers(map_msg)
-            assert "Навык дня" not in joined_answers(map_msg)
-
-            wrote_msg = FakeMessage(scenario_uid, "💬 Я написал живому человеку")
-            await bot.main_flow(wrote_msg)
-            assert "Останься на связи" in joined_answers(wrote_msg)
-
-            safer_msg = FakeMessage(scenario_uid, "↩️ Стало безопаснее")
-            await bot.main_flow(safer_msg)
-            scenario_after_safer = await get_user(scenario_uid, bot.DB_PATH)
-            assert scenario_after_safer["safety_mode"] == "active"
-            assert "Сегодня не нужно возвращаться к задаче" in joined_answers(safer_msg)
-
-            later_msg = FakeMessage(scenario_uid, "🧭 Вернуться к задаче позже")
-            await bot.main_flow(later_msg)
-            scenario_after_later = await get_user(scenario_uid, bot.DB_PATH)
-            assert scenario_after_later["safety_mode"] == "inactive"
-            assert scenario_after_later["return_mode"] == "later"
+            user = default_user(uid)
+            user.update({"chat_id": uid, "stage": "training", "has_started_training": 1, "current_skill": "open_only"})
+            await save_user(user, bot.DB_PATH)
+            msg = FakeMessage(uid, "не хочу жить, есть план сегодня")
+            consumed = await bot.start_safety_interceptor(msg, user, msg.text, "smoke", explicit=True)
+            after = await get_user(uid, bot.DB_PATH)
+            assert consumed is False
+            assert bot.safety_mode(after) == "none"
+            assert after["stage"] == "training"
+            assert joined_answers(msg) == ""
         finally:
             bot.DB_PATH = old_db_path
 
@@ -312,8 +222,8 @@ async def main() -> None:
     assert "На сегодня достаточно" in bot.enough_for_today_text()
     assert "Никаких новых навыков сейчас" in BOT_SOURCE
     metrics_text = bot.action_metrics_text({"today": {"micro_approaches": 1, "slips": 1, "returns_after_slip": 1, "step_reductions": 0}, "period": {"micro_approaches": 2, "slips": 1, "returns_after_slip": 1, "step_reductions": 1}})
-    assert "микро-подходов" in metrics_text
-    assert "отмеченных залипаний" in metrics_text
+    assert "запуски" in metrics_text
+    assert "отмеченные срывы/залипания" in metrics_text
     assert "Это не оценка твоей продуктивности" in metrics_text
     assert "возврат после залипания +1" in bot.return_after_stuck_text()
 

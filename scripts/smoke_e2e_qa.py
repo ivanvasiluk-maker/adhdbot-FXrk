@@ -128,17 +128,17 @@ async def main() -> None:
 
             crisis_msg = FakeMessage(uid, "Лучше бы меня не было, я не вижу выхода")
             user = await get_user(uid, db_path)
-            await bot.start_safety_interceptor(crisis_msg, user, crisis_msg.text, "qa_e2e", explicit=False)
+            consumed = await bot.start_safety_interceptor(crisis_msg, user, crisis_msg.text, "qa_e2e", explicit=False)
             user = await get_user(uid, db_path)
-            assert bot.safety_mode(user) in {"triage", "active"}
-            assert any("Сейчас не режим продуктивности" in x for x in crisis_msg.answers)
-            report.append("13-14. crisis text interrupted productivity and opened safety flow")
+            assert consumed is False
+            assert bot.safety_mode(user) == "none"
+            assert not crisis_msg.answers
+            report.append("13-14. legacy emergency safety flow suppressed")
 
-            close_msg = FakeMessage(uid, "🌙 Закрыть день без оценки")
-            await bot.complete_safety_day(close_msg, user)
+            await bot.mark_day_closed(user, "qa_e2e_manual_close")
             user = await get_user(uid, db_path)
             assert await get_user_day_status(day_id, db_path) == "closed"
-            report.append("15-16. crisis aftercare closed the day")
+            report.append("15-16. normal day-close state remained available")
 
             user, next_day_msg = await send_admin_command(uid, user, "/force_next_day")
             assert any("Тестовый переход выполнен. Открыт День" in x for x in next_day_msg.answers)
@@ -155,9 +155,9 @@ async def main() -> None:
             user = await get_user(uid, db_path)
             assert int(user.get("full_mode") or 0) == 1
             assert any("Полный режим включён" in x for x in payment_msg.answers)
-            assert any("Следующий персональный шаг — когда ты нажмёшь" in x for x in payment_msg.answers)
-            assert not any("На ближайшие 3 дня мы проверим" in x for x in payment_msg.answers)
-            report.append("19-20. /simulate_payment enabled full mode without auto-starting a mini-plan")
+            assert any("На ближайшие 3 дня мы проверим" in x for x in payment_msg.answers)
+            assert any("Первый персональный эксперимент" in x for x in payment_msg.answers)
+            report.append("19-20. /simulate_payment enabled full mode with immediate personal value")
 
             user, debug_state_msg = await send_admin_command(uid, user, "/debug_state")
             assert "FSM-state:" in "\n".join(debug_state_msg.answers)

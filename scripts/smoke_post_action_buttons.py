@@ -68,6 +68,7 @@ async def set_post_action_user(uid: int, db_path: str, stage: str, *, rounds: in
             "current_core_skill_id": "open_only",
             "day_core_skill_id": "open_only",
             "day_core_round_count": rounds,
+            "done_count": rounds,
             "day_core_round_date": bot.local_date_for_user(u),
             "current_state": bot.STATE_PAUSED,
             "state_version": 0,
@@ -258,8 +259,8 @@ async def run() -> None:
 
         phone_msg = await send(uid, "📱 Ушёл в телефон / YouTube")
         phone_text = last_text(phone_msg)
-        assert "Телефон вне руки" in phone_text, phone_text
-        assert "Отодвинуть телефон на 30 секунд" in phone_text, phone_text
+        assert "Телефон / YouTube / новости" in phone_text, phone_text
+        assert "Убрать телефон вне руки" in phone_text, phone_text
         assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не вышло", "🤷 Не моё", "🔄 Сменить навык", "⚡ Я застрял", "🧠 Почему этот навык", "🌙 Закрыть подход"}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
@@ -288,7 +289,7 @@ async def run() -> None:
         describe_msg = await send(uid, "🎙️ Опишу голосом или текстом")
         assert "опиши как есть" in last_text(describe_msg).lower(), last_text(describe_msg)
         reflected_msg = await send(uid, "Боюсь сделать плохо и стыдно")
-        assert "Главный механизм" in last_text(reflected_msg), last_text(reflected_msg)
+        assert "Главный узел" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Рабочая гипотеза" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Минимальный физический шаг" in last_text(reflected_msg), last_text(reflected_msg)
         assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(reflected_msg.answers[-1]["reply_markup"]))
