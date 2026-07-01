@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+os.environ.setdefault("BOT_TOKEN", "")
+os.environ.setdefault("OPENAI_API_KEY", "")
+
+import bot  # noqa: E402
+from db import default_user, init_db, migrate_db, save_user, get_user  # noqa: E402
+from texts import format_skill_card  # noqa: E402
+
+
+class FakeFromUser:
+    def __init__(self, user_id: int): self.id = user_id
+
+
+class FakeMessage:
+    def __init__(self, user_id: int, text: str = ""):
+        self.from_user = FakeFromUser(user_id)
+        self.text = text
+        self.voice = None
+        self.answers: list[str] = []
+    async def answer(self, text: str, **kwargs):
+        self.answers.append(str(text)); return None
+
+
+class FakeCallback:
+    def __init__(self, user_id: int, data: str):
+        self.from_user = FakeFromUser(user_id)
+        self.data = data
+        self.message = FakeMessage(user_id)
+        self.answered = False
+    async def answer(self, *args, **kwargs):
+        self.answered = True
+
+
+def test_rendered_skill_card_has_one_title_and_one_minimum():
+    u = default_user(1); u["current_core_skill_id"] = "open_without_timer"
+    skill = {"skill_id": "open_without_timer", "name": "Открыть без таймера", "steps": ["Открой файл"], "minimum": "10 секунд"}
+    text = format_skill_card(u, skill, "задача")
+    assert text.count("🧩 Навык дня:") == 1
+    assert text.count("Минимум:") == 1
+
+
+def test_skill_change_renders_only_new_skill():
+    u = default_user(1); u["current_core_skill_id"] = "phone_away_3_min"
+    skill = {"skill_id": "body_first", "name": "Сначала тело", "steps": ["Выдох"], "minimum": "один выдох"}
+    text = format_skill_card(u, skill, "задача")
+    assert "Сначала тело" in text
+    assert "Телефон" not in text
+
+
+def test_skill_cannot_have_conflicting_final_statuses():
+    statuses = [bot.skill_status_wording(x) for x in ["promising", "not_helpful", "tested_once", "proposed"]]
+    assert len(statuses) == len(set(statuses))
+    assert "есть первый сигнал, что помогает" in statuses
+    assert "сейчас не подошёл" in statuses
+
+
+def test_completed_and_neutral_maps_to_needs_another_try():
+    assert bot.skill_status_wording("tested_once") == "нужна ещё попытка"
+
+
+def test_helped_start_maps_to_first_positive_signal():
+    assert bot.skill_status_wording("started_task") == "есть первый сигнал, что помогает"
+
+
+def test_not_my_skill_maps_to_not_suitable_now():
+    assert bot.skill_status_wording("not_helpful") == "сейчас не подошёл"
+
+
+def test_last_user_mechanism_overrides_old_hypothesis():
+    u = default_user(1)
+    bot.sync_active_attempt(u, current_mechanism="phone")
+    bot.sync_active_attempt(u, current_mechanism="anxiety")
+    u["active_attempt"]["last_user_mechanism"] = "anxiety"
+    assert u["active_attempt"]["current_mechanism"] == "anxiety"
+
+
+def test_anxiety_does_not_select_phone_distraction_skill():
+    u = default_user(1)
+    bot.sync_active_attempt(u, current_mechanism="anxiety")
+    skill = bot.select_daily_skill(u, {})
+    assert skill["skill_id"] != "phone_away_3_min"
+
+
+async def test_old_callback_after_skill_change_does_not_modify_state():
+    uid = 92001
+    u = default_user(uid); u["current_screen_id"] = "old"; u["current_skill"] = "open_without_timer"
+    bot.sync_active_attempt(u, bump=True, is_closed=False)
+    old_version = u["active_attempt"]["screen_version"] - 1
+    c = FakeCallback(uid, f"show_map|sid:old|v:{old_version}")
+    valid, _ = await bot.validate_callback_screen(c, u, "test")
+    assert not valid
+    assert u["current_skill"] == "open_without_timer"
+
+
+async def test_old_callback_after_day_close_does_not_modify_state():
+    uid = 92002
+    u = default_user(uid); u["current_screen_id"] = "old"; u["current_skill"] = "open_without_timer"
+    bot.sync_active_attempt(u, bump=True, is_closed=True, day_closed=True)
+    version = u["active_attempt"]["screen_version"]
+    c = FakeCallback(uid, f"show_map|sid:old|v:{version}")
+    valid, _ = await bot.validate_callback_screen(c, u, "test")
+    assert not valid
+    assert u["current_skill"] == "open_without_timer"
+
+
+async def test_crisis_phrase_stops_regular_skill_flow():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92003; u = default_user(uid); await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "не хочу жить")
+        await bot.main_flow(m)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert int(fresh.get("crisis_redirected") or 0) == 1
+        assert "Навык дня" not in "\n".join(m.answers)
+
+
+async def test_crisis_redirect_does_not_offer_productivity_skill():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92004; u = default_user(uid); await save_user(u, bot.DB_PATH); m = FakeMessage(uid)
+        await bot.crisis_redirect(m, u)
+        bot.DB_PATH = old
+        assert "Навык дня" not in "\n".join(m.answers)
+
+
+async def test_day_intro_is_not_sent_twice():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92005; u = default_user(uid); u["stage"] = "training"; u["day_intro_sent"] = 0; await save_user(u, bot.DB_PATH)
+        m1 = FakeMessage(uid); await bot.start_new_day(uid, m1, u, "admin_force_next_day")
+        fresh = await get_user(uid, bot.DB_PATH)
+        m2 = FakeMessage(uid); await bot.start_new_day(uid, m2, fresh, "admin_force_next_day")
+        bot.DB_PATH = old
+        assert "🌱 Новый день" in "\n".join(m1.answers)
+        assert "🌱 Новый день" not in "\n".join(m2.answers)
+
+
+def run():
+    for fn in [
+        test_rendered_skill_card_has_one_title_and_one_minimum,
+        test_skill_change_renders_only_new_skill,
+        test_skill_cannot_have_conflicting_final_statuses,
+        test_completed_and_neutral_maps_to_needs_another_try,
+        test_helped_start_maps_to_first_positive_signal,
+        test_not_my_skill_maps_to_not_suitable_now,
+        test_last_user_mechanism_overrides_old_hypothesis,
+        test_anxiety_does_not_select_phone_distraction_skill,
+    ]: fn()
+    for fn in [
+        test_old_callback_after_skill_change_does_not_modify_state,
+        test_old_callback_after_day_close_does_not_modify_state,
+        test_crisis_phrase_stops_regular_skill_flow,
+        test_crisis_redirect_does_not_offer_productivity_skill,
+        test_day_intro_is_not_sent_twice,
+    ]: asyncio.run(fn())
+    print("[TEST] required regressions OK")
+
+
+if __name__ == "__main__":
+    run()

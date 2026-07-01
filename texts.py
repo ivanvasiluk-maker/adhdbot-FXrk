@@ -441,8 +441,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"{_target_header_text(today_target)}\n\n"
-            f"🧩 Навык дня: {visible_core_title}\n\n"
-            f"{variant_label}:\n{skill_name}\n\n"
+            f"🧩 Навык дня: {skill_name or visible_core_title}\n\n"
             f"{trainer_line}\n\n"
             "Почему это работает:\n"
             f"{why_short}\n\n"
@@ -456,8 +455,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         return (
             f"{trainer['emoji']} {trainer['name']}\n\n"
             f"{_target_header_text(today_target)}\n\n"
-            f"🧩 Навык дня: {visible_core_title}\n\n"
-            f"{variant_label}:\n{skill_name}\n\n"
+            f"🧩 Навык дня: {skill_name or visible_core_title}\n\n"
             f"{trainer_line}\n\n"
             "Делаешь только это:\n\n"
             f"{steps_text}\n\n"
@@ -469,8 +467,7 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     return (
         f"{trainer['emoji']} {trainer['name']}\n\n"
         f"{_target_header_text(today_target)}\n\n"
-        f"🧩 Навык дня: {visible_core_title}\n\n"
-            f"{variant_label}:\n{skill_name}\n\n"
+        f"🧩 Навык дня: {skill_name or visible_core_title}\n\n"
         f"{trainer_line}\n\n"
         "Попробуй:\n"
         f"{steps_text}\n\n"
