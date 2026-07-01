@@ -230,23 +230,29 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         db_path,
         source="daily_focus",
     )
-    personal_context = daily_profile_explanation(profile, sid, 1)
     set_skill_explanation_context(u, skill, sid)
+    u["day"] = 1
+    u["stage"] = "await_training_target"
+    u["pending_skill_id"] = sid
+    u["pending_skill_day"] = 1
     await save_user(u, db_path)
 
     msg = (
         f"🌅 {name}, День 1\n\n"
-        "Мы не лечим. Мы тренируем навыки.\n"
-        "Считается попытка на 60–120 секунд.\n\n"
-        f"🧩 Навык: {skill['name']}\n"
-        f"🎯 Цель: {skill['goal']}\n"
-        f"✅ Как: {skill_explain(trainer_key, skill)}\n\n"
-        f"{personal_context}\n\n"
-        "Вечером спросим: сделал(а)? вернулся(лась)?"
+        "Коротко: я помогу выбрать один сегодняшний вход, дам навык на 60–120 секунд "
+        "и после действия соберу первые данные в карту.\n\n"
+        "Сейчас не грузим баллами, длинной картой и теорией. Сначала действие."
     )
-    button_count = keyboard_button_count(kb_training_main)
-    await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
-    await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= MAX_KEYBOARD_BUTTONS else None)
+    await m.answer(trainer_say(trainer_key, msg))
+    await m.answer(
+        "Что мешает сегодня?\n\n"
+        "Напиши одну задачу или ситуацию, на которой потренируемся. "
+        "Если хочешь без деталей — нажми «Пропустить».",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Пропустить")]],
+            resize_keyboard=True,
+        ),
+    )
 
 async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str):
     """Универсальный скрипт для любого дня"""
@@ -482,7 +488,36 @@ def analysis_need_more_text(user_text: str = "") -> str:
 
 def _infer_analysis_fields(user_text: str, bucket: str = "mixed") -> Dict[str, Any]:
     text = (user_text or "").lower()
-    if any(x in text for x in ("идеал", "идеаль", "ошиб", "плохо", "стыд", "оцен")):
+    anxiety_mechanism = detect_anxiety_case_mechanism(user_text)
+    if anxiety_mechanism == "anxiety":
+        pattern = "тревога стала главным механизмом: мысли всё время возвращаются к рискам и последствиям"
+        behavior = "проверку новостей, документов, денег или сценариев вместо ближайшего контролируемого шага"
+        skills = ["сначала сузить тревогу", "проверка фактов", "один контролируемый шаг"]
+    elif anxiety_mechanism == "fear_error":
+        pattern = "страх ошибки делает выбор или действие слишком рискованным"
+        behavior = "перепроверку, откладывание решения или поиск гарантии перед стартом"
+        skills = ["проверка фактов", "плохой первый шаг", "вход без идеального плана"]
+    elif anxiety_mechanism == "overload":
+        pattern = "перегруз делает ситуацию не одним шагом, а большим комом"
+        behavior = "попытку удержать всё в голове, перескакивание между срочным и заморозку"
+        skills = ["один следующий шаг", "минимальный вход", "снижение шага"]
+    elif anxiety_mechanism == "choice_freeze":
+        pattern = "старт зависает на невозможности выбрать один безопасный вариант"
+        behavior = "сравнение вариантов, подготовку и откладывание выбора"
+        skills = ["уменьшение выбора", "один следующий шаг", "вход без полного плана"]
+    elif anxiety_mechanism == "self_criticism":
+        pattern = "самокритика усиливает тревогу и делает возврат дороже"
+        behavior = "самообвинение, стыд и откладывание следующего шага"
+        skills = ["факт вместо приговора", "возврат без самонаказания", "минимальный вход"]
+    elif anxiety_mechanism == "quick_rewards":
+        pattern = "тревога уводит в быстрые награды и проверку ленты"
+        behavior = "новости, телефон, сообщения или вкладки, которые быстро снижают напряжение"
+        skills = ["барьер перед быстрым стимулом", "одна вкладка", "короткое удержание внимания"]
+    elif anxiety_mechanism == "meaning_loss":
+        pattern = "потеря смысла делает действие внутренне спорным"
+        behavior = "раздумья зачем это делать, сопротивление и откладывание"
+        skills = ["маленькая цель", "связь с ближайшим результатом", "минимальный вход"]
+    elif any(x in text for x in ("идеал", "идеаль", "ошиб", "плохо", "стыд", "оцен")):
         pattern = "риск сделать неидеально делает старт слишком дорогим"
         behavior = "подготовку, перепроверку или откладывание первого шага"
         skills = ["плохой первый шаг", "вход без идеального плана", "возврат после выпадения"]
@@ -524,6 +559,40 @@ def _infer_analysis_fields(user_text: str, bucket: str = "mixed") -> Dict[str, A
     }
 
 
+ANXIETY_CASE_KEYWORDS = (
+    "тревог", "страш", "страх послед", "последств", "новост", "документ",
+    "деньг", "оплат", "счёт", "счет", "неопредел", "не могу выбрать",
+    "невозможно выбрать", "выбрать", "а если", "вдруг",
+)
+
+
+def detect_anxiety_case_mechanism(user_text: str) -> str:
+    """Classify anxious cases before choosing a skill.
+
+    The goal is to avoid reducing money/documents/news/uncertainty cases to
+    a generic "start the task" response before identifying the dominant
+    mechanism.
+    """
+    text = (user_text or "").lower()
+    if not any(marker in text for marker in ANXIETY_CASE_KEYWORDS):
+        return ""
+    if any(x in text for x in ("самокрит", "ругаю себя", "ненавижу себя", "тупой", "тупая", "опять всё", "опять все", "стыдно за себя")):
+        return "self_criticism"
+    if any(x in text for x in ("новост", "лента", "телеграм", "telegram", "сообщени", "скрол", "телефон", "проверяю")):
+        return "quick_rewards"
+    if any(x in text for x in ("зачем", "смысл", "бессмыс", "не вижу смысла", "потерял смысл", "потеряла смысл")):
+        return "meaning_loss"
+    if any(x in text for x in ("не могу выбрать", "невозможно выбрать", "много вариантов", "вариант", "решить что", "что выбрать")):
+        return "choice_freeze"
+    if any(x in text for x in ("ошиб", "неправильно", "последств", "штраф", "потеряю", "боюсь сделать", "страшно сделать")):
+        return "fear_error"
+    if any(x in text for x in ("перегруз", "всё сразу", "все сразу", "слишком много", "не вывожу", "хаос")):
+        return "overload"
+    if any(x in text for x in ("тревог", "паник", "а если", "вдруг", "страш")):
+        return "anxiety"
+    return ""
+
+
 
 
 def detect_live_analysis_pattern(user_text: str) -> str:
@@ -532,6 +601,9 @@ def detect_live_analysis_pattern(user_text: str) -> str:
         return "shame_self_attack"
     if any(x in text for x in ("идеаль", "красиво", "позор", "плохо получится", "опубликую", "оценят", "оцен", "осуждени", "редактор", "слабый автор", "кажется тупым", "тупым", "выглядеть глупо", "глупо", "стыдно", "критика")) or ("боюсь" in text and any(x in text for x in ("плохо", "ошиб", "глуп", "оцен", "осуж", "письм", "стать", "текст", "результ"))):
         return "perfectionism_visibility_fear"
+    anxiety_mechanism = detect_anxiety_case_mechanism(user_text)
+    if anxiety_mechanism:
+        return f"anxious_{anxiety_mechanism}"
     if any(x in text for x in ("залип", "ютуб", "youtube", "сообщения", "почта", "на минуту", "лента", "скрол")):
         return "attention_escape"
     if any(x in text for x in ("нет сил", "устал", "выгор", "не в форме", "не могу думать")):
@@ -542,6 +614,8 @@ def detect_live_analysis_pattern(user_text: str) -> str:
 
 
 def live_analysis_profile_patch(pattern: str) -> Dict[str, Any]:
+    if pattern.startswith("anxious_"):
+        return {"main_pattern": pattern, "avoidance_trigger": "anxious_case", "emotional_trigger": "anxiety"}
     return {
         "shame_self_attack": {"main_pattern": "shame_self_attack", "shame_signal": "self_attack_after_slip"},
         "perfectionism_visibility_fear": {"main_pattern": "perfectionism_visibility_fear", "avoidance_trigger": "страх оценки или неидеального результата"},
@@ -661,6 +735,20 @@ def _escape_names(signals: Dict[str, Any]) -> str:
 
 
 def _analysis_result_core_hypothesis(pattern: str) -> str:
+    if pattern == "anxious_anxiety":
+        return "главный механизм — тревога, а не отсутствие дисциплины"
+    if pattern == "anxious_fear_error":
+        return "главный механизм — страх ошибки или последствий"
+    if pattern == "anxious_overload":
+        return "главный механизм — перегруз"
+    if pattern == "anxious_choice_freeze":
+        return "главный механизм — невозможность выбрать"
+    if pattern == "anxious_self_criticism":
+        return "главный механизм — самокритика"
+    if pattern == "anxious_quick_rewards":
+        return "главный механизм — уход в быстрые награды"
+    if pattern == "anxious_meaning_loss":
+        return "главный механизм — потеря смысла"
     if pattern == "perfectionism_visibility_fear":
         return "страх ошибки или оценки"
     if pattern == "attention_escape":
@@ -675,6 +763,18 @@ def _analysis_result_core_hypothesis(pattern: str) -> str:
 
 
 def _recommended_skill_for_pattern(pattern: str) -> Dict[str, str]:
+    if pattern in {"anxious_anxiety", "anxious_overload"}:
+        return {"recommended_core_skill": "anxiety_first", "recommended_variant": "body_before_task"}
+    if pattern == "anxious_fear_error":
+        return {"recommended_core_skill": "fact_check", "recommended_variant": "check_the_facts_light"}
+    if pattern == "anxious_choice_freeze":
+        return {"recommended_core_skill": "choice_reduction", "recommended_variant": "visible_next_step"}
+    if pattern == "anxious_self_criticism":
+        return {"recommended_core_skill": "shame_to_action", "recommended_variant": "check_the_facts_light"}
+    if pattern == "anxious_quick_rewards":
+        return {"recommended_core_skill": "attention_container", "recommended_variant": "phone_far_3min"}
+    if pattern == "anxious_meaning_loss":
+        return {"recommended_core_skill": "meaning_bridge", "recommended_variant": "minimum_viable_day"}
     if pattern == "perfectionism_visibility_fear":
         return {"recommended_core_skill": "bad_draft_entry", "recommended_variant": "bad_first_step"}
     if pattern == "attention_escape":
@@ -1094,7 +1194,12 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
             model=model,
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": f"""Проанализируй следующее описание и верни JSON с этой структурой:
+                {"role": "user", "content": f"""Проанализируй следующее описание и верни JSON с этой структурой.
+
+Важно для тревожных кейсов: если человек пишет про постоянную тревогу, страх последствий,
+проверку новостей, документы, деньги, неопределённость или невозможность выбрать,
+сначала определи главный механизм: тревога, страх ошибки, перегруз, невозможность выбора,
+самокритика, уход в быстрые награды или потеря смысла. Только после этого выбирай selected_skill.
 {{
   "bucket": "anxiety|low_energy|distractibility|mixed",
   "specific_pattern": "главный конкретный стопор",

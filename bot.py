@@ -3934,6 +3934,31 @@ def misunderstood_prompt_text() -> str:
     )
 
 
+def misunderstood_single_question(reason: str) -> str:
+    if reason == "wrong_problem":
+        return (
+            "Понял. Я слишком быстро выбрал гипотезу.\n\n"
+            "Что сейчас тяжелее: постоянная тревога, страх выбрать неправильно "
+            "или ощущение, что всё нужно решить срочно?"
+        )
+    if reason == "too_generic":
+        return (
+            "Понял. Ответ был слишком общий — данных не хватило для точной карты.\n\n"
+            "Назови один конкретный эпизод: что было перед стопором, чего ты боялся(ась) "
+            "и куда ушло внимание?"
+        )
+    if reason == "wrong_skill":
+        return (
+            "Понял. Не буду защищать навык.\n\n"
+            "Что важнее подобрать сейчас: снизить тревогу, убрать страх ошибки, "
+            "разрезать перегруз или остановить уход в быстрые награды?"
+        )
+    return (
+        "Понял. Я не буду додумывать за тебя.\n\n"
+        "Объясни одним сообщением: что было мимо и какой механизм важнее учесть?"
+    )
+
+
 def misunderstood_context(u: Dict[str, Any]) -> Dict[str, Any]:
     try:
         data = json.loads(u.get("pending_plan_change") or "{}")
@@ -5440,6 +5465,9 @@ async def start_new_day(user_id: int, message: Message, user: Optional[Dict[str,
     """Start the new-day scenario directly after admin/test day changes."""
     if user is None:
         user = await get_user(user_id, DB_PATH)
+    if source == "admin_force_next_day":
+        profile = await get_user_profile(user_id, DB_PATH)
+        await message.answer(new_day_context_header(profile))
     await start_new_day_for_user(message, user, int(user.get("day") or 1), source)
 
 
@@ -7013,7 +7041,8 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
     await log_engine_events(u, screen)
     await answer_with_keyboard(m, u, screen["text"], action_keyboard(), "skill_card")
     await maybe_show_micro_habit(m, u, "day_start")
-    await m.answer(gamify_status_line(u))
+    if int(u.get("day") or 1) > 1:
+        await m.answer(gamify_status_line(u))
 
 
 @router.message(CommandStart())
@@ -8313,19 +8342,26 @@ async def main_flow(m: Message):
         if text.startswith("1") or "не та проблема" in low:
             reason = "wrong_problem"
             u["stage"] = "misunderstood_problem_await"
+            u["last_misunderstood_reason"] = reason
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Ок. Какая проблема точнее? Одно сообщение, 1–2 предложения.")
+            await m.answer(misunderstood_single_question(reason))
             return
         if text.startswith("2") or "общ" in low:
             reason = "too_generic"
+            u["stage"] = "misunderstood_problem_await"
+            u["last_misunderstood_reason"] = reason
+            await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await rebuild_analysis_lightweight(m, u, "Ответ был слишком общий. Нужен конкретный разбор по паттернам входа, избегания и полезного сигнала.", reason)
+            await m.answer(misunderstood_single_question(reason))
             return
         if text.startswith("3") or "не тот навык" in low:
             reason = "wrong_skill"
+            u["stage"] = "misunderstood_problem_await"
+            u["last_misunderstood_reason"] = reason
+            await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await rebuild_analysis_lightweight(m, u, "Не тот навык. Нужно полностью пересобрать гипотезу и подобрать другой вход.", reason, replace_skill=True)
+            await m.answer(misunderstood_single_question(reason))
             return
         if text.startswith("4") or "не про лень" in low:
             reason = "not_laziness"
@@ -8381,16 +8417,28 @@ async def main_flow(m: Message):
             u["stage"] = "misunderstood_explain_await"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Ок. Напиши иначе одним сообщением или пришли голосовое. Я пересоберу карту без полного онбординга.")
+            await m.answer(misunderstood_single_question(reason))
             return
         await answer_with_keyboard(m, u, misunderstood_prompt_text(), kb_misunderstood_reasons, "misunderstood_reasons")
         return
 
     if u.get("stage") == "misunderstood_problem_await":
         if not text:
-            await m.answer("Напиши 1–2 предложения или пришли голосовое: какая проблема точнее?")
+            await m.answer(misunderstood_single_question(str(u.get("last_misunderstood_reason") or "wrong_problem")))
             return
-        await rebuild_analysis_lightweight(m, u, f"Не та проблема. Точнее: {text}", "wrong_problem")
+        reason = str(u.get("last_misunderstood_reason") or "wrong_problem")
+        labels = {
+            "wrong_problem": "Не та проблема",
+            "too_generic": "Слишком общий ответ",
+            "wrong_skill": "Не тот навык",
+        }
+        await rebuild_analysis_lightweight(
+            m,
+            u,
+            f"{labels.get(reason, 'Уточнение')}. Точнее: {text}",
+            reason,
+            replace_skill=(reason == "wrong_skill"),
+        )
         return
 
     if u.get("stage") == "misunderstood_explain_await":
