@@ -1233,6 +1233,9 @@ USER_FIELDS = [
     "current_screen_id",
     "closed_day_extra_step_date",
     "closed_day_extra_step_count",
+    "active_attempt",
+    "day_intro_sent",
+    "crisis_redirected",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1398,6 +1401,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "current_screen_id": None,
         "closed_day_extra_step_date": None,
         "closed_day_extra_step_count": 0,
+        "active_attempt": None,
+        "day_intro_sent": 0,
+        "crisis_redirected": 0,
     }
 
 async def init_db(db_path: str):
@@ -1498,7 +1504,10 @@ async def init_db(db_path: str):
                 pending_feedback_json TEXT,
                 current_screen_id TEXT,
                 closed_day_extra_step_date TEXT,
-                closed_day_extra_step_count INTEGER DEFAULT 0
+                closed_day_extra_step_count INTEGER DEFAULT 0,
+                active_attempt TEXT,
+                day_intro_sent INTEGER DEFAULT 0,
+                crisis_redirected INTEGER DEFAULT 0
             )
             """
         )
@@ -1675,6 +1684,13 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
                 u['test_answers'] = []
         else:
             u['test_answers'] = []
+        if 'active_attempt' in u and u.get('active_attempt'):
+            try:
+                u['active_attempt'] = json.loads(u['active_attempt']) if isinstance(u['active_attempt'], str) else u['active_attempt']
+            except Exception:
+                u['active_attempt'] = None
+        else:
+            u['active_attempt'] = None
         return sync_user_state_aliases(u)
 
 async def save_user(u: Dict[str, Any], db_path: str):
@@ -1792,7 +1808,10 @@ EXTRA_USER_COLS = {
     "last_action_request_context_json": "TEXT",
     "current_screen_id": "TEXT",
     "closed_day_extra_step_date": "TEXT",
-    "closed_day_extra_step_count": "INTEGER DEFAULT 0"
+    "closed_day_extra_step_count": "INTEGER DEFAULT 0",
+    "active_attempt": "TEXT",
+    "day_intro_sent": "INTEGER DEFAULT 0",
+    "crisis_redirected": "INTEGER DEFAULT 0"
 }
 
 async def migrate_db(db_path: str):

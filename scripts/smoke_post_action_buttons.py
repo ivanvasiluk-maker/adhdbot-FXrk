@@ -261,7 +261,7 @@ async def run() -> None:
         phone_text = last_text(phone_msg)
         assert "Телефон / YouTube / новости" in phone_text, phone_text
         assert "Убрать телефон вне руки" in phone_text, phone_text
-        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не вышло", "🤷 Не моё", "🔄 Сменить навык", "⚡ Я застрял", "🧠 Почему этот навык", "🌙 Закрыть подход"}
+        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 На сегодня достаточно", "⚙️ Другой вариант"}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
         assert "Зафиксируем честно" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
@@ -304,7 +304,7 @@ async def run() -> None:
         assert "Это не откат" in repeated_text, repeated_text
         assert "даже маленький шаг к задаче слишком дорогой" in repeated_text, repeated_text
         assert "положи ладонь на стол" in repeated_text, repeated_text
-        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не вышло", "🤷 Не моё", "🔄 Сменить навык", "⚡ Я застрял", "🧠 Почему этот навык", "🌙 Закрыть подход"}
+        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 На сегодня достаточно", "⚙️ Другой вариант"}
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_not_fit_skill"), profile
         assert profile.get("last_not_fit_reason") in {"overwhelm", "shame", "phone", "energy", "not_my_skill"}, profile

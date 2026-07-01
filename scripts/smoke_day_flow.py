@@ -123,6 +123,8 @@ async def main() -> None:
             assert "Тестовый переход выполнен. Открыт День 2." in joined(force_msg)
             assert "🌱 Новый день" in force_msg.answers[-2]
             assert "🧩 Навык дня" not in force_msg.answers[-2]
+            assert "🌱 Новый день" not in force_msg.answers[-1]
+            assert "Вчера мы увидели" not in force_msg.answers[-1]
             assert "🧩 Навык дня" in force_msg.answers[-1]
             assert "📚 Мини-урок" in force_msg.answers[-1]
             assert user["current_day_id"] != day_id
