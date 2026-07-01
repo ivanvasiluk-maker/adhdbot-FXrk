@@ -522,6 +522,21 @@ def short_daily_map_text(profile: Dict[str, Any], skill_map: Optional[Dict[str, 
 
 async def send_user_map(m: Message, u: Dict[str, Any], source: str):
     profile = await get_user_profile(u["user_id"], DB_PATH)
+    if (
+        int(u.get("day") or 1) == 1
+        and int(u.get("done_count") or profile.get("action_done_count") or 0) == 0
+        and source in {"global_button", "persistent_button"}
+        and str(u.get("stage") or "") not in {"waiting_next_day", "done", "day_core_stop", "success_menu", "success_limit"}
+    ):
+        await log_event(u["user_id"], u.get("stage", ""), "profile_map_deferred_until_first_action", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Карту покажу после первого действия — сейчас не грузим тебя чтением.\n\nСначала один маленький шаг, потом кратко покажу, что уже стало видно.",
+            kb_training_main,
+            u.get("stage") or "training_main",
+        )
+        return
     skill_map = await build_skill_map_data(u, profile)
     profile["_skill_map"] = skill_map
     today = local_date_for_user(u)
@@ -817,23 +832,14 @@ def has_crisis_safety_signal(text: str, stage: str) -> bool:
 
 
 async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, source: str, explicit: bool = False) -> bool:
+    # Legacy emergency/suicidal-crisis routing is intentionally commented out for
+    # the product test. SKILLER is not positioned as emergency psychological help:
+    # the visible crisis path must stay about procrastination only («⚡ Я застрял»).
+    # Keep a non-opening stub so older internal calls cannot revive the separate
+    # safety flow.
     details = safety_signal_details(text, explicit=explicit)
-    if not details.get("triggered"):
-        return False
-    if safety_mode(u) == "none":
-        u["safety_resume_context"] = safety_resume_snapshot(u, source)
-    u["safety_mode"] = "active" if details.get("high") else "triage"
-    u["safety_last_risk"] = "yes" if details.get("high") else "unknown"
-    u["safety_contact_status"] = u.get("safety_contact_status") or "not_asked"
-    u["stage"] = "safety_mode"
-    set_current_state(u, STATE_SAFETY_LOCK, close_action=True)
-    await save_user(u, DB_PATH)
-    await bot_record_action_event(u, "crisis_started", metadata={"source": source, **details})
-    await log_event(u["user_id"], "safety", "safety_interceptor_started", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
-    if details.get("high"):
-        await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
-    return True
+    await log_event(u["user_id"], "safety", "legacy_safety_interceptor_suppressed", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return False
 
 
 async def show_safety_urgent(m: Message, u: Dict[str, Any], reason: str = ""):
@@ -926,6 +932,20 @@ async def handle_safety_callback(c: CallbackQuery, u: Dict[str, Any], data: str)
 
 
 async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
+    # Legacy safety mode is no longer a product branch. If an old persisted user
+    # somehow has safety_mode/stage set, clear it and continue normal
+    # procrastination routing instead of showing emergency-support UI.
+    if safety_mode(u) != "none" or u.get("stage") == "safety_mode":
+        u["safety_mode"] = "none"
+        u["safety_last_risk"] = None
+        u["safety_contact_status"] = None
+        if u.get("stage") == "safety_mode":
+            u["stage"] = "training"
+        await save_user(u, DB_PATH)
+    return False
+
+    # Dormant legacy handler kept below for reference only; unreachable because
+    # of the return above.
     mode = safety_mode(u)
     if mode == "none":
         return False
@@ -2127,15 +2147,15 @@ def action_metrics_text(metrics: Dict[str, Dict[str, int]]) -> str:
     period = metrics.get("period", {})
     return (
         "Сегодня:\n"
-        f"— микро-подходов: {int(today.get('micro_approaches') or 0)}\n"
-        f"— отмеченных залипаний: {int(today.get('slips') or 0)}\n"
-        f"— возвратов после залипания: {int(today.get('returns_after_slip') or 0)}\n"
-        f"— упрощений шага: {int(today.get('step_reductions') or 0)}\n\n"
+        f"— запуски: {int(today.get('micro_approaches') or 0)}\n"
+        f"— отмеченные срывы/залипания: {int(today.get('slips') or 0)}\n"
+        f"— возвраты после срыва: {int(today.get('returns_after_slip') or 0)}\n"
+        f"— упрощения шага: {int(today.get('step_reductions') or 0)}\n\n"
         "За период:\n"
-        f"— микро-подходов: {int(period.get('micro_approaches') or 0)}\n"
-        f"— отмеченных залипаний: {int(period.get('slips') or 0)}\n"
-        f"— возвратов после залипания: {int(period.get('returns_after_slip') or 0)}\n"
-        f"— упрощений шага: {int(period.get('step_reductions') or 0)}\n\n"
+        f"— запуски: {int(period.get('micro_approaches') or 0)}\n"
+        f"— отмеченные срывы/залипания: {int(period.get('slips') or 0)}\n"
+        f"— возвраты после срыва: {int(period.get('returns_after_slip') or 0)}\n"
+        f"— упрощения шага: {int(period.get('step_reductions') or 0)}\n\n"
         "Это не оценка твоей продуктивности. Это отметки о том, как ты пробовал(а) входить в задачу."
     )
 
@@ -3458,6 +3478,7 @@ kb_stuck_validation_safety = ReplyKeyboardMarkup(
 kb_stuck_analysis_confirm = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Да, похоже"), KeyboardButton(text="🟡 Не совсем")],
+        [KeyboardButton(text="📚 Подробнее про разбор")],
         [KeyboardButton(text="🔄 Сменить навык"), KeyboardButton(text="🧠 Уточнить")],
     ],
     resize_keyboard=True,
@@ -3465,26 +3486,26 @@ kb_stuck_analysis_confirm = ReplyKeyboardMarkup(
 
 STUCK_REASON_CONFIG = {
     "phone": {
-        "buttons": {"📱 Ушёл в телефон / YouTube", "📱 Залип", "📱 Ушёл в телефон"},
+        "buttons": {"📱 Ушёл в телефон / YouTube", "📱 Залип", "📱 Ушёл в телефон", "📰 Новости / YouTube / телефон"},
         "skill_id": "phone_far_3min",
-        "skill_name": "Телефон вне руки",
-        "minimum_step": "Отодвинуть телефон на 30 секунд и открыть задачу на 10 секунд",
+        "skill_name": "Телефон / YouTube / новости: убрать из руки",
+        "minimum_step": "Убрать телефон вне руки, включить фокус на 2–5 минут и открыть задачу на 10 секунд",
         "modality": "environment",
         "profile_patch": {"avoidance_pattern": "dopamine_avoidance", "attention_pattern": "scroll_autopilot"},
     },
     "shame": {
         "buttons": {"😬 Страшно, стыдно, боюсь ошибиться", "😬 Страх ошибки / оценки"},
         "skill_id": "bad_first_step",
-        "skill_name": "Плохой черновик",
-        "minimum_step": "Написать одну плохую строку, которую никто не увидит",
+        "skill_name": "Плохой черновик без отправки",
+        "minimum_step": "Написать одну плохую строку или черновик без отправки; назвать факт вместо самоприговора",
         "modality": "cognitive",
         "profile_patch": {"avoidance_pattern": "perfectionism_start_block", "emotional_trigger": "shame_or_anxiety"},
     },
     "overwhelm": {
         "buttons": {"🧠 Слишком много всего", "😣 Слишком сложно", "🌀 Слишком много вариантов", "😶 Не понимаю, с чего начать"},
         "skill_id": "visible_next_step",
-        "skill_name": "Один следующий шаг",
-        "minimum_step": "Назвать одно действие: «открыть», «написать», «найти», «отправить»",
+        "skill_name": "Одна область и один шаг",
+        "minimum_step": "Выбрать одну область, назвать один физический шаг, остальное записать в «не сейчас» и сделать шаг на ближайшие 10 минут",
         "modality": "cognitive",
         "profile_patch": {"avoidance_pattern": "task_too_big", "downscale_pattern": "needs_single_next_step"},
     },
@@ -3608,16 +3629,30 @@ async def send_repeated_simplification_body_reset(m: Message, u: Dict[str, Any],
 
 
 
+def has_anxiety_dominant_context(low: str) -> bool:
+    anxiety_markers = ("тревог", "паник", "накрывает", "постоянно переж", "постоянная трев")
+    high_stakes_markers = ("последств", "деньг", "деньги", "документ", "неопредел", "срочно", "риск", "штраф", "долг", "ипотек", "налог")
+    uncertainty_choice_markers = ("выбрать неправильно", "не знаю что выбрать", "невозможно выбрать")
+    has_anxiety = any(x in low for x in anxiety_markers)
+    has_high_stakes = any(x in low for x in high_stakes_markers)
+    has_choice_threat = any(x in low for x in uncertainty_choice_markers) and any(x in low for x in ("тревог", "страш", "боюсь", "переж"))
+    # News/feeds alone are fast-reward avoidance, but news + anxiety/high stakes is an anxiety loop.
+    has_news_loop = "новост" in low and (has_anxiety or has_high_stakes)
+    return has_anxiety or has_choice_threat or has_news_loop or (has_high_stakes and any(x in low for x in ("страш", "боюсь", "переж", "что будет", "если")))
+
+
 def stuck_reason_code_from_text(text: str) -> str:
     raw = (text or "").strip()
     low = raw.lower()
     for code, config in STUCK_REASON_CONFIG.items():
         if raw in config.get("buttons", set()):
             return code
-    if any(x in low for x in ("телефон", "youtube", "ютуб", "залип", "скрол", "scroll")):
+    if any(x in low for x in ("телефон", "youtube", "ютуб", "залип", "скрол", "scroll", "новост")):
         return "phone"
     if any(x in low for x in ("самокрит", "ненавижу себя", "тупой", "тупая", "ничтож", "сорвался", "сорвалась", "срыв")):
         return "self_attack"
+    if has_anxiety_dominant_context(low):
+        return "anxiety"
     if any(x in low for x in ("нахуя", "нахуй", "зачем", "смысл", "бессмыс", "мотивац")):
         return "meaning"
     if any(x in low for x in ("тревог", "паник", "перегруз", "накрывает")):
@@ -3639,9 +3674,11 @@ def classify_free_stuck_text(text: str) -> str:
         return "self_attack"
     if ("страш" in low or "ужас" in low or "стыд" in low) and any(x in low for x in ("файл", "документ", "откры")):
         return "file_fear"
+    if has_anxiety_dominant_context(low):
+        return "anxiety"
     if any(x in low for x in ("нахуя", "нахуй", "зачем", "смысл", "бессмыс", "должен", "должна", "бесит")):
         return "meaning"
-    if any(x in low for x in ("телефон", "ютуб", "youtube", "скрол", "залип")):
+    if any(x in low for x in ("телефон", "ютуб", "youtube", "скрол", "залип", "новост")):
         return "phone"
     if any(x in low for x in ("тревог", "паник", "перегруз", "накрывает")):
         return "anxiety"
@@ -3672,9 +3709,9 @@ def stuck_text_needs_clarification(text: str) -> bool:
     clear_markers = (
         "нахуя", "нахуй", "зачем", "смысл", "бессмыс", "должен", "должна", "бесит",
         "страш", "стыд", "боюсь", "оцен", "ошиб", "телефон", "ютуб", "youtube",
-        "скрол", "залип", "устал", "устала", "нет сил", "выжат", "сон", "тревог", "паник",
-        "перегруз", "не могу выбрать", "самокрит", "сорвался", "сорвалась", "срыв",
-        "ненавижу себя", "тупой", "тупая", "ничтож",
+        "скрол", "залип", "новост", "устал", "устала", "нет сил", "выжат", "сон", "тревог", "паник",
+        "перегруз", "не могу выбрать", "выбрать неправильно", "самокрит", "сорвался", "сорвалась", "срыв",
+        "деньг", "документ", "последств", "неопредел", "срочно", "ненавижу себя", "тупой", "тупая", "ничтож",
     )
     if any(marker in low for marker in clear_markers):
         return False
@@ -3695,43 +3732,122 @@ def stuck_clarification_question(count: int) -> str:
     return questions[index]
 
 
-def stuck_validation_response(kind: str, text: str) -> tuple[str, ReplyKeyboardMarkup]:
-    heard = reflect_stuck_text(text)
+def stuck_kind_analysis(kind: str, text: str) -> tuple[Dict[str, str], Dict[str, Any]]:
     config = STUCK_REASON_CONFIG.get(stuck_reason_code_from_text(text)) or STUCK_REASON_CONFIG["overwhelm"]
     if kind == "meaning":
-        mechanism = "сейчас стопор может быть не в размере шага, а в вопросе смысла или внутреннем сопротивлении"
-        hypothesis = "пока есть гипотеза, что сначала нужно вернуть связь с ближайшим полезным результатом"
         config = STUCK_REASON_CONFIG["meaning"]
-    elif kind == "self_attack":
-        mechanism = "самокритика может делать вход в задачу ещё дороже"
-        hypothesis = "пока есть гипотеза, что сначала нужен возврат без самонаказания"
+        return {
+            "node": "потеря смысла или внутреннее сопротивление",
+            "mechanism": "может быть, стопор сейчас не в размере шага, а в вопросе зачем это делать",
+            "check": "проверим маленькую цель и связь шага с ближайшей ценностью",
+            "why_skill": "этот навык возвращает контакт со смыслом без ожидания мотивации",
+            "next": "ценностный шаг, переименование задачи или внешний контакт",
+        }, config
+    if kind == "self_attack":
         config = STUCK_REASON_CONFIG["self_attack"]
-    elif kind == "file_fear":
-        mechanism = "страх ошибки или оценки может превращать первый шаг в риск"
-        hypothesis = "пока есть гипотеза, что важнее снизить цену ошибки, а не давить на дисциплину"
+        return {
+            "node": "самокритика после срыва",
+            "mechanism": "у меня гипотеза: самоприговор делает возврат дороже, чем сам следующий шаг",
+            "check": "проверим факт вместо приговора и минимальный возврат",
+            "why_skill": "этот навык снижает самонаказание и оставляет только действие",
+            "next": "плохой черновик, телесное успокоение или внешний контакт",
+        }, config
+    if kind == "file_fear":
         config = STUCK_REASON_CONFIG["shame"]
-    elif kind == "phone":
-        mechanism = "внимание может уходить в быстрый стимул вместо входа в задачу"
-        hypothesis = "пока есть гипотеза, что поможет короткий барьер перед отвлечением"
+        return {
+            "node": "страх ошибки, оценки или стыда",
+            "mechanism": "может быть, первый шаг ощущается как риск быть оценённым",
+            "check": "проверим черновой вход без отправки и без требования качества",
+            "why_skill": "этот навык снижает цену ошибки: сначала материал, качество потом",
+            "next": "открыть файл на 10 секунд, одна плохая строка или факт вместо самоприговора",
+        }, config
+    if kind == "phone":
         config = STUCK_REASON_CONFIG["phone"]
-    elif kind == "anxiety":
-        mechanism = "тревога и перегруз могут расширять поле так, что старт кажется невозможным"
-        hypothesis = "пока есть гипотеза, что сначала нужно сузить поле до одной контролируемой вещи"
+        return {
+            "node": "быстрый стимул: телефон, YouTube или новости",
+            "mechanism": "у меня гипотеза: внимание уходит туда, где награда ближе и вход дешевле",
+            "check": "проверим короткий барьер перед отвлечением и контакт с задачей",
+            "why_skill": "этот навык меняет среду раньше, чем приходится спорить с собой",
+            "next": "фокус 2–5 минут, одна вкладка или видимый следующий шаг",
+        }, config
+    if kind == "anxiety":
         config = STUCK_REASON_CONFIG["anxiety"]
-    else:
-        mechanism = "задача может выглядеть не как один вход, а как слишком большой ком"
-        hypothesis = "пока есть гипотеза, что поможет сузить всё до одного следующего действия"
-        config = STUCK_REASON_CONFIG["overwhelm"]
+        return {
+            "node": "тревога и перегруз",
+            "mechanism": "может быть, поле становится слишком широким, поэтому старт кажется небезопасным",
+            "check": "проверим сужение поля до одной контролируемой вещи",
+            "why_skill": "этот навык сначала снижает возбуждение, а потом возвращает выбор действия",
+            "next": "заземление, проверка фактов или один контролируемый шаг",
+        }, config
+    return {
+        "node": "слишком много задач или вариантов",
+        "mechanism": "у меня гипотеза: задача выглядит не как один вход, а как большой ком",
+        "check": "проверим одну область, один физический шаг и список «не сейчас»",
+        "why_skill": "этот навык убирает лишний выбор и оставляет действие на ближайшие 10 минут",
+        "next": "видимый следующий шаг, список «не сейчас» или телесное снижение перегруза",
+    }, STUCK_REASON_CONFIG["overwhelm"]
 
+
+def stuck_validation_response(kind: str, text: str) -> tuple[str, ReplyKeyboardMarkup]:
+    heard = reflect_stuck_text(text)
+    analysis, config = stuck_kind_analysis(kind, text)
+    resource = "ты уже назвал(а), что происходит, вместо того чтобы оставаться в тумане" if text else "готовность проверить маленький шаг"
     response = (
+        "Короткое заключение\n\n"
         f"Я услышал: {heard}\n\n"
-        f"Главный механизм: {mechanism}.\n\n"
-        f"Рабочая гипотеза: {hypothesis}.\n\n"
+        f"Главный узел: {analysis['node']}.\n"
+        f"Рабочая гипотеза: {analysis['mechanism']}.\n"
+        f"Ресурс: {resource}.\n"
+        f"Проверим первым: {analysis['check']}.\n"
+        f"Почему этот навык: {analysis['why_skill']}.\n\n"
         f"Навык: {config['skill_name']}.\n"
         f"Минимальный физический шаг: {config['minimum_step']}.\n\n"
-        "Если я попал мимо — поправь разбор."
+        "Если хочешь увидеть полный разбор по пунктам — нажми «📚 Подробнее про разбор»."
     )
     return response, kb_stuck_analysis_confirm
+
+
+def stuck_analysis_details_text(kind: str, text: str) -> str:
+    heard = reflect_stuck_text(text)
+    low = (text or "").lower()
+    analysis, config = stuck_kind_analysis(kind, text)
+    trigger = "быстрый стимул" if kind == "phone" else "оценка/ошибка" if kind == "file_fear" else "много вариантов" if kind == "overwhelm" else analysis["node"]
+    thoughts = []
+    for marker in ("зачем", "не вижу смысла", "бессмыс", "страш", "стыд", "ошиб", "слишком много", "не могу выбрать", "ненавижу себя", "самокрит"):
+        if marker in low:
+            thoughts.append(marker)
+    thought_line = ", ".join(thoughts) if thoughts else "в сообщении нет точной формулировки мысли — это ещё надо проверить"
+    emotions = []
+    if any(x in low for x in ("тревог", "паник", "страш")):
+        emotions.append("тревога/страх")
+    if any(x in low for x in ("стыд", "ненавижу", "самокрит")):
+        emotions.append("стыд/самокритика")
+    if any(x in low for x in ("бесит", "злюсь", "должен", "должна")):
+        emotions.append("злость или протест")
+    emotion_line = ", ".join(emotions) if emotions else "эмоции прямо не названы — проверяем по реакции на действие"
+    body_line = "тело прямо не описано — поэтому не фантазирую; если есть зажим, усталость или возбуждение, это важная следующая проверка"
+    avoid_line = "уход в телефон/YouTube/новости" if kind == "phone" else "откладывание входа в задачу"
+    immediate_gain = "быстрое облегчение и меньше контакта с неприятным чувством"
+    later_cost = "задача остаётся на месте, а возвращаться к ней становится дороже"
+    cycle = f"{trigger} → {thought_line} → {emotion_line} → {avoid_line} → облегчение сейчас → дороже вернуться потом"
+    return (
+        "📚 Подробнее про разбор\n\n"
+        "Я опираюсь на твои слова, а где данных нет — прямо отмечаю, что это гипотеза.\n\n"
+        f"1. Что произошло. Ты описал(а): {heard}.\n"
+        f"2. Что стало триггером. Похоже на: {trigger}.\n"
+        f"3. Какие мысли или оценки включаются. {thought_line}.\n"
+        f"4. Какие эмоции возникают. {emotion_line}.\n"
+        f"5. Что происходит в теле. {body_line}.\n"
+        f"6. Как начинается избегание. {avoid_line}.\n"
+        f"7. Что даёт избегание прямо сейчас. {immediate_gain}.\n"
+        f"8. Какую цену оно создаёт потом. {later_cost}.\n"
+        f"9. Повторяющийся цикл прокрастинации. {cycle}.\n"
+        "10. Ресурсы человека. Ты смог(ла) остановиться и описать механизм — это уже точка управления.\n"
+        "11. Что уже помогает. Помогает коротко назвать происходящее и не спорить с собой большим планом.\n"
+        "12. Какие гипотезы ещё надо проверить. Нужно проверить, что сильнее: смысл, страх ошибки, перегруз, тревога или быстрые стимулы.\n"
+        f"13. Почему выбран текущий навык. {analysis['why_skill']}; первый тест — {config['minimum_step']}.\n"
+        f"14. Какие навыки могут быть следующими. {analysis['next']}."
+    )
 
 
 async def start_stuck_text_validation(m: Message, u: Dict[str, Any], text: str):
@@ -3803,6 +3919,12 @@ async def handle_stuck_validation_choice(m: Message, u: Dict[str, Any], text: st
     await save_user(u, DB_PATH)
     if text == "✅ Да, похоже":
         await send_stuck_reason_skill(m, u, stuck_reason_code_from_text(original_text), user_text=original_text)
+        return True
+    if text == "📚 Подробнее про разбор":
+        u["stage"] = "stuck_validation_choice"
+        u["pending_feedback_json"] = json.dumps({"type": "stuck_validation", "kind": kind, "text": original_text[:500]}, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, stuck_analysis_details_text(kind, original_text), kb_stuck_analysis_confirm, "stuck_validation_details")
         return True
     if text in {"🟡 Не совсем", "🧠 Уточнить"}:
         u["stage"] = "stuck_reason_text"
@@ -4436,6 +4558,11 @@ async def apply_skill_change(
     u["daily_skill_id"] = new_sid
     u["daily_skill_name"] = new_name
     u["daily_skill_status"] = "in_progress"
+    skill = dict(SKILLS_DB.get(new_sid) or {})
+    skill.setdefault("skill_id", new_sid)
+    skill.setdefault("name", new_name)
+    skill.setdefault("description", intro)
+    skill.setdefault("steps", [minimum])
     replace_day_core_skill(u, new_sid)
     await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=new_sid, skill_name=new_name)
     await bot_record_action_event(
@@ -4668,34 +4795,50 @@ def _day3_offer_breakdown_point(summary: Dict[str, Any], profile: Dict[str, Any]
     return "пока данных мало: проверяем, что происходит в моменте входа в важную задачу"
 
 
+def day3_attempt_count(summary: Dict[str, Any], profile: Dict[str, Any]) -> int:
+    return max(
+        int(summary.get("done_count") or 0),
+        int(profile.get("action_done_count") or 0),
+        int(profile.get("attempts_started") or 0),
+        len(_profile_list(profile.get("successful_skills"))),
+        len(_profile_list(profile.get("failed_skills"))),
+    )
+
+
+def day3_first_working_entry(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    skill = summary.get("best_skill") or profile.get("best_skill") or profile.get("last_successful_skill")
+    if skill:
+        return _skill_label(str(skill))
+    skills = (summary.get("skill_map") or {}).get("skills") or []
+    for item in skills:
+        if item.get("status") in {"confirmed", "promising", "tried"}:
+            return _skill_label(str(item.get("skill_id") or ""))
+    return "маленький вход в задачу"
+
+
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    attempts = day3_attempt_count(summary, profile)
+    working_entry = day3_first_working_entry(summary, profile)
+    breakdown = _day3_offer_breakdown_point(summary, profile)
     return (
-        "За эти дни ты уже сделал несколько маленьких входов в задачу.\n\n"
-        "Но пока неясно, что именно сильнее мешает: страх оценки, телефон, перегруз или слишком большой шаг.\n\n"
-        "В коротком режиме бот даёт один базовый шаг в день.\n\n"
-        "В полном режиме мы не просто даём новый совет.\n"
-        "Мы проверяем разные входы, сравниваем эффект и собираем твою личную систему возвращения к делу.\n\n"
-        "Например: если тебя ломает страх оценки — бот даст «плохой черновик».\n"
-        "Если ты уходишь в телефон — сначала изменит среду.\n"
-        "Если шаг слишком большой — уменьшит его до физического действия.\n\n"
-        "Полный режим нужен не для большего количества техник.\n"
-        "Он нужен, чтобы понять, какие из них реально работают именно у тебя.\n\n"
-        "Короткий режим:\n"
-        "• один основной навык в день;\n"
-        "• один короткий маршрут после застревания;\n"
-        "• короткая карта;\n"
-        "• кризисная самопомощь;\n"
-        "• закрытие дня.\n\n"
-        "Полный режим:\n"
-        "• несколько вариантов входа в зависимости от причины срыва;\n"
-        "• больше замен навыков в течение дня;\n"
-        "• сравнение: что помогло, а что не помогло;\n"
-        "• персональные выводы по повторяющимся срывам;\n"
-        "• недельный план;\n"
-        "• более подробный разбор паттернов;\n"
-        "• персонализация под страх оценки, отвлечения, перегруз, самокритику, избегание.\n\n"
-        "Цена: 14.98 €/месяц.\n\n"
-        "Можно остаться бесплатно без стыда — короткий режим останется."
+        "За эти дни бот собрал первую карту: где ты застреваешь, что запускает срыв и какие входы уже помогают.\n\n"
+        f"Что уже видно по данным:\n"
+        f"• попыток/проверок: {attempts};\n"
+        f"• первый рабочий вход: {working_entry};\n"
+        f"• главный цикл для проверки: {breakdown}.\n\n"
+        "Сейчас можно либо остаться в базовом режиме, либо реально пройти путь и закрепить изменения.\n\n"
+        "Главный следующий шаг — путь с куратором.\n"
+        "Это не ещё одна консультация. Это ускоритель персонализации: живой человек смотрит на карту, помогает выбрать главный механизм и не даёт потерять темп в первые сложные дни.\n\n"
+        "Путь с куратором:\n"
+        "• живой разбор карты;\n"
+        "• настройка личного маршрута;\n"
+        "• выбор приоритетного механизма;\n"
+        "• помощь, если бот не понял;\n"
+        "• поддержка в первые сложные дни;\n"
+        "• закрепление навыков;\n"
+        "• переход от «иногда попробовал» к устойчивой системе.\n\n"
+        "Ты уже начал. Теперь можно не оставлять это на уровне случайных попыток, а собрать систему, которая выдержит плохие дни.\n\n"
+        "Можно продолжать одному — базовый режим останется без стыда."
     )
 
 
@@ -4709,8 +4852,8 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
         "Мы уже видим первые гипотезы, но эта модель будет уточняться на реальных попытках.\n\n"
         f"Что уже похоже на правду:\n{map_block}\n\n"
         f"Что стоит проверить дальше:\n{success_block}\n\n"
-        "В полном режиме можно точнее увидеть, какие шаги реально работают или не подходят, "
-        "и получить разбор залипаний после каждой попытки.\n\n"
+        "Мы уже увидели твой паттерн. Дальше важно не потерять темп и не вернуться к старому циклу: "
+        "напряжение → избегание → облегчение сейчас → дороже вернуться потом.\n\n"
         f"{day3_personal_offer_text(summary, profile)}"
     )
 
@@ -4924,11 +5067,22 @@ async def send_full_mode_welcome(m: Message, u: Dict[str, Any]):
     plan = build_full_mode_plan(u, profile)
     u["full_mode_plan_json"] = json.dumps(plan, ensure_ascii=False)
     await save_user(u, DB_PATH)
-    await m.answer(
-        "Полный режим включён для теста.\n"
-        "Теперь бот будет глубже собирать повторяющиеся причины срывов и давать недельный маршрут.\n"
-        "Следующий персональный шаг — когда ты нажмёшь «Продолжить».",
-        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True),
+    await m.answer(full_mode_welcome_text(plan), reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True))
+
+
+def curator_path_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    summary = build_profile_map_summary(u, profile)
+    attempts = day3_attempt_count(summary, profile)
+    working_entry = day3_first_working_entry(summary, profile)
+    map_points = "\n".join(f"• {x}" for x in _day3_offer_profile_points(summary, profile)[:3])
+    return (
+        "👤 Первый шаг пути с куратором\n\n"
+        "Ты не просто записался(ась) в ожидание. Уже сейчас есть материал для живого разбора.\n\n"
+        f"Что передадим куратору:\n{map_points}\n"
+        f"• попыток/проверок: {attempts};\n"
+        f"• первый рабочий вход: {working_entry}.\n\n"
+        "Куратор поможет выбрать главный механизм на ближайшую неделю: тревога, страх ошибки, перегруз, невозможность выбора, самокритика, быстрые награды или потеря смысла.\n\n"
+        "Следующий шаг: напиши одним сообщением, когда тебе удобно получить разбор карты: сегодня / завтра / на выходных. Я сохраню это как заявку и дам маршрут к записи."
     )
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -4959,8 +5113,9 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text="💳 Подключить полный режим за €14.98", url=payment_month_url())],
-        [InlineKeyboardButton(text="📚 Что входит", callback_data="offer_details")],
+        [InlineKeyboardButton(text="👤 Путь с куратором", callback_data="curator_path")],
+        [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
+        [InlineKeyboardButton(text="📚 Разница режимов", callback_data="offer_details")],
         [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
         [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data="stay_free")],
     ]
@@ -4973,7 +5128,8 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Подключить полный режим за €14.98", url=payment_month_url())],
+        [InlineKeyboardButton(text="👤 Путь с куратором", callback_data="curator_path")],
+        [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
         [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
         [InlineKeyboardButton(text="🤔 Пока короткий режим", callback_data="stay_free")],
     ])
@@ -4989,20 +5145,29 @@ def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 def offer_details_full_mode_text() -> str:
     return (
         "📚 Честная разница режимов\n\n"
-        "Короткий режим:\n"
-        "• один основной навык в день;\n"
-        "• один короткий маршрут после застревания;\n"
-        "• короткая карта;\n"
-        "• кризисная самопомощь;\n"
-        "• закрытие дня.\n\n"
+        "Бесплатный режим:\n"
+        "• один базовый навык в день;\n"
+        "• кризис прокрастинации;\n"
+        "• краткая карта;\n"
+        "• базовое возвращение после срыва;\n"
+        "• возможность продолжать самостоятельно.\n\n"
         "Полный режим:\n"
-        "• несколько вариантов входа в зависимости от причины срыва;\n"
-        "• больше замен навыков в течение дня;\n"
-        "• сравнение: что помогло, а что не помогло;\n"
-        "• персональные выводы по повторяющимся срывам;\n"
-        "• недельный план;\n"
-        "• более подробный разбор паттернов;\n"
-        "• персонализация под страх оценки, отвлечения, перегруз, самокритику, избегание."
+        "• больше вариантов навыков;\n"
+        "• гибкие смены стратегии;\n"
+        "• история повторяющихся срывов;\n"
+        "• расширенная карта;\n"
+        "• недельный маршрут;\n"
+        "• сравнение, что реально работает;\n"
+        "• персонализация по механизму прокрастинации.\n\n"
+        "Путь с куратором:\n"
+        "• живой разбор карты;\n"
+        "• настройка маршрута;\n"
+        "• помощь в сложных случаях;\n"
+        "• поддержка в процессе;\n"
+        "• закрепление изменений;\n"
+        "• понятный ограниченный по времени формат.\n\n"
+        "Коротко: бесплатный режим помогает продолжать самому, полный режим даёт больше персонализации и данных, "
+        "а путь с куратором — это живой ускоритель, когда важно не потерять темп и выбрать главный механизм."
     )
 
 
@@ -5089,10 +5254,9 @@ def _today_iso(u: Optional[Dict[str, Any]] = None):
     return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 def should_show_micro_habit(u: Dict[str, Any], source: str = "done") -> bool:
-    # System of Day can be shown after the user names today's target
-    # or when the training day is closed. It is not a second skill,
-    # not progress, and not a streak action.
-    allowed_sources = {"day_start", "day_closed", "day_core_stop", "done_enough_today"}
+    # System of Day is optional and only appears after an action or at day close.
+    # It is not a second required task, progress reward, or streak action.
+    allowed_sources = {"day_closed", "day_core_stop", "done_enough_today"}
     if source not in allowed_sources:
         return False
     if (u.get("last_micro_habit_date") or "") == _today_iso(u):
@@ -5101,13 +5265,49 @@ def should_show_micro_habit(u: Dict[str, Any], source: str = "done") -> bool:
         return False
     return True
 
+def system_day_candidate_ids(u: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
+    signals = " ".join(str(x or "") for x in (
+        profile.get("last_free_stuck_hypothesis"),
+        profile.get("last_stuck_reason"),
+        profile.get("avoidance_pattern"),
+        profile.get("attention_pattern"),
+        profile.get("downscale_pattern"),
+        profile.get("emotional_trigger"),
+        profile.get("motivation_pattern"),
+        u.get("last_crisis_type"),
+    )).lower()
+    if any(x in signals for x in ("phone", "scroll", "dopamine", "youtube", "news", "быстр", "залип")):
+        return ["phone_not_guilty", "one_tab_system", "task_visible"]
+    if any(x in signals for x in ("anxiety", "трев", "panic", "overload")):
+        return ["rest_before_exhaustion", "external_memory", "prepare_entry"]
+    if any(x in signals for x in ("shame", "perfection", "evaluation", "самокрит", "стыд", "ошиб")):
+        return ["bad_draft_system", "prepare_entry", "task_visible"]
+    if any(x in signals for x in ("overwhelm", "too_many", "task_too_big", "entry_too_large", "вариант", "много")):
+        return ["visible_next_step_system", "abc_plan", "one_list"]
+    if any(x in signals for x in ("meaning", "value", "смысл")):
+        return ["prepare_entry", "task_visible", "external_memory"]
+    if any(x in signals for x in ("energy", "low_start", "устал")):
+        return ["rest_before_exhaustion", "prepare_entry", "external_memory"]
+    return ["visible_next_step_system", "external_memory", "one_list"]
+
+
+def select_system_day_habit(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Any]:
+    habits = LONG_TERM_MICRO_HABITS
+    by_id = {h.get("id"): h for h in habits}
+    last_id = u.get("last_micro_habit_id")
+    for sid in system_day_candidate_ids(u, profile):
+        habit = by_id.get(sid)
+        if habit and habit.get("id") != last_id:
+            return habit
+    pool = [h for h in habits if h.get("id") != last_id] or habits
+    return random.choice(pool)
+
+
 async def maybe_show_micro_habit(m: Message, u: Dict[str, Any], source: str = "done"):
     if not should_show_micro_habit(u, source):
         return False
-    habits = LONG_TERM_MICRO_HABITS
-    last_id = u.get("last_micro_habit_id")
-    pool = [h for h in habits if h.get("id") != last_id] or habits
-    habit = random.choice(pool)
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    habit = select_system_day_habit(u, profile)
     trainer = (u.get("trainer_key") or "marsha").lower()
     variant = (habit.get("trainer_variants") or {}).get(trainer, "")
     text = f"{habit.get('title')}\n\n{habit.get('text')}" + (f"\n\n{variant}" if variant else "")
@@ -5117,7 +5317,6 @@ async def maybe_show_micro_habit(m: Message, u: Dict[str, Any], source: str = "d
     u["micro_habit_json"] = json.dumps(habit, ensure_ascii=False)
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "training", "system_day_shown", {"system_day_id": habit.get("id"), "habit_id": habit.get("id"), "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
-    profile = await get_user_profile(u["user_id"], DB_PATH)
     await record_profile_signal(
         u["user_id"],
         "training",
@@ -5652,17 +5851,17 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
 
 async def get_honest_day_counts(u: Dict[str, Any]) -> Dict[str, int]:
     day_id = str(u.get("current_day_id") or "")
-    raw_counts = {"attempt_started": 0, "stuck_reason_selected": 0, "returned_after_slip": 0, "skill_changed": 0}
+    raw_counts = {"attempt_completed_self_reported": 0, "stuck_reason_selected": 0, "returned_after_slip": 0, "skill_changed": 0}
     if day_id:
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute(
-                "SELECT event_type, COUNT(*) FROM action_events WHERE user_id=? AND day_id=? AND event_type IN ('attempt_started', 'stuck_reason_selected', 'returned_after_slip', 'skill_changed') GROUP BY event_type",
+                "SELECT event_type, COUNT(*) FROM action_events WHERE user_id=? AND day_id=? AND event_type IN ('attempt_completed_self_reported', 'stuck_reason_selected', 'returned_after_slip', 'skill_changed') GROUP BY event_type",
                 (u["user_id"], day_id),
             )
             for event_type, count in await cur.fetchall():
                 raw_counts[str(event_type)] = int(count or 0)
     return {
-        "completed_actions_today": raw_counts["attempt_started"],
+        "completed_actions_today": raw_counts["attempt_completed_self_reported"],
         "stuck_events_today": raw_counts["stuck_reason_selected"],
         "returns_today": raw_counts["returned_after_slip"],
         "skill_changes_today": raw_counts["skill_changed"],
@@ -5676,7 +5875,7 @@ async def day_close_metrics_text(u: Dict[str, Any]) -> str:
     stuck_line = f"Застреваний: {counts['stuck_events_today']}."
     return (
         f"{trainer_style_line(u.get('trainer_key') or 'marsha', 'close')}\n\n"
-        f"Сегодня ты сделал: {counts['completed_actions_today']} попыток.\n"
+        f"Запуски сегодня: {counts['completed_actions_today']}.\n"
         f"{stuck_line}\n"
         f"Вернулся после паузы: {counts['returns_today']}.\n"
         f"Сменил навык: {counts['skill_changes_today']}.\n\n"
@@ -7183,6 +7382,12 @@ async def main_flow(m: Message):
     if await handle_full_mode_buttons(m, u, text):
         return
 
+    # Stuck validation has its own meanings for buttons like «🔄 Сменить навык».
+    # Handle it before global-button routing so the choice stays tied to the user's stuck text.
+    if u.get("stage") == "stuck_validation_choice":
+        if await handle_stuck_validation_choice(m, u, text):
+            return
+
     early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
     if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "why_skill", "details", "map", "stuck"}:
         if await handle_global_button(m, u, text):
@@ -7265,10 +7470,6 @@ async def main_flow(m: Message):
     if u.get("stage") == "trainer_switch":
         await handle_trainer_switch_choice(m, u, text)
         return
-
-    if u.get("stage") == "stuck_validation_choice":
-        if await handle_stuck_validation_choice(m, u, text):
-            return
 
     if should_route_action_request(text, low, u):
         await handle_action_request(u["user_id"], m, u, repeat=("ещё круг" in low or "еще круг" in low or text == "🔁 Ещё круг"))
@@ -9143,6 +9344,20 @@ async def main_flow(m: Message):
         await show_context_fallback(m, u, "offer_invalid_button")
         return
 
+    if u.get("stage") == "curator_path":
+        await log_event(u["user_id"], "offer", "curator_availability_received", {"text": text[:120]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        u["curator_availability_note"] = text[:240]
+        u["stage"] = "waiting_next_day"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(
+            m,
+            u,
+            "Записал. Первый шаг пути с куратором — живой разбор твоей карты и выбор главного механизма на ближайшую неделю.\n\nПока ждёшь разбор, короткий маршрут остаётся: один маленький вход в день и кризисный возврат, если сорвёт.",
+            kb_training_main,
+            "training_main",
+        )
+        return
+
     # Если дошли до сюда — неизвестный этап. Не сбрасываем пользователя в /start:
     # возвращаем к безопасному меню текущего дня.
     raw_stage = str(u.get("stage") or "")
@@ -9273,7 +9488,7 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
 # CALLBACKS
 # ============================================================
 
-@router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"offer_details", "show_map", "stay_free", "continue_free", "test_payment", "confirm_test_payment"})
+@router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"offer_details", "show_map", "stay_free", "continue_free", "test_payment", "confirm_test_payment", "curator_path"})
 async def on_offer_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
@@ -9287,6 +9502,17 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if u.get("stage") != "offer" and data != "confirm_test_payment":
         await reject_lost_callback(c, u, "offer_stage_mismatch")
+        return
+
+    if data == "curator_path":
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        u["stage"] = "curator_path"
+        u["curator_interest_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        await save_user(u, DB_PATH)
+        await log_event(uid, "offer", "curator_path_requested", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await c.message.answer(curator_path_text(u, profile), reply_markup=kb_training_main)
+        await c.answer()
         return
 
     if data == "offer_details":

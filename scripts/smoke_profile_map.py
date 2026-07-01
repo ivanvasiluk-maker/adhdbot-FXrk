@@ -115,9 +115,9 @@ async def run():
         has_adaptive_payment = any("€14.98" in t and ("Подключить" in t or "Полный режим" in t) for t in kb_texts)
         has_primary_map = "🧭 Первичная карта" in offer_text or "🧭 За первые дни" in offer_text
         has_day3_conclusion = "появились первые" in offer_text or "не окончательный вывод" in offer_text
-        has_personal_offer = ("Полный режим — это не “ещё набор техник”." in offer_text or "Полный режим нужен" in offer_text) and "Остаться" in " ".join(kb_texts)
-        has_model_value = "личную систему запуска" in offer_text or "адаптивная система" in offer_text or "не давать случайные советы" in offer_text
-        has_selling_specifics = ("какие шаги реально работают или не подходят" in offer_text and "разбор залипаний" in offer_text) or "проверить это на реальных попытках" in offer_text
+        has_personal_offer = ("Путь с куратором" in offer_text and "устойчивой системе" in offer_text) and "Остаться" in " ".join(kb_texts)
+        has_model_value = "личную систему запуска" in offer_text or "адаптивная система" in offer_text or "не давать случайные советы" in offer_text or "ускоритель персонализации" in offer_text
+        has_selling_specifics = ("попыток/проверок" in offer_text and "первый рабочий вход" in offer_text) or "проверить это на реальных попытках" in offer_text
         assert int(task_start.get("value") or 0) >= 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
         assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map

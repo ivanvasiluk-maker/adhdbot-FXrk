@@ -83,11 +83,17 @@ async def main() -> None:
             assert "🧨 Самокритика после срыва" in failed_buttons
             assert "🆘 Мне небезопасно" not in failed_buttons
             assert bot.classify_free_stuck_text("залип в YouTube и новости") == "phone"
+            assert bot.stuck_reason_code_from_text("читаю новости вместо задачи") == "phone"
+            assert bot.classify_free_stuck_text("постоянная тревога, проверяю новости и боюсь последствий") == "anxiety"
+            assert bot.stuck_reason_code_from_text("тревога из-за документов и денег, не могу выбрать") == "anxiety"
             assert bot.classify_free_stuck_text("страшно ошибиться, стыдно показать черновик") == "file_fear"
             assert bot.classify_free_stuck_text("слишком много задач, не могу выбрать") == "overwhelm"
             assert bot.classify_free_stuck_text("тревога и перегруз, накрывает") == "anxiety"
             assert bot.classify_free_stuck_text("самокритика после срыва") == "self_attack"
             assert bot.classify_free_stuck_text("не вижу зачем это делать") == "meaning"
+            assert bot.should_show_micro_habit({"last_micro_habit_date": "", "stage": "training"}, "day_start") is False
+            assert bot.should_show_micro_habit({"last_micro_habit_date": "", "stage": "day_core_stop"}, "day_core_stop") is True
+            assert bot.system_day_candidate_ids({"last_crisis_type": "youtube"}, {"attention_pattern": "scroll_autopilot"})[0] == "phone_not_guilty"
 
             uid = 9301
             await seed_user(uid)
@@ -97,15 +103,21 @@ async def main() -> None:
 
             u, validation, validation_msg = await send(uid, "не понимаю нахуя")
             assert "Я услышал" in validation
-            assert "Главный механизм" in validation
-            assert "Рабочая гипотеза" in validation
+            assert "Короткое заключение" in validation
+            assert "Главный узел" in validation
+            assert "Ресурс:" in validation
+            assert "Проверим первым" in validation
             assert "Навык:" in validation
             assert "Минимальный физический шаг" in validation
             buttons = keyboard_texts(validation_msg.answers[-1]["reply_markup"])
-            assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(buttons)
+            assert {"✅ Да, похоже", "🟡 Не совсем", "📚 Подробнее про разбор", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(buttons)
             assert u["stage"] == "stuck_validation_choice"
             profile = await get_user_profile(uid, bot.DB_PATH)
             assert profile.get("last_free_stuck_hypothesis") == "meaning"
+            u, details, _ = await send(uid, "📚 Подробнее про разбор")
+            assert "1. Что произошло" in details
+            assert "14. Какие навыки могут быть следующими" in details
+            assert "Я опираюсь на твои слова" in details
 
             u, changed, _ = await send(uid, "✅ Да, похоже")
             assert "Минимальный шаг" in changed or "возвращение контроля" in changed
@@ -135,10 +147,19 @@ async def main() -> None:
             assert "Сейчас тяжелее выбрать" in question
             assert u4["stage"] == "stuck_reason_text"
             u4, clarified, clarified_msg = await send(uid4, "выбрать с чего начать, слишком много задач")
-            assert "Главный механизм" in clarified
+            assert "Главный узел" in clarified
             assert "Навык:" in clarified
             assert "Минимальный физический шаг" in clarified
-            assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(clarified_msg.answers[-1]["reply_markup"]))
+            assert {"✅ Да, похоже", "🟡 Не совсем", "📚 Подробнее про разбор", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(clarified_msg.answers[-1]["reply_markup"]))
+
+
+            uid6 = 9306
+            await seed_user(uid6, stage="stuck_reason_text")
+            u6, _, _ = await send(uid6, "залип в новости")
+            u6, changed_from_validation, _ = await send(uid6, "🔄 Сменить навык")
+            assert "Что в нём не подходит" not in changed_from_validation
+            assert "Минимальный шаг" in changed_from_validation
+            assert u6["stage"] == "downscale_action"
 
             uid5 = 9305
             await seed_user(uid5, stage="stuck_reason_text")

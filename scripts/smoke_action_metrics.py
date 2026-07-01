@@ -83,6 +83,8 @@ async def main() -> None:
         assert metrics["today"]["micro_approaches"] == 1
         assert metrics["today"]["too_hard"] == 1
         assert metrics["today"]["skill_skipped"] == 1
+        assert "Запуски: 0" not in bot.gamify_status_line({"day": 1, "done_count": 0, "streak": 1})
+        assert "Серия дней с действием: 1" in bot.gamify_status_line({"day": 2, "done_count": 1, "streak": 1, "return_count": 0})
 
         u["day"] = 2
         u["current_day_id"] = None
