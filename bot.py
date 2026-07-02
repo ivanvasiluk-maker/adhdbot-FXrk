@@ -4007,9 +4007,9 @@ def _recommended_skill_from_answers(kind: str, answers: List[str]) -> tuple[str,
 
 def _analysis_clarify_summary(kind: str, answers: List[str]) -> str:
     sid, skill_name = _recommended_skill_from_answers(kind, answers)
-    first = answers[0] if answers else "пока неясно"
-    second = answers[1] if len(answers) > 1 else "пока неясно"
-    third = answers[2] if len(answers) > 2 else "пока неясно"
+    first = answers[0] if answers else "нет ответа"
+    second = answers[1] if len(answers) > 1 else "нет ответа"
+    third = answers[2] if len(answers) > 2 else "нет ответа"
     return (
         "Теперь картина точнее.\n\n"
         f"По ответам видно: в момент входа сильнее всего звучит «{first}», затем обычно включается «{second}», а после отвлечения — «{third}».\n\n"
@@ -7652,6 +7652,20 @@ async def main_flow(m: Message):
     if u.get("stage") == "stuck_validation_choice":
         if await handle_stuck_validation_choice(m, u, text):
             return
+
+    # Analysis details must be handled before global «📚 Подробнее». Otherwise the global
+    # fallback can answer that there is little data even when analysis_json already has facts.
+    if (text == "📚 Подробнее" or low == "подробнее") and u.get("stage") in {"confirm_analysis", "analysis_details", "working_map", "analysis_rebuilt", "analysis_contract", "analysis_next_step"}:
+        await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "pre_global"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        comp = _analysis_details_comp_from_user(u)
+        await answer_with_keyboard(
+            m,
+            u,
+            render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha"),
+            kb_analysis_detail_next,
+            "analysis_details",
+        )
+        return
 
     early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
     if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "why_skill", "details", "map", "stuck"}:
