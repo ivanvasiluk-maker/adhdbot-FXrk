@@ -2873,7 +2873,7 @@ def button_fits_current_state(text: str, u: Dict[str, Any]) -> bool:
         "taking_test": set(),  # inline callbacks, not reply-keyboard text
         "working_map": _reply_keyboard_texts(globals().get("kb_working_map")),
         "confirm_analysis": _reply_keyboard_texts(globals().get("kb_analysis_confirm")),
-        "analysis_details": _reply_keyboard_texts(globals().get("kb_analysis_confirm")),
+        "analysis_details": _reply_keyboard_texts(globals().get("kb_analysis_detail_next")),
         "day_menu": _reply_keyboard_texts(globals().get("kb_day_menu")),
         "day_pause_confirm": _reply_keyboard_texts(globals().get("kb_day_pause_confirm")),
         "done": _reply_keyboard_texts(globals().get("kb_done")),
@@ -7601,10 +7601,10 @@ async def main_flow(m: Message):
         await handle_trainer_switch_choice(m, u, text)
         return
 
-    if u.get("stage") == "analysis_details" and text == "🧠 Да, уточни":
+    if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and text == "🧠 Да, уточни":
         await start_analysis_clarification(m, u)
         return
-    if u.get("stage") == "analysis_details" and text == "💪 Нет, давай пробовать":
+    if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and text == "💪 Нет, давай пробовать":
         await handle_action_request(u["user_id"], m, u)
         return
     if await handle_analysis_clarification_answer(m, u, text):
@@ -7658,6 +7658,8 @@ async def main_flow(m: Message):
     if (text == "📚 Подробнее" or low == "подробнее") and u.get("stage") in {"confirm_analysis", "analysis_details", "working_map", "analysis_rebuilt", "analysis_" + "contract", "analysis_next_step"}:
         await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "pre_global"}, DB_PATH, SHEETS_WEBHOOK_URL)
         comp = _analysis_details_comp_from_user(u)
+        u["stage"] = "analysis_details"
+        await save_user(u, DB_PATH)
         await answer_with_keyboard(
             m,
             u,
@@ -8722,6 +8724,8 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "working_map"}, DB_PATH, SHEETS_WEBHOOK_URL)
             comp = _analysis_details_comp_from_user(u)
             details = render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
+            u["stage"] = "analysis_details"
+            await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, details, kb_analysis_detail_next, "analysis_details")
             return
         await show_context_fallback(m, u, "working_map_invalid_button")
@@ -8750,6 +8754,8 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             comp = _analysis_details_comp_from_user(u)
             details = render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
+            u["stage"] = "analysis_details"
+            await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, details, kb_analysis_detail_next, "analysis_details")
             return
         if "в точку" in low or (text == "✅ Да, в точку"):
@@ -8797,6 +8803,8 @@ async def main_flow(m: Message):
     # Подробное объяснение после анализа без курса/карты до первого действия.
     if u.get("stage") in {"analysis_" + "contract", "analysis_next_step", "analysis_details"} and (text == "📚 Подробнее" or "подробнее" in text.lower()):
         comp = _analysis_details_comp_from_user(u)
+        u["stage"] = "analysis_details"
+        await save_user(u, DB_PATH)
         await answer_with_keyboard(
             m,
             u,
