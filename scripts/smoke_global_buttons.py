@@ -76,6 +76,12 @@ def main() -> None:
     assert bot.trainer_template("skinny", "check_barrier") == "Сейчас проверим, что именно ломает вход."
     assert bot.trainer_template("marsha", "check_barrier") == "Давай спокойно посмотрим, что именно сейчас слишком трудно."
     assert bot.trainer_template("beck", "check_barrier") == "Проверим, какой фактор запускает избегание: оценка, неопределённость или перегруз."
+    assert bot.button_fits_current_state("🧠 Да, уточни", {"stage": "analysis_details"})
+    assert bot.button_fits_current_state("💪 Нет, давай пробовать", {"stage": "analysis_details"})
+    assert bot._is_analysis_clarify_yes("🧠 Да, уточни", "🧠 да, уточни")
+    assert bot._is_analysis_clarify_yes("Да, уточни", "да, уточни")
+    assert bot._is_analysis_clarify_no("💪 Нет, давай пробовать", "💪 нет, давай пробовать")
+    assert "u[\"stage\"] = \"analysis_details\"" in BOT_SOURCE
     assert "проверяла" not in BOT_SOURCE.lower()
 
     print("[SMOKE] global buttons OK")
