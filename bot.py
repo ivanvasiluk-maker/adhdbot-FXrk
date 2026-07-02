@@ -6036,6 +6036,9 @@ async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
 
 
 async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low: str) -> bool:
+    # Slash commands are explicit navigation/debug intents; closed-day fallback must not swallow them.
+    if (text or "").startswith("/"):
+        return False
     if not day_closed_today(u):
         return False
     if u.get("stage") == "closed_day_voluntary_step" and text in ACTION_OUTCOME_BUTTONS:
