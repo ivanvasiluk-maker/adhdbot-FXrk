@@ -35,6 +35,7 @@ from dotenv import load_dotenv
 # Import modules
 # Keep this as a single import to avoid multiline merge-conflict syntax breaks in deploys.
 from texts import *  # noqa: F403,F401
+from texts import _ANALYSIS_CLARIFY_SETS
 from texts import send_trainer_introduction as send_text_trainer_introduction
 from skills import (
     SKILLS_DB,

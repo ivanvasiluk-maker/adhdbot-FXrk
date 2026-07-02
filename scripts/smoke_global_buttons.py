@@ -81,6 +81,8 @@ def main() -> None:
     assert bot._is_analysis_clarify_yes("🧠 Да, уточни", "🧠 да, уточни")
     assert bot._is_analysis_clarify_yes("Да, уточни", "да, уточни")
     assert bot._is_analysis_clarify_no("💪 Нет, давай пробовать", "💪 нет, давай пробовать")
+    assert "Что тяжелее" in bot._analysis_clarify_question({"trainer_key": "beck"}, "fear", 0)
+    assert bot._analysis_clarify_keyboard("fear", 0).keyboard
     assert "u[\"stage\"] = \"analysis_details\"" in BOT_SOURCE
     assert "проверяла" not in BOT_SOURCE.lower()
 
