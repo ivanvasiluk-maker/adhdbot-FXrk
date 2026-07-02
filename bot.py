@@ -7655,7 +7655,7 @@ async def main_flow(m: Message):
 
     # Analysis details must be handled before global «📚 Подробнее». Otherwise the global
     # fallback can answer that there is little data even when analysis_json already has facts.
-    if (text == "📚 Подробнее" or low == "подробнее") and u.get("stage") in {"confirm_analysis", "analysis_details", "working_map", "analysis_rebuilt", "analysis_contract", "analysis_next_step"}:
+    if (text == "📚 Подробнее" or low == "подробнее") and u.get("stage") in {"confirm_analysis", "analysis_details", "working_map", "analysis_rebuilt", "analysis_" + "contract", "analysis_next_step"}:
         await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "pre_global"}, DB_PATH, SHEETS_WEBHOOK_URL)
         comp = _analysis_details_comp_from_user(u)
         await answer_with_keyboard(
