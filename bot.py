@@ -3962,6 +3962,16 @@ def pending_stuck_validation(u: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
+
+def _is_analysis_clarify_yes(text: str, low: str = "") -> bool:
+    value = (low or (text or "").lower()).strip()
+    return (text or "").strip() == "🧠 Да, уточни" or "да, уточни" in value or "да уточни" in value
+
+
+def _is_analysis_clarify_no(text: str, low: str = "") -> bool:
+    value = (low or (text or "").lower()).strip()
+    return (text or "").strip() == "💪 Нет, давай пробовать" or "нет, давай пробовать" in value or "давай пробовать" in value
+
 def _analysis_clarify_kind(comp: Dict[str, Any]) -> str:
     pattern = str(comp.get("live_pattern") or ((comp.get("analysis_result") or {}).get("pattern") if isinstance(comp.get("analysis_result"), dict) else "") or "")
     signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
@@ -7601,10 +7611,10 @@ async def main_flow(m: Message):
         await handle_trainer_switch_choice(m, u, text)
         return
 
-    if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and text == "🧠 Да, уточни":
+    if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and _is_analysis_clarify_yes(text, low):
         await start_analysis_clarification(m, u)
         return
-    if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and text == "💪 Нет, давай пробовать":
+    if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and _is_analysis_clarify_no(text, low):
         await handle_action_request(u["user_id"], m, u)
         return
     if await handle_analysis_clarification_answer(m, u, text):
@@ -7621,6 +7631,13 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок, остановимся здесь. Данные сохранил как рабочую модель.", kb_day_pause_confirm, "day_pause_confirm")
             return
+    if u.get("analysis_json") and u.get("stage") not in {"analysis_clarify_questions"} and _is_analysis_clarify_yes(text, low):
+        await start_analysis_clarification(m, u)
+        return
+    if u.get("analysis_json") and u.get("stage") not in {"analysis_clarify_questions"} and _is_analysis_clarify_no(text, low):
+        await handle_action_request(u["user_id"], m, u)
+        return
+
     if await handle_closed_day_input(m, u, text, low):
         return
 
