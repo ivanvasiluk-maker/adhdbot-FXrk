@@ -1195,8 +1195,8 @@ def render_last_explanation_context(u: Dict[str, Any]) -> str:
         ctx = {}
     if not ctx:
         return (
-            "Пока нечего раскрывать: я ещё не сохранил контекст последнего шага. "
-            "Напиши, что именно объяснить: навык, карту, кризисный разбор или предложение."
+            "Пока у меня мало данных, поэтому не буду делать вид, что всё понял. "
+            "Давай уточним 3 короткими вопросами — и я соберу первую рабочую модель."
         )
     ctx_type = str(ctx.get("type") or "").strip()
     title = str(ctx.get("title") or "последний шаг").strip()
@@ -3959,6 +3959,127 @@ def pending_stuck_validation(u: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         data = {}
     return data if isinstance(data, dict) and data.get("type") == "stuck_validation" else {}
+
+
+
+def _analysis_clarify_kind(comp: Dict[str, Any]) -> str:
+    pattern = str(comp.get("live_pattern") or ((comp.get("analysis_result") or {}).get("pattern") if isinstance(comp.get("analysis_result"), dict) else "") or "")
+    signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
+    if signals.get("attention_escape") or signals.get("escapes") or pattern in {"attention_escape", "anxious_quick_rewards"}:
+        return "phone"
+    if signals.get("overload") or signals.get("too_many_options") or pattern in {"low_energy_overload", "anxious_overload", "anxious_choice_freeze"}:
+        return "overload"
+    if signals.get("fear_bad") or signals.get("fear_visible") or pattern in {"perfectionism_visibility_fear", "anxious_fear_error"}:
+        return "fear"
+    return "overload"
+
+
+def _analysis_clarify_keyboard(kind: str, index: int) -> ReplyKeyboardMarkup:
+    questions = _ANALYSIS_CLARIFY_SETS.get(kind) or _ANALYSIS_CLARIFY_SETS["overload"]
+    _, options = questions[min(index, len(questions) - 1)]
+    rows = [[KeyboardButton(text=o)] for o in options]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def _analysis_clarify_question(u: Dict[str, Any], kind: str, index: int) -> str:
+    questions = _ANALYSIS_CLARIFY_SETS.get(kind) or _ANALYSIS_CLARIFY_SETS["overload"]
+    question, _ = questions[min(index, len(questions) - 1)]
+    trainer_key = str(u.get("trainer_key") or "marsha")
+    if trainer_key == "skinny":
+        prefix = "Коротко. Не гадаем." if index == 0 else "Следующий факт."
+    elif trainer_key == "beck":
+        prefix = "Проверяем конкурирующие гипотезы." if index == 0 else "Уточняем механизм."
+    else:
+        prefix = "Без давления. Просто уточним один кусок." if index == 0 else "Ещё один мягкий вопрос."
+    return f"{prefix}\n\n{question}"
+
+
+def _recommended_skill_from_answers(kind: str, answers: List[str]) -> tuple[str, str]:
+    joined = " ".join(answers).lower()
+    if "телефон" in joined or "убрать телефон" in joined or kind == "phone":
+        return "phone_far_3min", "короткий барьер перед телефоном"
+    if "плохо" in joined or "глупо" in joined or "строк" in joined or kind == "fear":
+        return "bad_first_step", "черновой вход без требования качества"
+    if "выбрать" in joined or "порядок" in joined:
+        return "visible_next_step", "выбор одного видимого следующего шага"
+    return "open_only", "открыть задачу на несколько секунд без требования продолжать"
+
+
+def _analysis_clarify_summary(kind: str, answers: List[str]) -> str:
+    sid, skill_name = _recommended_skill_from_answers(kind, answers)
+    first = answers[0] if answers else "нет ответа"
+    second = answers[1] if len(answers) > 1 else "нет ответа"
+    third = answers[2] if len(answers) > 2 else "нет ответа"
+    return (
+        "Теперь картина точнее.\n\n"
+        f"По ответам видно: в момент входа сильнее всего звучит «{first}», затем обычно включается «{second}», а после отвлечения — «{third}».\n\n"
+        "Это пока рабочая гипотеза, но она уже лучше объясняет твой цикл.\n\n"
+        "Поэтому сегодня не будем требовать «начать работать».\n"
+        f"Проверим более точный вход: {skill_name}."
+    )
+
+
+def _analysis_details_comp_from_user(u: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        comp = json.loads(u.get("analysis_json") or "{}")
+    except Exception:
+        comp = {}
+    comp = comp if isinstance(comp, dict) else {}
+    signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
+    facts = [str(x) for x in (signals.get("facts") or []) if x]
+    task = str(u.get("current_task_title") or u.get("today_target") or "").strip()
+    if task and task != "__target_not_selected__":
+        task_fact = f"сегодня выбрана задача: {task[:80]}"
+        if task_fact not in facts:
+            facts.append(task_fact)
+    if facts:
+        comp["analysis_signals"] = {**signals, "facts": facts[:8]}
+    return comp
+
+
+async def start_analysis_clarification(m: Message, u: Dict[str, Any]) -> None:
+    comp = _analysis_details_comp_from_user(u)
+    kind = _analysis_clarify_kind(comp)
+    u["stage"] = "analysis_clarify_questions"
+    u["pending_feedback_json"] = json.dumps({"type": "analysis_clarify", "kind": kind, "index": 0, "answers": []}, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, _analysis_clarify_question(u, kind, 0), _analysis_clarify_keyboard(kind, 0), "analysis_clarify_questions")
+
+
+async def handle_analysis_clarification_answer(m: Message, u: Dict[str, Any], text: str) -> bool:
+    if u.get("stage") != "analysis_clarify_questions":
+        return False
+    try:
+        data = json.loads(u.get("pending_feedback_json") or "{}")
+    except Exception:
+        data = {}
+    if not isinstance(data, dict) or data.get("type") != "analysis_clarify":
+        return False
+    kind = str(data.get("kind") or "overload")
+    answers = [str(x) for x in (data.get("answers") or []) if x]
+    answers.append(text[:120])
+    index = int(data.get("index") or 0) + 1
+    questions = _ANALYSIS_CLARIFY_SETS.get(kind) or _ANALYSIS_CLARIFY_SETS["overload"]
+    if index < min(5, len(questions)):
+        u["pending_feedback_json"] = json.dumps({"type": "analysis_clarify", "kind": kind, "index": index, "answers": answers}, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, _analysis_clarify_question(u, kind, index), _analysis_clarify_keyboard(kind, index), "analysis_clarify_questions")
+        return True
+    sid, _ = _recommended_skill_from_answers(kind, answers)
+    u["pending_feedback_json"] = None
+    u["stage"] = "analysis_clarify_done"
+    u["pending_skill_id"] = sid
+    try:
+        comp = json.loads(u.get("analysis_json") or "{}")
+    except Exception:
+        comp = {}
+    if isinstance(comp, dict):
+        comp["clarifying_answers"] = answers[-5:]
+        comp["selected_skill"] = sid
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, _analysis_clarify_summary(kind, answers), kb_analysis_after_clarify, "analysis_clarify_done")
+    return True
 
 
 async def handle_stuck_validation_choice(m: Message, u: Dict[str, Any], text: str) -> bool:
@@ -7480,6 +7601,26 @@ async def main_flow(m: Message):
         await handle_trainer_switch_choice(m, u, text)
         return
 
+    if u.get("stage") == "analysis_details" and text == "🧠 Да, уточни":
+        await start_analysis_clarification(m, u)
+        return
+    if u.get("stage") == "analysis_details" and text == "💪 Нет, давай пробовать":
+        await handle_action_request(u["user_id"], m, u)
+        return
+    if await handle_analysis_clarification_answer(m, u, text):
+        return
+
+
+    if u.get("stage") == "analysis_clarify_done":
+        if text == "🧭 Показать карту":
+            await send_user_map(m, u, "analysis_clarify_done")
+            return
+        if text == "🌙 Пока остановиться":
+            u["stage"] = "day_pause_confirm"
+            set_current_state(u, STATE_PAUSED, close_action=True)
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок, остановимся здесь. Данные сохранил как рабочую модель.", kb_day_pause_confirm, "day_pause_confirm")
+            return
     if await handle_closed_day_input(m, u, text, low):
         return
 
@@ -7511,6 +7652,20 @@ async def main_flow(m: Message):
     if u.get("stage") == "stuck_validation_choice":
         if await handle_stuck_validation_choice(m, u, text):
             return
+
+    # Analysis details must be handled before global «📚 Подробнее». Otherwise the global
+    # fallback can answer that there is little data even when analysis_json already has facts.
+    if (text == "📚 Подробнее" or low == "подробнее") and u.get("stage") in {"confirm_analysis", "analysis_details", "working_map", "analysis_rebuilt", "analysis_contract", "analysis_next_step"}:
+        await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "pre_global"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        comp = _analysis_details_comp_from_user(u)
+        await answer_with_keyboard(
+            m,
+            u,
+            render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha"),
+            kb_analysis_detail_next,
+            "analysis_details",
+        )
+        return
 
     early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
     if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "why_skill", "details", "map", "stuck"}:
@@ -8565,12 +8720,9 @@ async def main_flow(m: Message):
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {"source": "working_map"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            try:
-                comp = json.loads(u.get("analysis_json") or "{}")
-            except Exception:
-                comp = {}
-            details = render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, u.get("trainer_key") or "marsha")
-            await answer_with_keyboard(m, u, details, kb_working_map, "analysis_details")
+            comp = _analysis_details_comp_from_user(u)
+            details = render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
+            await answer_with_keyboard(m, u, details, kb_analysis_detail_next, "analysis_details")
             return
         await show_context_fallback(m, u, "working_map_invalid_button")
         return
@@ -8596,12 +8748,9 @@ async def main_flow(m: Message):
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            try:
-                comp = json.loads(u.get("analysis_json") or "{}")
-            except Exception:
-                comp = {}
-            details = render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, u.get("trainer_key") or "marsha")
-            await answer_with_keyboard(m, u, details, kb_analysis_confirm, "analysis_details")
+            comp = _analysis_details_comp_from_user(u)
+            details = render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
+            await answer_with_keyboard(m, u, details, kb_analysis_detail_next, "analysis_details")
             return
         if "в точку" in low or (text == "✅ Да, в точку"):
             await log_event(u["user_id"], "analysis", "analysis_accepted", {}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -8647,15 +8796,12 @@ async def main_flow(m: Message):
 
     # Подробное объяснение после анализа без курса/карты до первого действия.
     if u.get("stage") in {"analysis_" + "contract", "analysis_next_step", "analysis_details"} and (text == "📚 Подробнее" or "подробнее" in text.lower()):
-        try:
-            comp = json.loads(u.get("analysis_json") or "{}")
-        except Exception:
-            comp = {}
+        comp = _analysis_details_comp_from_user(u)
         await answer_with_keyboard(
             m,
             u,
-            render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, u.get("trainer_key") or "marsha"),
-            kb_analysis_confirm,
+            render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha"),
+            kb_analysis_detail_next,
             "analysis_details",
         )
         return
