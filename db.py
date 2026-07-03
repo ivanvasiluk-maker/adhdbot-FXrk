@@ -1220,6 +1220,11 @@ USER_FIELDS = [
     "daily_skill_status",
     "current_task_id",
     "current_task_title",
+    "current_task_name",
+    "current_task_object",
+    "current_deadline",
+    "current_task_next_step",
+    "current_task_fear",
     "current_task_description",
     "current_task_context",
     "current_next_physical_step",
@@ -1388,6 +1393,11 @@ def default_user(uid: int) -> Dict[str, Any]:
         "daily_skill_status": None,
         "current_task_id": None,
         "current_task_title": None,
+        "current_task_name": None,
+        "current_task_object": None,
+        "current_deadline": None,
+        "current_task_next_step": None,
+        "current_task_fear": None,
         "current_task_description": None,
         "current_task_context": None,
         "current_next_physical_step": None,
@@ -1493,6 +1503,11 @@ async def init_db(db_path: str):
                 daily_skill_status TEXT,
                 current_task_id TEXT,
                 current_task_title TEXT,
+                current_task_name TEXT,
+                current_task_object TEXT,
+                current_deadline TEXT,
+                current_task_next_step TEXT,
+                current_task_fear TEXT,
                 current_task_description TEXT,
                 current_task_context TEXT,
                 current_next_physical_step TEXT,
@@ -1796,6 +1811,11 @@ EXTRA_USER_COLS = {
     "daily_skill_status": "TEXT",
     "current_task_id": "TEXT",
     "current_task_title": "TEXT",
+    "current_task_name": "TEXT",
+    "current_task_object": "TEXT",
+    "current_deadline": "TEXT",
+    "current_task_next_step": "TEXT",
+    "current_task_fear": "TEXT",
     "current_task_description": "TEXT",
     "current_task_context": "TEXT",
     "current_next_physical_step": "TEXT",
@@ -2110,7 +2130,7 @@ def _new_task_id(user_id: int) -> str:
     return f"{user_id}:task:{int(time.time() * 1000)}"
 
 
-async def save_current_task(u: Dict[str, Any], db_path: str, *, title: str, description: str = "", context: str = "", next_step: str = "") -> str:
+async def save_current_task(u: Dict[str, Any], db_path: str, *, title: str, description: str = "", context: str = "", next_step: str = "", object_name: str = "", deadline: str = "", fear: str = "") -> str:
     """Create a new active task and pause the previous one instead of overwriting it."""
     title = str(title or "").strip()
     if not title:
@@ -2134,6 +2154,11 @@ async def save_current_task(u: Dict[str, Any], db_path: str, *, title: str, desc
         await db.commit()
     u["current_task_id"] = task_id
     u["current_task_title"] = title
+    u["current_task_name"] = title
+    u["current_task_object"] = object_name or None
+    u["current_deadline"] = deadline or None
+    u["current_task_next_step"] = next_step or None
+    u["current_task_fear"] = fear or None
     u["current_task_description"] = description or None
     u["current_task_context"] = context or None
     u["current_next_physical_step"] = next_step or None
@@ -2154,6 +2179,7 @@ async def update_current_task_step(u: Dict[str, Any], db_path: str, next_step: s
         )
         await db.commit()
     u["current_next_physical_step"] = next_step
+    u["current_task_next_step"] = next_step
 
 
 async def get_user_tasks(user_id: int, db_path: str) -> List[Dict[str, Any]]:
