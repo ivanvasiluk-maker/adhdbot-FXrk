@@ -5,6 +5,7 @@
 import json
 import math
 import random
+import re
 from typing import Dict, Any, Optional, List
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from skills_texts import SKILLS_TEXTS
@@ -384,6 +385,71 @@ def skill_explain(trainer_key: str, skill: dict) -> str:
 
 
 
+def human_task_name(user: dict | None = None, fallback: str = "важное дело, которое ты сейчас откладываешь") -> str:
+    user = user or {}
+    for key in ("current_task_name", "current_task_title", "today_target"):
+        value = str(user.get(key) or "").strip()
+        if value and value != "__target_not_selected__" and "выбранн" not in value.lower():
+            return value
+    return fallback
+
+
+def human_task_object(user: dict | None = None) -> str:
+    user = user or {}
+    obj = str(user.get("current_task_object") or "").strip()
+    if obj:
+        forms = {"презентация": "презентацию", "таблица": "таблицу"}
+        return forms.get(obj.lower(), obj)
+    task = human_task_name(user)
+    low = task.lower()
+    if "презентац" in low:
+        return "презентацию"
+    if "слайд" in low:
+        return "слайд"
+    if "письм" in low:
+        return "письмо"
+    if "пост" in low:
+        return "пост"
+    if "отч" in low:
+        return "отчёт"
+    return task
+
+
+def contextualize_task_text(text: str, user: dict | None = None) -> str:
+    user = user or {}
+    result = str(text or "")
+    task = human_task_name(user)
+    obj = human_task_object(user)
+    low_task = task.lower()
+    if task == "важное дело, которое ты сейчас откладываешь":
+        open_phrase = "Открой важное дело, которое ты сейчас откладываешь"
+        bad_line = "Напиши одну плохую строку для важного дела"
+    elif "презентац" in low_task or "презентац" in obj.lower():
+        open_phrase = f"Открой {obj} для клиента" if "клиент" in low_task and "клиент" not in obj.lower() else f"Открой {obj}"
+        genitive_obj = "презентации" if obj == "презентацию" else obj
+        bad_line = f"Напиши одну плохую строку для {genitive_obj}"
+    else:
+        open_phrase = f"Открой «{task}»" if obj == task else f"Открой {obj}"
+        bad_line = f"Напиши одну плохую строку для «{task}»"
+    replacements = {
+        r"Открой место, где лежит задача": open_phrase,
+        r"Открой место задачи": open_phrase,
+        r"открыть место задачи": open_phrase[0].lower() + open_phrase[1:],
+        r"место задачи": obj,
+        r"Открыть задачу": open_phrase,
+        r"открыть задачу": open_phrase[0].lower() + open_phrase[1:],
+        r"в задачу": f"в «{task}»",
+        r"задачу": task,
+        r"задачи": task,
+        r"выбранной задаче": task,
+    }
+    for pattern, repl in replacements.items():
+        result = re.sub(pattern, repl, result, flags=re.IGNORECASE)
+    if re.search(r"плох(ую|ая|ой)?.*строк", result, flags=re.IGNORECASE) and "для" not in result.lower():
+        result = bad_line
+    return result
+
+
 def _skill_steps(skill: dict) -> List[str]:
     """Return compact action steps, splitting arrow-separated strings when needed."""
     raw_steps = skill.get("steps") or skill.get("simple")
@@ -404,76 +470,28 @@ def _skill_steps(skill: dict) -> List[str]:
 
 
 
-def _target_header_text(today_target: str) -> str:
-    target = (today_target or "").strip()
+def _target_header_text(today_target: str, user: dict | None = None) -> str:
+    target = human_task_name(user, "") or (today_target or "").strip()
     if target == "__target_not_selected__":
         return "📌 Дело пока не выбрано\n\nБудем тренироваться\nна типичных ситуациях прокрастинации."
     if not target:
-        target = "сегодняшняя задача"
+        target = "важное дело, которое ты сейчас откладываешь"
     return f"📌 Дело: {target}"
 
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
-    """Clean skill card with trainer-specific wording over live skill fields."""
-    trainer_key = (user or {}).get("trainer_key") or "marsha"
-    trainer = TRAINERS.get(trainer_key, TRAINERS["marsha"])
-    steps = _skill_steps(skill)
+    """Single compact skill card without duplicated title/minimum/lesson blocks."""
+    steps = [contextualize_task_text(step, user) for step in _skill_steps(skill)][:3]
     steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
-    minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
-    why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
-    skill_name = skill.get("name", "Микро-шаг")
-    try:
-        from skills import core_skill_id_for_variant, core_skill_title
-        visible_core_id = user.get("current_core_skill_id") or core_skill_id_for_variant(str(skill.get("skill_id") or ""))
-        visible_core_title = core_skill_title(str(visible_core_id))
-    except Exception:
-        visible_core_title = "Вход через маленький шаг"
-    variant_label = user.get("skill_variant_label") or "Вариант сейчас"
-    trainer_variants = skill.get("trainer_variants") or {}
-    trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha")
-    if not trainer_line:
-        trainer_line = {
-            "beck": "Логика такая: уменьшаем вход, чтобы мозгу было легче начать.",
-            "skinny": "Без переговоров. Делаешь только маленький шаг.",
-            "marsha": "Давай бережно: только маленький вход, без давления на результат.",
-        }.get(trainer_key, "Давай бережно: только маленький вход, без давления на результат.")
-
-    if trainer_key == "beck":
-        return (
-            f"{trainer['emoji']} {trainer['name']}\n\n"
-            f"{_target_header_text(today_target)}\n\n"
-            f"🧩 Навык дня: {skill_name or visible_core_title}\n\n"
-            f"{trainer_line}\n\n"
-            "Почему это работает:\n"
-            f"{why_short}\n\n"
-            "Сделай:\n"
-            f"{steps_text}\n\n"
-            "Минимум:\n"
-            f"{minimum_action}"
-        )
-
-    if trainer_key == "skinny":
-        return (
-            f"{trainer['emoji']} {trainer['name']}\n\n"
-            f"{_target_header_text(today_target)}\n\n"
-            f"🧩 Навык дня: {skill_name or visible_core_title}\n\n"
-            f"{trainer_line}\n\n"
-            "Делаешь только это:\n\n"
-            f"{steps_text}\n\n"
-            "Минимум:\n"
-            f"{minimum_action}\n\n"
-            "Сделал — вернулся сюда."
-        )
-
+    minimum_action = contextualize_task_text(skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд.", user)
+    why_short = skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата."
+    skill_name = skill.get("name") or "Микро-шаг"
     return (
-        f"{trainer['emoji']} {trainer['name']}\n\n"
-        f"{_target_header_text(today_target)}\n\n"
-        f"🧩 Навык дня: {skill_name or visible_core_title}\n\n"
-        f"{trainer_line}\n\n"
-        "Попробуй:\n"
+        f"🧩 Навык: {skill_name}\n\n"
+        f"{why_short}\n\n"
+        "Сделай:\n"
         f"{steps_text}\n\n"
         "Минимум:\n"
-        f"{minimum_action}\n\n"
-        "Если не получится — это не провал, мы просто уменьшим шаг."
+        f"{minimum_action}"
     )
 
 

@@ -146,6 +146,7 @@ def get_current_plan(u: dict) -> list:
 # ============================================================
 
 import json
+import datetime as dt
 from typing import List, Dict, Any, Optional
 
 # ============================================================
@@ -1494,10 +1495,13 @@ def adapt_plan_to_profile(plan: list, u_or_profile: dict) -> list:
 
     successful = [str(x) for x in profile.get("successful_skills") or [] if x in SKILLS_DB]
     failed = [str(x) for x in profile.get("failed_skills") or [] if x in SKILLS_DB]
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    not_fit_raw = profile.get("not_fit_today") or {}
+    not_fit_today = [str(x) for x in (not_fit_raw.get(today, []) if isinstance(not_fit_raw, dict) else []) if x in SKILLS_DB]
     best = [str(x) for x in (profile.get("best_skill"), profile.get("last_successful_skill"), profile.get("recommended_variant")) if x in SKILLS_DB]
     worst = [str(x) for x in (profile.get("worst_skill"), profile.get("failed_skill")) if x in SKILLS_DB]
 
-    adapted = list(safe_plan)
+    adapted = [sid for sid in safe_plan if sid not in not_fit_today] or list(safe_plan)
     # If smaller steps worked or failures show the entry is too big, bias toward low-friction starts.
     if int(profile.get("downscale_count") or 0) > 0 or profile.get("needs_downscale") or profile.get("downscale_pattern"):
         adapted = _move_skills_to_front(adapted, PROFILE_PROMOTED_SMALL_STEP_SKILLS)
