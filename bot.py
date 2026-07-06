@@ -47,6 +47,12 @@ from skills import (
     suggest_alternative_skill,
     format_skill,
     variants_for_core_skill,
+    get_day_skill_id,
+    get_moment_skill_id,
+    is_skill_on_cooldown,
+    record_skill_step,
+    SAME_SKILL_COOLDOWN_STEPS,
+    SAME_SKILL_MAX_ATTEMPTS_PER_DAY,
 )
 from db import (
     USER_FIELDS, default_user, init_db, migrate_db, get_user, save_user, 
@@ -868,19 +874,46 @@ def safety_signal_details(text: str, explicit: bool = False) -> Dict[str, Any]:
 
 
 def has_crisis_safety_signal(text: str, stage: str) -> bool:
-    """SKILLER no longer opens a separate crisis/emergency product flow."""
-    return False
+    """Detect high-risk safety phrases per spec section 8.1."""
+    low = (text or "").lower().strip()
+    # Explicit high-risk triggers from spec §8.1
+    high_risk_phrases = (
+        "хочу исчезнуть",
+        "не хочу жить",
+        "хочу умереть",
+        "хочу выключиться",
+        "могу сделать что-то с собой",
+        "не справлюсь один",
+        "не справлюсь одна",
+        "я один и мне страшно",
+        "одна и мне страшно",
+        "не понимаю, что делать в ближайшие минуты",
+        # Legacy phrases preserved from original safety_signal_details
+        "хочу покончить",
+        "покончить с собой",
+        "сделаю с собой",
+        "наврежу себе",
+        "навредить себе",
+        "лучше бы меня не было",
+        "не вижу выхода",
+        "есть план",
+        "прощайте",
+        "суицид",
+        "самоуб",
+    )
+    return any(phrase in low for phrase in high_risk_phrases)
 
 
 async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, source: str, explicit: bool = False) -> bool:
-    # Legacy emergency/suicidal-crisis routing is intentionally commented out for
-    # the product test. SKILLER is not positioned as emergency psychological help:
-    # the visible crisis path must stay about procrastination only («⚡ Я застрял»).
-    # Keep a non-opening stub so older internal calls cannot revive the separate
-    # safety flow.
+    """Open the new 3-button safety check per spec section 8.2."""
     details = safety_signal_details(text, explicit=explicit)
-    await log_event(u["user_id"], "safety", "legacy_safety_interceptor_suppressed", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
-    return False
+    await log_event(u["user_id"], "safety", "safety_interceptor_opened", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
+    u["safety_mode"] = "triage"
+    u["stage"] = "safety_mode"
+    set_current_state(u, STATE_SAFETY_LOCK, close_action=True)
+    await save_user(u, DB_PATH)
+    await m.answer(SAFETY_NEW_CHECK_TEXT, reply_markup=kb_safety_new_check)
+    return True
 
 
 async def show_safety_urgent(m: Message, u: Dict[str, Any], reason: str = ""):
@@ -973,176 +1006,137 @@ async def handle_safety_callback(c: CallbackQuery, u: Dict[str, Any], data: str)
 
 
 async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
-    # Legacy safety mode is no longer a product branch. If an old persisted user
-    # somehow has safety_mode/stage set, clear it and continue normal
-    # procrastination routing instead of showing emergency-support UI.
-    if safety_mode(u) != "none" or u.get("stage") == "safety_mode":
-        u["safety_mode"] = "none"
-        u["safety_last_risk"] = None
-        u["safety_contact_status"] = None
-        if u.get("stage") == "safety_mode":
-            u["stage"] = "training"
-        await save_user(u, DB_PATH)
-    return False
+    """Handle safety mode routing per spec section 8.
 
-    # Dormant legacy handler kept below for reference only; unreachable because
-    # of the return above.
+    New flow (spec §8.2–§8.4):
+    - triage: show 3-button safety check
+    - new_check: handle 🆘/😟/✅ responses
+    - active/urgent: handle emergency steps
+    - bad_but_safe: stabilisation options after "I'm safe but feel bad"
+    - support/inactive: legacy fallback cleanup
+    """
     mode = safety_mode(u)
-    if mode == "none":
+
+    # Clean up legacy lingering safety state that predates the new flow
+    if mode == "inactive":
+        u["safety_mode"] = "none"
+        await save_user(u, DB_PATH)
         return False
+    if mode == "none" and u.get("stage") != "safety_mode":
+        return False
+
     low = (text or "").lower().strip()
-    # While safety_mode=active, no productivity UI is allowed: skills, map, trainers, offer,
-    # progress, productive day closing, or skill switching are all swallowed.
-    if mode == "active" and text not in active_safety_allowed_buttons():
-        await log_event(u["user_id"], "safety", "safety_blocked_non_crisis_input", {"text": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await repeat_active_safety_screen(m, u)
-        return True
 
-    # Old productivity buttons are intentionally swallowed while any safety mode is active.
-    if text not in active_safety_allowed_buttons() and (should_route_action_request(text, low, u) or any(x in low for x in ("полный режим", "оффер", "моя карта", "прогресс", "тренер", "карта", "закрыть день", "до завтра", "сменить навык", "навык"))):
-        await log_event(u["user_id"], "safety", "safety_blocked_productivity_button", {"text": text[:80]}, DB_PATH, SHEETS_WEBHOOK_URL)
-        if mode == "active":
-            await repeat_active_safety_screen(m, u)
-        elif mode == "urgent":
-            await show_safety_urgent(m, u, "blocked_productivity")
-        elif mode == "support":
-            await m.answer("Сейчас ещё режим поддержки, не продуктивности.", reply_markup=kb_safety_aftercare)
-        else:
-            await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
-        return True
-
-    if mode == "triage":
+    # ---- New spec §8 triage: 3-button safety check ----
+    if mode == "triage" or u.get("stage") == "safety_mode":
+        # New buttons per spec §8.2
+        if text == "🆘 Да, могу быть в опасности":
+            u["safety_last_risk"] = "yes"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_high_risk_confirmed", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
+            return True
+        if text == "😟 Не уверен(а)":
+            u["safety_last_risk"] = "uncertain"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_uncertain", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
+            return True
+        if text == "✅ Я в безопасности, но мне очень плохо":
+            u["safety_last_risk"] = "no"
+            u["safety_mode"] = "bad_but_safe"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_bad_but_safe", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer(SAFETY_BAD_BUT_SAFE_TEXT, reply_markup=kb_safety_bad_but_safe)
+            return True
+        # Legacy triage buttons (old keyboard still in DB for some users)
         if text == "🟥 Да":
-            await show_safety_urgent(m, u, "risk_yes")
+            await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
             return True
         if text == "🟨 Не уверен(а)":
-            await show_safety_urgent(m, u, "uncertain")
+            await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
             return True
         if text == "🟩 Нет":
-            await show_safety_support(m, u, "risk_no")
+            u["safety_last_risk"] = "no"
+            u["safety_mode"] = "bad_but_safe"
+            await save_user(u, DB_PATH)
+            await m.answer(SAFETY_BAD_BUT_SAFE_TEXT, reply_markup=kb_safety_bad_but_safe)
             return True
-        if text == "👤 Да, один(одна)":
-            u["safety_last_risk"] = "uncertain"
-            await show_safety_urgent(m, u, "alone")
-            return True
-        if text == "👥 Рядом есть люди":
-            await m.answer("Хорошо. Оставайся ближе к людям и ответь на вопрос про риск.", reply_markup=kb_safety_triage)
-            return True
-        await m.answer(SAFETY_TRIAGE_TEXT, reply_markup=kb_safety_triage)
+        # Re-show triage if user types something else
+        await m.answer(SAFETY_NEW_CHECK_TEXT, reply_markup=kb_safety_new_check)
         return True
 
-    if mode in {"urgent", "active"}:
-        if text == "👥 Я рядом с людьми":
-            await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
+    # ---- "bad but safe" mode: stabilisation options (spec §8.4) ----
+    if mode == "bad_but_safe":
+        stabilisation_texts = {
+            "🫁 Длинный выдох и стопы на пол",
+            "💧 Вода или умыться",
+            "👥 Написать одному человеку",
+            "🌙 Закрыть день без разбора",
+        }
+        if text in stabilisation_texts:
+            u["safety_mode"] = "none"
+            u["stage"] = "training"
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_stabilisation_chosen", {"choice": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer(SAFETY_BAD_AFTER_STEP_TEXT)
             return True
-        if text == "👥 Я уже не один(одна)":
-            await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
-            return True
-        if text in {"💬 Я написал живому человеку", "✅ Да, отправил(а)"}:
+        await m.answer(SAFETY_BAD_BUT_SAFE_TEXT, reply_markup=kb_safety_bad_but_safe)
+        return True
+
+    # ---- Steps after "Да / Не уверен(а)" (spec §8.3) ----
+    if mode in {"urgent", "active"} or u.get("safety_last_risk") in {"yes", "uncertain"}:
+        if text in {"📞 Я звоню / пишу человеку", "💬 Я написал живому человеку", "✅ Да, отправил(а)"}:
             u["safety_contact_status"] = "sent_message"
             await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_contact_initiated", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
             return True
-        if text == "📞 Мне нужна срочная помощь":
-            await m.answer("В SKILLER нет срочного сценария. Выходи за пределы бота и обращайся к живой помощи вне SKILLER.", reply_markup=kb_safety_crisis_actions)
+        if text == "👥 Я сейчас не один(одна)" or text == "👥 Я уже не один(одна)":
+            await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
             return True
-        if text == "🟥 Мне всё ещё небезопасно":
-            await m.answer(SAFETY_ACTIVE_TEXT, reply_markup=kb_safety_crisis_actions)
+        if text == "🆘 Нужна экстренная помощь" or text == "📞 Мне нужна срочная помощь":
+            await m.answer(
+                "Бот не заменяет экстренную помощь.\n\n"
+                "Позвони 112, в скорую, или напиши близкому человеку прямо сейчас.",
+                reply_markup=kb_safety_not_safe_steps,
+            )
             return True
-        if text == "↩️ Стало безопаснее":
-            # Stay in safety_mode=active: do not reopen productivity until explicit return-later.
-            u["safety_mode"] = "active"
+        if text == "✅ Я в безопасности сейчас" or text == "↩️ Стало безопаснее":
+            u["safety_mode"] = "none"
             u["safety_last_risk"] = "no"
             u["safety_contact_status"] = "aftercare"
+            u["stage"] = "training"
             await save_user(u, DB_PATH)
-            await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+            await log_event(u["user_id"], "safety", "safety_resolved", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer(SAFETY_CONFIRMED_TEXT, reply_markup=kb_safety_aftercare)
             return True
         if text in {"🛑 На сегодня достаточно", "🌙 Закрыть день без оценки"}:
             await complete_safety_day(m, u)
             return True
-        if text == "💬 Остаться в поддержке":
-            u["safety_contact_status"] = "aftercare"
-            await save_user(u, DB_PATH)
-            await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+        if text == "🟥 Мне всё ещё небезопасно":
+            await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
             return True
-        if text in {"↩️ Вернуться к задаче позже", "🧭 Вернуться к задаче позже"}:
-            if u.get("safety_last_risk") != "no":
-                await m.answer("Пока не возвращаемся к задаче: риск не отмечен как 'нет'. Остаёмся в поддержке.", reply_markup=kb_safety_aftercare)
-                return True
-            u["safety_mode"] = "inactive"
-            u["return_mode"] = "later"
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await log_event(u["user_id"], "safety", "safety_user_chose_resume_later", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, "Ок. Вернуться можно позже явным действием. Сейчас без давления.", kb_training_main, "training_main")
-            return True
-        if text == "🟦 Написать человеку сейчас":
-            u["safety_contact_status"] = "offered"
-            await save_user(u, DB_PATH)
-            await m.answer(f"Скопируй и отправь:\n\n{SAFETY_MESSAGE_TEMPLATE}")
-            await m.answer("Удалось отправить сообщение?", reply_markup=kb_safety_message_sent)
-            return True
-        if text == "📞 Позвонить человеку":
-            u["safety_contact_status"] = "called"
-            await save_user(u, DB_PATH)
-            await m.answer("Позвони живому человеку сейчас. Если не отвечает — выбирай другого доступного человека вне бота.", reply_markup=kb_safety_contact_choices)
-            return True
-        if text == "🚶 Перейти туда, где есть люди":
-            await m.answer("Перейди в место, где рядом есть люди: кухня, подъезд, улица, ресепшен, сосед, магазин. Потом выбери следующий безопасный шаг.", reply_markup=kb_safety_crisis_actions)
-            return True
-        if text == "🧹 Убрать опасные предметы подальше":
-            await m.answer("Отойди от опасных предметов или положи их за дверь / в другую комнату / рядом с другим человеком. Потом выбери контакт с живым человеком.", reply_markup=kb_safety_crisis_actions)
-            return True
-        if text == "🟨 Я не знаю, кому написать" or text == "❌ Не могу":
-            u["safety_contact_status"] = "unavailable"
-            await save_user(u, DB_PATH)
-            await m.answer("Выбери самый доступный вариант. Не нужен идеальный человек — нужен живой контакт.", reply_markup=kb_safety_contact_choices)
-            return True
-        if text == "✅ Да, отправил(а)":
-            u["safety_contact_status"] = "sent_message"
-            await save_user(u, DB_PATH)
-            await show_safety_support(m, u, "message_sent")
-            return True
-        if text == "⏳ Отправляю сейчас":
-            await m.answer("Ок. Отправь сейчас. Я подожду здесь. Потом нажми ✅ Да, отправил(а).", reply_markup=kb_safety_message_sent)
-            return True
-        if text in {"Близкий человек", "Партнёр", "Коллега", "Сосед", "Родственник"}:
-            await m.answer(f"Да. Выбери: {text}. Напиши или позвони сейчас.\n\n{SAFETY_MESSAGE_TEMPLATE}", reply_markup=kb_safety_message_sent)
-            return True
-        await show_safety_urgent(m, u, "urgent_repeat")
+        # Keep user in safety flow until they confirm safety
+        await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
         return True
 
+    # Legacy support/aftercare mode cleanup
     if mode == "support":
-        if text in {"Да", "Нет", "Не знаю"}:
-            if text == "Да":
-                await m.answer("Хорошо. Не возвращаемся автоматически к задаче. Выбери, что безопаснее дальше.", reply_markup=kb_safety_aftercare)
-            else:
-                await m.answer("Тогда остаёмся в поддержке. Повтори протокол ещё 10 минут или выбери живой контакт.", reply_markup=kb_safety_aftercare)
-            return True
-        if text in {"🛑 На сегодня достаточно", "🌙 Закрыть день без оценки"}:
+        if text in {"🌙 Закрыть день без оценки", "🛑 На сегодня достаточно", "🌙 Не хочу разбирать, просто закрыть день"}:
             await complete_safety_day(m, u)
             return True
-        if text == "💬 Остаться в поддержке":
-            if mode == "active":
-                u["safety_contact_status"] = "aftercare"
-                await save_user(u, DB_PATH)
-                await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
-            else:
-                await show_safety_support(m, u, "stay_support")
-            return True
         if text in {"↩️ Вернуться к задаче позже", "🧭 Вернуться к задаче позже"}:
-            if u.get("safety_last_risk") != "no":
-                await m.answer("Пока не возвращаемся к задаче: риск не отмечен как 'нет'. Остаёмся в поддержке.", reply_markup=kb_safety_aftercare)
-                return True
-            u["safety_mode"] = "inactive"
-            u["return_mode"] = "later"
-            u["stage"] = "waiting_next_day"
+            u["safety_mode"] = "none"
+            u["stage"] = "training"
             await save_user(u, DB_PATH)
-            await log_event(u["user_id"], "safety", "safety_user_chose_resume_later", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_keyboard(m, u, "Ок. Вернуться можно позже явным действием. Сейчас без давления.", kb_training_main, "training_main")
+            await m.answer("Хорошо. Возвращаемся без давления.", reply_markup=kb_training_main)
             return True
-        await m.answer(SAFETY_SUPPORT_PROTOCOL, reply_markup=kb_safety_support_check)
-        return True
+        u["safety_mode"] = "none"
+        u["stage"] = "training"
+        await save_user(u, DB_PATH)
+        return False
+
     return False
 
 
@@ -4761,6 +4755,15 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
     current_sid = current_skill_id(u) or (plan[max(0, min(len(plan) - 1, day - 1))] if plan else "open_only")
     current_skill = SKILLS_DB.get(current_sid, {})
     track = current_skill.get("track") or u.get("bucket") or "mixed"
+    # Get current step history for cooldown enforcement (spec §6.2)
+    try:
+        import json as _json
+        _raw = u.get("skill_step_history")
+        _step_history = _json.loads(_raw) if isinstance(_raw, str) and _raw else []
+    except Exception:
+        _step_history = []
+    # Day skill for the current day — never use it as a moment/replacement skill (spec §3.3)
+    day_skill = get_day_skill_id(day) or ""
     candidates: List[str] = []
     suggested = suggest_alternative_skill(track, current_sid, u)
     if suggested:
@@ -4768,14 +4771,20 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
     candidates.extend([sid for sid in CORE_LAUNCH_WEEK_SKILL_IDS if sid in SKILLS_DB])
     candidates.extend([sid for sid, skill in SKILLS_DB.items() if skill.get("track") == track])
     candidates.extend([sid for sid in SKILLS_DB])
+    # First pass: prefer skills not seen today and not on cooldown and not the day skill
     for sid in candidates:
-        if sid in SKILLS_DB and sid != current_sid and sid not in seen_today:
+        if sid in SKILLS_DB and sid != current_sid and sid not in seen_today and sid != day_skill:
+            if not is_skill_on_cooldown(sid, _step_history):
+                return sid
+    # Second pass: at least not seen today and not the day skill
+    for sid in candidates:
+        if sid in SKILLS_DB and sid != current_sid and sid not in seen_today and sid != day_skill:
             return sid
+    # Third pass: anything except current and day skill
     for sid in candidates:
-        if sid in SKILLS_DB and sid != current_sid:
+        if sid in SKILLS_DB and sid != current_sid and sid != day_skill:
             return sid
     return current_sid if current_sid in SKILLS_DB else ("open_only" if "open_only" in SKILLS_DB else next(iter(SKILLS_DB.keys())))
-
 
 
 async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt_id: Optional[int] = None, skill_id: str = "", metadata: Optional[Dict[str, Any]] = None):
@@ -6248,6 +6257,14 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     u["daily_skill_id"] = sid
     u["daily_skill_name"] = skill.get("name") or sid
     u["daily_skill_status"] = "in_progress"
+    # Track skill step history for cooldown enforcement (spec §3.3, §6.2)
+    try:
+        import json as _json
+        _raw_hist = u.get("skill_step_history")
+        _hist = _json.loads(_raw_hist) if isinstance(_raw_hist, str) and _raw_hist else (list(_raw_hist) if isinstance(_raw_hist, list) else [])
+        u["skill_step_history"] = _json.dumps(record_skill_step(_hist, sid), ensure_ascii=False)
+    except Exception:
+        pass
     u["active_attempt"] = {
         **default_active_attempt(u),
         "attempt_id": str(uuid.uuid4().hex),
@@ -8159,6 +8176,53 @@ async def main_flow(m: Message):
         await handle_action_request(u["user_id"], m, u)
         return
 
+    # ---- Spec §9: post-skill "continue training" buttons ----
+    if text == "📌 Закрепить и остановиться":
+        u["stage"] = "waiting_next_day"
+        set_current_state(u, STATE_PAUSED, close_action=True)
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "skill_stopped_anchor", {"skill_id": current_skill_id(u)}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(m, u, "Хорошо. Закрепляем: ты проверил вход. Это уже данные.\nЕсли вернёшься — продолжим без онбординга.", kb_training_main, "training_main")
+        return
+    if text == "🔄 Проверить другой навык":
+        u["success_repeat_count"] = 0
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "skill_switch_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await handle_action_request(u["user_id"], m, u)
+        return
+    if text == "🌙 Закрыть на сегодня":
+        u["stage"] = "waiting_next_day"
+        set_current_state(u, STATE_PAUSED, close_action=True)
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "day_closed_after_skill", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_keyboard(m, u, "Хорошо. День закрыт без штрафа. Завтра — с того же места.", kb_training_main, "training_main")
+        return
+    if text == "🫁 Сначала успокоиться":
+        u["last_active"] = time.time()
+        await save_user(u, DB_PATH)
+        await m.answer(
+            "Ок. Сделай длинный выдох и поставь стопы на пол.\n"
+            "Потом — один предмет вокруг.\n"
+            "Когда будешь готов — нажми любую кнопку.",
+            reply_markup=kb_soft_checkin_v2,
+        )
+        return
+    if text == "📵 Убрать отвлечение":
+        u["last_active"] = time.time()
+        await save_user(u, DB_PATH)
+        await m.answer(
+            "Положи телефон туда, где нужно встать.\n"
+            "Закрой лишние вкладки.\n"
+            "На ближайшие 90 секунд: одно окно."
+        )
+        return
+    if text == "📌 Сделать шаг ещё меньше":
+        u["success_repeat_count"] = 0
+        await save_user(u, DB_PATH)
+        await log_event(uid, "training", "skill_downscale_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await handle_action_request(u["user_id"], m, u)
+        return
+
     if text == "🗣️ Что помогло?":
         u["stage"] = "success_help_note"
         await save_user(u, DB_PATH)
@@ -8402,27 +8466,119 @@ async def main_flow(m: Message):
         await ask_today_action(m, u)
         return
 
-    evening_answers = {"✅ сделал", "😐 частично", "❌ не сделал", "↩️ срывался, но возвращался"}
-    if u.get("stage") == "evening_checkin" and text not in evening_answers:
+    # ---- Evening check-in (spec §4.3 new buttons) ----
+    new_evening_answers = {
+        "🚪 Я всё-таки начал",
+        "🟡 Пробовал, но застрял",
+        "📱 Почти весь день уносило",
+        "🫠 Не было сил",
+        "🌙 Не хочу разбирать, просто закрыть день",
+    }
+    # Legacy evening answers preserved for backward compat
+    legacy_evening_answers = {"✅ сделал", "😐 частично", "❌ не сделал", "↩️ срывался, но возвращался"}
+    all_evening_answers = new_evening_answers | legacy_evening_answers
+    if u.get("stage") == "evening_checkin" and text not in all_evening_answers:
         inferred = infer_evening_checkin_answer(text)
         if inferred:
             text = inferred
             low = text.lower()
-    if u.get("stage") == "evening_checkin" and text in evening_answers:
+    if u.get("stage") == "evening_checkin" and text in all_evening_answers:
         remember_checkin_state(u, "last_evening_state", text)
         u["last_active"] = time.time()
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "evening_checkin_done", {"state": text}, DB_PATH, SHEETS_WEBHOOK_URL)
-        if text == "✅ сделал":
+        if text in {"✅ сделал", "🚪 Я всё-таки начал"}:
             await m.answer(trainer_done_response(u.get("trainer_key") or "marsha"))
-        elif text == "↩️ срывался, но возвращался":
+        elif text in {"↩️ срывался, но возвращался", "🟡 Пробовал, но застрял"}:
             await m.answer("Возврат засчитан. Это ключевой навык.")
-        elif text == "😐 частично":
+        elif text in {"😐 частично"}:
             await m.answer("Частично — тоже данные. Завтра уменьшим шаг, если нужно.")
+        elif text in {"📱 Почти весь день уносило", "🫠 Не было сил"}:
+            await m.answer("Один след — уже факт. Завтра начнём с меньшего.")
+        elif text == "🌙 Не хочу разбирать, просто закрыть день":
+            await m.answer("Хорошо. День закрыт. Завтра — с чистого листа.")
         else:
             await m.answer(trainer_failed_response(u.get("trainer_key") or "marsha"))
         await answer_with_keyboard(m, u, "Что дальше?", kb_training_main, "training_main")
+        return
+
+    # ---- Soft inactivity check-in responses (spec §4.2) ----
+    soft_checkin_dismiss_buttons = {
+        "✅ Я занимался другим важным",
+        "🌙 На сегодня уже достаточно",
+        "✅ Ничего, я сам вернусь позже",
+        "🌙 На сегодня достаточно",
+    }
+    soft_checkin_return_buttons = {
+        "📌 Один очень маленький шаг",
+        "✅ Хочу сделать маленький шаг",
+    }
+    soft_checkin_mechanism_buttons = {
+        "📱 Унесло в телефон": "distractible",
+        "😣 Задача стала тяжёлой": "mixed",
+        "🫠 Нет сил": "low_energy",
+        "😬 Тревожно начинать": "anxious",
+        "📱 Отвлёкся": "distractible",
+        "🧠 Слишком много в голове": "mixed",
+        "🔄 Другой навык": "switch",
+        "🫁 Пауза": "pause",
+    }
+    if text in soft_checkin_dismiss_buttons:
+        u["last_active"] = time.time()
+        today_str = local_date_for_user(u)
+        if "достаточно" in low or "закрыть" in low:
+            u["no_reminders_today"] = 1
+            u["no_reminders_date"] = today_str
+        await save_user(u, DB_PATH)
+        await log_event(uid, "inactivity", "soft_checkin_dismissed", {"button": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Я не буду больше напоминать сегодня. Когда вернёшься — начнём с маленького шага.")
+        return
+    if text in soft_checkin_return_buttons:
+        u["last_active"] = time.time()
+        await save_user(u, DB_PATH)
+        await log_event(uid, "inactivity", "soft_checkin_return_chosen", {"button": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await ask_today_action(m, u)
+        return
+    if text in soft_checkin_mechanism_buttons:
+        mechanism = soft_checkin_mechanism_buttons[text]
+        u["last_active"] = time.time()
+        await save_user(u, DB_PATH)
+        await log_event(uid, "inactivity", "soft_checkin_mechanism_chosen", {"mechanism": mechanism, "button": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if mechanism == "switch":
+            await answer_with_keyboard(m, u, "Хорошо. Посмотрим другой навык.", kb_training_main, "training_main")
+        elif mechanism == "pause":
+            await m.answer("Хорошо. Пауза — это тоже выбор. Вернись, когда будет готово.")
+        else:
+            await ask_today_action(m, u)
+        return
+
+    # ---- Reminder opt-out buttons (spec §4.4) ----
+    if text == "🔕 Не писать сегодня":
+        today_str = local_date_for_user(u)
+        u["no_reminders_today"] = 1
+        u["no_reminders_date"] = today_str
+        u["last_active"] = time.time()
+        await save_user(u, DB_PATH)
+        await log_event(uid, "inactivity", "no_reminders_today_set", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Не буду писать сегодня. Завтра утром — как обычно.")
+        return
+    if text == "⏰ Напомни позже":
+        u["last_active"] = time.time()
+        # Reset inactivity date so a new reminder can fire later
+        u["last_inactivity_reminder_date"] = None
+        await save_user(u, DB_PATH)
+        await log_event(uid, "inactivity", "remind_later_set", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Напомню через несколько часов.")
+        return
+    if text == "✅ Я сам вернусь":
+        u["last_active"] = time.time()
+        today_str = local_date_for_user(u)
+        u["no_reminders_today"] = 1
+        u["no_reminders_date"] = today_str
+        await save_user(u, DB_PATH)
+        await log_event(uid, "inactivity", "self_return_chosen", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Жду от тебя. Вернёшься — продолжим.")
         return
 
     # Глобальный хук: кризис доступен из любого состояния, но не перехватывает диагностику
@@ -10734,9 +10890,44 @@ async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply
             SHEETS_WEBHOOK_URL,
         )
 
+MAX_PROACTIVE_PER_DAY = 3  # spec §4.4
+MAX_INACTIVITY_REMINDERS_PER_DAY = 1  # spec §4.4
+_INACTIVITY_HOURS = 6  # spec §4.2
+
+
+def _proactive_count_today(u: Dict[str, Any], today: str) -> int:
+    """Return how many proactive messages were sent today."""
+    if u.get("proactive_count_date") != today:
+        return 0
+    return int(u.get("proactive_count_today") or 0)
+
+
+def _increment_proactive_count(u: Dict[str, Any], today: str) -> None:
+    """Bump the daily proactive message counter."""
+    current = _proactive_count_today(u, today)
+    u["proactive_count_today"] = current + 1
+    u["proactive_count_date"] = today
+
+
+def _user_no_reminders_today(u: Dict[str, Any], today: str) -> bool:
+    """Return True if user opted out of reminders for today."""
+    return bool(u.get("no_reminders_today") and u.get("no_reminders_date") == today)
+
+
+def _user_last_activity_ts(u: Dict[str, Any]) -> float:
+    """Return the user's last activity timestamp (unix)."""
+    return float(u.get("last_active") or 0)
+
 
 async def background_checkins(bot: Bot):
-    """Proactive morning/evening check-ins with per-day anti-spam guards."""
+    """Proactive morning/evening check-ins and 6h inactivity reminder with per-day anti-spam guards.
+
+    Windows per spec:
+    - Morning: 08:15–09:00 (spec §4.1)
+    - Inactivity (6h silence): 12:00–20:30 (spec §4.2)
+    - Evening: 19:30–21:30 (spec §4.3)
+    Limits per spec §4.4: MAX 3 proactive/day, MAX 1 inactivity, MAX 1 evening.
+    """
     while True:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
@@ -10753,12 +10944,25 @@ async def background_checkins(bot: Bot):
                     continue
                 if u.get("stage") not in {"training", "await_training_target", "waiting_next_day"}:
                     continue
+                # Skip if user is in safety mode
+                if safety_mode(u) not in {"none", "inactive"}:
+                    continue
 
                 now_local = local_now_for_user(u)
                 today = now_local.date().isoformat()
 
+                # Do not send if user opted out today
+                if _user_no_reminders_today(u, today):
+                    continue
+
+                # Global daily proactive limit
+                proactive_today = _proactive_count_today(u, today)
+                if proactive_today >= MAX_PROACTIVE_PER_DAY:
+                    continue
+
+                # ---- Morning check-in: 08:15–09:00 (spec §4.1) ----
                 if (
-                    in_time_window(now_local, 8, 0, 10, 30)
+                    in_time_window(now_local, 8, 15, 9, 0)
                     and u.get("last_morning_checkin_date") != today
                 ):
                     if user_inactive_over_24h(u, now_ts):
@@ -10770,6 +10974,7 @@ async def background_checkins(bot: Bot):
                         u["last_morning_checkin_date"] = today
                         if count < 3:
                             u["stage"] = "morning_checkin"
+                        _increment_proactive_count(u, today)
                         await save_user(u, DB_PATH)
                         await log_event(u["user_id"], u.get("stage", ""), "reactivation_sent", {"count": count}, DB_PATH, SHEETS_WEBHOOK_URL)
                         if count < 3:
@@ -10778,25 +10983,55 @@ async def background_checkins(bot: Bot):
                             await bot.send_message(u["chat_id"], reactivation_text(count))
                         continue
 
+                    # Build morning text: include day skill name if days 1-3
+                    day_num = int(u.get("day") or 1)
+                    day_skill_id = get_day_skill_id(day_num)
+                    day_skill_name = (SKILLS_DB.get(day_skill_id) or {}).get("name", "") if day_skill_id else ""
+
                     u["last_morning_checkin_date"] = today
                     u["stage"] = "morning_checkin"
+                    _increment_proactive_count(u, today)
                     await save_user(u, DB_PATH)
                     await log_event(u["user_id"], "morning_checkin", "morning_checkin_sent", {}, DB_PATH, SHEETS_WEBHOOK_URL)
                     await send_background_keyboard(
                         bot,
                         u,
-                        morning_checkin_text(u.get("name") or "друг"),
+                        morning_checkin_text(day_skill_name=day_skill_name),
                         kb_morning_checkin,
                         "morning_checkin",
                     )
                     continue
 
+                # ---- 6-hour inactivity reminder: 12:00–20:30 (spec §4.2) ----
                 if (
-                    in_time_window(now_local, 19, 0, 22, 30)
+                    in_time_window(now_local, 12, 0, 20, 30)
+                    and u.get("last_inactivity_reminder_date") != today
+                    and not day_closed_today(u)
+                    and safety_mode(u) == "none"
+                ):
+                    last_active = _user_last_activity_ts(u)
+                    if last_active > 0 and (now_ts - last_active) >= _INACTIVITY_HOURS * 3600:
+                        bucket = str(u.get("bucket") or "mixed")
+                        anxious = bucket in ("anxiety",)
+                        variant = 2 if proactive_today == 1 else 1
+                        msg_text = soft_checkin_text(variant=variant, anxious=anxious)
+                        kb = kb_soft_checkin_anxious if anxious else (kb_soft_checkin_v2 if variant == 2 else kb_soft_checkin)
+                        u["last_inactivity_reminder_date"] = today
+                        _increment_proactive_count(u, today)
+                        await save_user(u, DB_PATH)
+                        await log_event(u["user_id"], "inactivity", "soft_checkin_sent", {"variant": variant, "anxious": anxious}, DB_PATH, SHEETS_WEBHOOK_URL)
+                        await send_background_keyboard(bot, u, msg_text, kb, "soft_checkin")
+                    continue
+
+                # ---- Evening check-in: 19:30–21:30 (spec §4.3) ----
+                if (
+                    in_time_window(now_local, 19, 30, 21, 30)
                     and u.get("last_evening_checkin_date") != today
+                    and not day_closed_today(u)
                 ):
                     u["last_evening_checkin_date"] = today
                     u["stage"] = "evening_checkin"
+                    _increment_proactive_count(u, today)
                     await save_user(u, DB_PATH)
                     await log_event(u["user_id"], "evening_checkin", "evening_checkin_sent", {}, DB_PATH, SHEETS_WEBHOOK_URL)
                     await send_background_keyboard(bot, u, evening_checkin_text(), kb_evening_checkin, "evening_checkin")

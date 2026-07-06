@@ -1242,6 +1242,16 @@ USER_FIELDS = [
     "day_intro_sent",
     "crisis_redirected",
     "last_mini_lesson_date",
+    # Spec: day/moment skill separation (section 3)
+    "moment_skill_id",
+    "moment_skill_date",
+    "skill_step_history",
+    # Spec: proactivity limits (section 4.4)
+    "last_inactivity_reminder_date",
+    "proactive_count_today",
+    "proactive_count_date",
+    "no_reminders_today",
+    "no_reminders_date",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1835,6 +1845,16 @@ EXTRA_USER_COLS = {
     "day_intro_sent": "INTEGER DEFAULT 0",
     "crisis_redirected": "INTEGER DEFAULT 0",
     "last_mini_lesson_date": "TEXT",
+    # Spec: day/moment skill separation (section 3)
+    "moment_skill_id": "TEXT",
+    "moment_skill_date": "TEXT",
+    "skill_step_history": "TEXT",
+    # Spec: proactivity limits (section 4.4)
+    "last_inactivity_reminder_date": "TEXT",
+    "proactive_count_today": "INTEGER DEFAULT 0",
+    "proactive_count_date": "TEXT",
+    "no_reminders_today": "INTEGER DEFAULT 0",
+    "no_reminders_date": "TEXT",
 }
 
 async def migrate_db(db_path: str):

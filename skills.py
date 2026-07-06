@@ -155,6 +155,269 @@ from typing import List, Dict, Any, Optional
 
 SKILLS_DB = {
         # ========================================================
+        # FIRST 3 DAYS: СПЕЦИАЛЬНЫЕ НАВЫКИ (spec sections 5)
+        # Навыки дня + навыки в моменте по механизму
+        # ========================================================
+
+        # --- ДЕНЬ 1: Поймать момент ухода ---
+        "d1_day_catch_escape": {
+            "track": "procrastination", "week": 1, "variant": "base",
+            "is_day_skill": True, "day_number": 1,
+            "name": "Точка ухода: что происходит за 10 секунд до прокрастинации",
+            "goal": "Не запрещать прокрастинацию, а увидеть, что именно запускает уход",
+            "how": (
+                "Сегодня не будем бороться с прокрастинацией. Будем ловить момент за 10 секунд до неё.\n\n"
+                "Когда рука тянется к телефону, хочется закрыть документ или «ещё чуть-чуть подготовиться», "
+                "ответь себе на один вопрос:\n\n"
+                "«От чего я сейчас пытаюсь уйти?»\n\n"
+                "Не надо менять ответ. Просто замечай."
+            ),
+            "minimum": "Один раз ответить на вопрос «от чего я ухожу».",
+            "evening_question": "Что чаще всего было прямо перед уходом?",
+            "how_more": "Замечай, а не запрещай. Каждая пойманная точка ухода — уже тренировка.",
+        },
+        # Момент Дня 1 — тревожный механизм
+        "d1_moment_anxious": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 1, "mechanism": "anxious",
+            "name": "Черновик без последствий",
+            "goal": "Дать мозгу опыт: приблизиться и не разрушиться",
+            "how": (
+                "Открой место задачи.\n"
+                "Напиши одну фразу, которую никому не надо отправлять.\n"
+                "Можно криво, грубо, без начала и без конца.\n\n"
+                "Сейчас цель не написать хорошо.\n"
+                "Цель — дать мозгу опыт: «я могу приблизиться и не разрушиться»."
+            ),
+            "minimum": "Открыть место задачи.",
+            "how_more": "30–60 секунд. Никто не увидит.",
+        },
+        # Момент Дня 1 — депрессивный/низкая энергия
+        "d1_moment_low_energy": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 1, "mechanism": "low_energy",
+            "name": "След действия",
+            "goal": "Оставить один физический след без давления результата",
+            "how": (
+                "Не надо делать задачу.\n"
+                "Сделай один физический след:\n\n"
+                "— поставить курсор;\n"
+                "— открыть файл;\n"
+                "— написать название;\n"
+                "— положить документ на стол.\n\n"
+                "После этого можно остановиться."
+            ),
+            "minimum": "Один физический след.",
+            "how_more": "После остановки — без вины.",
+        },
+        # Момент Дня 1 — отвлекающийся
+        "d1_moment_distractible": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 1, "mechanism": "distractible",
+            "name": "Телефон на расстоянии выбора",
+            "goal": "Добавить один физический шаг между импульсом и телефоном",
+            "how": (
+                "Положи телефон туда, где до него нужно встать.\n"
+                "Не убирай совсем.\n"
+                "Просто сделай так, чтобы между импульсом и телефоном был один физический шаг."
+            ),
+            "minimum": "Телефон вне руки.",
+            "how_more": "90 секунд. Потом можешь вернуть.",
+        },
+        # Момент Дня 1 — смешанный
+        "d1_moment_mixed": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 1, "mechanism": "mixed",
+            "name": "Сначала назвать, потом двигаться",
+            "goal": "Выбрать механизм и получить один подходящий навык",
+            "how": (
+                "Выбери, что сильнее прямо сейчас:\n"
+                "— тревога;\n"
+                "— усталость;\n"
+                "— телефон;\n"
+                "— неясность.\n\n"
+                "После выбора бот даёт один навык, а не четыре сразу."
+            ),
+            "minimum": "Выбрать один пункт.",
+            "how_more": "Один механизм → один навык.",
+        },
+
+        # --- ДЕНЬ 2: Управлять состоянием, а не ждать мотивации ---
+        "d2_day_state_switch": {
+            "track": "procrastination", "week": 1, "variant": "base",
+            "is_day_skill": True, "day_number": 2,
+            "name": "Переключатель состояния: тело → внимание → шаг",
+            "goal": "Дать опыт: состояние можно немного менять через тело и среду, не через мотивацию",
+            "how": (
+                "Сегодня проверяем не силу воли, а переключатель состояния.\n\n"
+                "Когда застрял, сделай короткую последовательность:\n\n"
+                "1. Длинный выдох.\n"
+                "2. Поставь стопы на пол.\n"
+                "3. Посмотри на один предмет вокруг.\n"
+                "4. Назови один следующий шаг.\n\n"
+                "Это не «успокоиться раз и на всё время».\n"
+                "Это вернуть себе 5% контроля."
+            ),
+            "minimum": "Один длинный выдох и стопы на пол.",
+            "evening_question": "После такого переключателя стало: легче начать / спокойнее / без разницы / хуже?",
+            "how_more": "Делай каждый раз, когда застрял. Считаем количество использований.",
+        },
+        # Момент Дня 2 — тревожный
+        "d2_moment_anxious": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 2, "mechanism": "anxious",
+            "name": "Факт вместо сценария",
+            "goal": "Разделить факт и страх",
+            "how": (
+                "Напиши две строки:\n\n"
+                "**Что я знаю точно:**\n"
+                "[один факт]\n\n"
+                "**Чего я боюсь:**\n"
+                "[один прогноз]\n\n"
+                "Не спорь с собой. Просто раздели факт и страх."
+            ),
+            "minimum": "Написать хотя бы один факт.",
+            "how_more": "Факт — это то, что уже произошло. Страх — это сценарий о будущем.",
+        },
+        # Момент Дня 2 — депрессивный
+        "d2_moment_low_energy": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 2, "mechanism": "low_energy",
+            "name": "Противоположное движение",
+            "goal": "Физически выйти из состояния отключения",
+            "how": (
+                "Не надо хотеть.\n"
+                "Выбери движение, противоположное отключению:\n\n"
+                "— встать;\n"
+                "— умыться;\n"
+                "— налить воды;\n"
+                "— открыть окно;\n"
+                "— сесть к задаче на 60 секунд.\n\n"
+                "После этого можно снова решать, продолжать или нет."
+            ),
+            "minimum": "Одно движение.",
+            "how_more": "После движения — одна секунда паузы, потом решение.",
+        },
+        # Момент Дня 2 — отвлекающийся
+        "d2_moment_distractible": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 2, "mechanism": "distractible",
+            "name": "Один экран",
+            "goal": "На 90 секунд сузить канал внимания до одного окна",
+            "how": (
+                "На ближайшие 90 секунд:\n\n"
+                "— одно окно;\n"
+                "— одна вкладка;\n"
+                "— одна задача.\n\n"
+                "Не запрещай себе всё остальное на постоянной основе.\n"
+                "Просто не открывай это в следующие 90 секунд."
+            ),
+            "minimum": "Закрыть лишние вкладки на 90 секунд.",
+            "how_more": "90 секунд — потом сам решай.",
+        },
+        # Момент Дня 2 — смешанный
+        "d2_moment_mixed": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 2, "mechanism": "mixed",
+            "name": "Три двери",
+            "goal": "Выбрать приоритетный механизм и получить один навык",
+            "how": (
+                "Что сейчас нужнее?\n\n"
+                "— 🫁 сначала успокоиться;\n"
+                "— 📵 убрать отвлечение;\n"
+                "— 📌 понять следующий шаг.\n\n"
+                "После выбора показывать только один короткий навык."
+            ),
+            "minimum": "Выбрать одну дверь.",
+            "how_more": "Одна дверь — один навык.",
+        },
+
+        # --- ДЕНЬ 3: Вернуться после срыва без стыда ---
+        "d3_day_return_no_shame": {
+            "track": "procrastination", "week": 1, "variant": "base",
+            "is_day_skill": True, "day_number": 3,
+            "name": "Возврат без наказания",
+            "goal": "Тренировать возврат, а не идеальный день",
+            "how": (
+                "Сегодня тренируем не идеальный день.\n"
+                "Сегодня тренируем возврат.\n\n"
+                "Каждый раз, когда заметил, что ушёл из задачи, говори себе:\n\n"
+                "«Я не начинаю сначала. Я возвращаюсь с текущего места».\n\n"
+                "Потом выбери один возврат:\n\n"
+                "— открыть задачу;\n"
+                "— написать одну строку;\n"
+                "— назвать следующий шаг;\n"
+                "— поставить таймер на 90 секунд."
+            ),
+            "minimum": "Один возврат — любой.",
+            "evening_question": "Сколько раз сегодня ты вернулся, даже если ненадолго?",
+            "how_more": "Считается не продуктивность, а возвращение.",
+        },
+        # Момент Дня 3 — тревожный
+        "d3_moment_anxious": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 3, "mechanism": "anxious",
+            "name": "Разрешение на несовершенный контакт",
+            "goal": "Начать сообщение без требования идеального текста",
+            "how": (
+                "Напиши начало сообщения так, как написал бы живому человеку, а не комиссии:\n\n"
+                "«Привет. Я давно хотел написать по поводу…»\n\n"
+                "Не отправляй.\n"
+                "Просто оставь начало."
+            ),
+            "minimum": "Написать первые 5 слов.",
+            "how_more": "Начало — это уже прикосновение к задаче.",
+        },
+        # Момент Дня 3 — депрессивный
+        "d3_moment_low_energy": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 3, "mechanism": "low_energy",
+            "name": "Одна единица жизни",
+            "goal": "Вернуться в действие через самое маленькое физическое движение",
+            "how": (
+                "Выбери одно:\n\n"
+                "— выпить воды;\n"
+                "— принять душ;\n"
+                "— съесть что-то простое;\n"
+                "— открыть список дел;\n"
+                "— написать одно слово по задаче.\n\n"
+                "Это не мало. Это возвращение в действие."
+            ),
+            "minimum": "Одно из списка.",
+            "how_more": "Одна единица — уже возвращение.",
+        },
+        # Момент Дня 3 — отвлекающийся
+        "d3_moment_distractible": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 3, "mechanism": "distractible",
+            "name": "Карточка возврата",
+            "goal": "Создать видимое напоминание о следующем шаге",
+            "how": (
+                "Напиши заметку на экране или бумаге:\n\n"
+                "\"Когда вернусь, я: [один конкретный шаг]\".\n\n"
+                "Например:\n"
+                "\"Открою чат и напишу: Привет, хотел обсудить...\"."
+            ),
+            "minimum": "Написать заметку.",
+            "how_more": "Карточка работает как точка опоры после отвлечения.",
+        },
+        # Момент Дня 3 — смешанный
+        "d3_moment_mixed": {
+            "track": "procrastination", "week": 1, "variant": "moment",
+            "is_moment_skill": True, "day_number": 3, "mechanism": "mixed",
+            "name": "Факт вместо приговора",
+            "goal": "Описать ситуацию без самокритики и выбрать следующий шаг",
+            "how": (
+                "Напиши одну строчку:\n\n"
+                "Не: «я опять всё испортил».\n\n"
+                "А: «я ушёл в телефон на 40 минут; следующий шаг — открыть чат».\n\n"
+                "После этого бот предлагает один физический шаг."
+            ),
+            "minimum": "Написать факт без самокритики.",
+            "how_more": "Факт без приговора — это уже работа с состоянием.",
+        },
+
+        # ========================================================
         # TRACK: ANXIETY (тревожная прокрастинация)
         # ========================================================
         # WEEK 1
@@ -1530,6 +1793,56 @@ def suggest_alternative_skill(track: str, current_skill: str, profile: dict | No
         alternatives = adapt_plan_to_profile(alternatives, profile)
         alternatives = [sid for sid in alternatives if sid != current_skill]
     return alternatives[0] if alternatives else None
+
+
+# ========================================================
+# DAY 1-3: Helpers for day/moment skill separation (spec §3)
+# ========================================================
+
+_DAY_SKILL_IDS = {
+    1: "d1_day_catch_escape",
+    2: "d2_day_state_switch",
+    3: "d3_day_return_no_shame",
+}
+
+_MOMENT_SKILL_IDS = {
+    1: {"anxious": "d1_moment_anxious", "low_energy": "d1_moment_low_energy", "distractible": "d1_moment_distractible", "mixed": "d1_moment_mixed"},
+    2: {"anxious": "d2_moment_anxious", "low_energy": "d2_moment_low_energy", "distractible": "d2_moment_distractible", "mixed": "d2_moment_mixed"},
+    3: {"anxious": "d3_moment_anxious", "low_energy": "d3_moment_low_energy", "distractible": "d3_moment_distractible", "mixed": "d3_moment_mixed"},
+}
+
+# Skill cooldown constants (spec §3.3, §6.2)
+SAME_SKILL_COOLDOWN_STEPS: int = 3
+SAME_SKILL_MAX_ATTEMPTS_PER_DAY: int = 2
+
+
+def get_day_skill_id(day_number: int) -> str | None:
+    """Return the special day skill id for days 1–3, or None for day 4+."""
+    return _DAY_SKILL_IDS.get(int(day_number or 0))
+
+
+def get_moment_skill_id(day_number: int, mechanism: str = "mixed") -> str:
+    """Return the moment skill id for a given day and user mechanism."""
+    day = int(day_number or 0)
+    mech = mechanism if mechanism in ("anxious", "low_energy", "distractible") else "mixed"
+    day_map = _MOMENT_SKILL_IDS.get(day, {})
+    return day_map.get(mech) or day_map.get("mixed") or ""
+
+
+def is_skill_on_cooldown(skill_id: str, step_history: list | None) -> bool:
+    """Return True if the same skill appeared in the last SAME_SKILL_COOLDOWN_STEPS steps."""
+    if not skill_id or not step_history:
+        return False
+    recent = list(step_history)[-SAME_SKILL_COOLDOWN_STEPS:]
+    return skill_id in recent
+
+
+def record_skill_step(step_history: list | None, skill_id: str) -> list:
+    """Append skill_id to step history and trim to a reasonable window."""
+    history = list(step_history or [])
+    history.append(skill_id)
+    return history[-20:]  # keep last 20 steps maximum
+
 
 # PATCH 5 — Улучшенная подача навыков по стилю
 def format_skill(skill_id: str, trainer_key: str):
