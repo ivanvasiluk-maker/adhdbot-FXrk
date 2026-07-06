@@ -6866,12 +6866,23 @@ async def activate_test_cheat(m: Message, u: Dict[str, Any], source: str, days: 
     )
 
 
+def normalize_slash_command(text: str) -> str:
+    if not text:
+        return ""
+    token = text.split(maxsplit=1)[0].strip().lower()
+    if not token.startswith("/"):
+        return ""
+    if "@" in token:
+        token = token.split("@", 1)[0]
+    return token
+
+
 async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     """Handle simple user commands; does not require admin access."""
     if not text or not text.startswith("/"):
         return False
     uid = m.from_user.id
-    command = text.split(maxsplit=1)[0].lower()
+    command = normalize_slash_command(text)
 
     if command == "/confirm_payment":
         if PAYMENT_ACCEPT_ANY:
@@ -6974,7 +6985,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     """Handle admin-only test commands. Returns True when command was consumed."""
     uid = m.from_user.id
-    command = (text.split(maxsplit=1)[0] if text else "").lower()
+    command = normalize_slash_command(text)
     qa_commands = {
         "/debug_state", "/debug_events", "/show_offer", "/simulate_payment", "/reset_test_user",
         "/testmode_on", "/testmode_off", "/set_day", "/force_next_day", "/debug_map", "/debug_user",
