@@ -192,6 +192,38 @@ async def test_day_intro_is_not_sent_twice():
         assert "🌱 Новый день" not in "\n".join(m2.answers)
 
 
+def test_should_show_day3_offer_after_test_access():
+    """After /test_access (is_test_user=1, payment_status=test), the day-3 offer
+    must still auto-trigger in test mode.  It should only be suppressed once the
+    user completes the actual payment flow (full_mode=1)."""
+    from db import default_user as du
+    # Simulate user state after /test_access
+    u_test = du(99801)
+    u_test["is_test_user"] = 1
+    u_test["payment_status"] = "test"
+    u_test["trial_phase"] = "paid"
+    u_test["fast_forward_enabled"] = 1
+    u_test["full_mode"] = 0
+    u_test["free_mode"] = 0
+    assert bot.should_show_day3_offer(u_test, 3), (
+        "Offer should auto-trigger for test users after /test_access (full_mode=0)"
+    )
+
+    # After /simulate_payment full_mode is set to 1 — offer must be suppressed
+    u_paid = dict(u_test)
+    u_paid["full_mode"] = 1
+    assert not bot.should_show_day3_offer(u_paid, 3), (
+        "Offer must NOT auto-trigger once full_mode=1 (payment completed)"
+    )
+
+    # Free-mode users must never see the offer
+    u_free = dict(u_test)
+    u_free["free_mode"] = 1
+    assert not bot.should_show_day3_offer(u_free, 3), (
+        "Offer must NOT auto-trigger for free-mode users"
+    )
+
+
 def run():
     for fn in [
         test_rendered_skill_card_has_one_title_and_one_minimum,
@@ -206,6 +238,7 @@ def run():
         test_skill_confidence_levels,
         test_last_user_mechanism_overrides_old_hypothesis,
         test_anxiety_does_not_select_phone_distraction_skill,
+        test_should_show_day3_offer_after_test_access,
     ]: fn()
     for fn in [
         test_old_callback_after_skill_change_does_not_modify_state,
