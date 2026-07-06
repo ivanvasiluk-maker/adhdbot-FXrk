@@ -5414,9 +5414,12 @@ def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
     """Day 3 offer is shown only for unpaid users outside free mode.
 
     Admin fast-forward (testmode/flag) allows testing offer path without waiting 3 days.
+    In test mode we check full_mode (set only by grant_paid_access / /simulate_payment) rather
+    than is_paid, because /test_access sets is_test_user=1 and payment_status="test" which would
+    make is_paid() return True and permanently block the offer auto-trigger for testers.
     """
     if day_core_test_mode_enabled(u):
-        if is_paid(u) or int(u.get("free_mode") or 0) == 1:
+        if int(u.get("full_mode") or 0) == 1 or int(u.get("free_mode") or 0) == 1:
             return False
         return True
     if offer_shown_today(u):
