@@ -271,7 +271,7 @@ async def run() -> None:
         assert "Что изменилось после шага?" in last_text(effect_msg), last_text(effect_msg)
         assert keyboard_texts(effect_msg.answers[-1]["reply_markup"]) == {"🚪 Начал задачу", "✅ Стало легче", "😐 Пока без разницы"}
         no_relief_msg = await send(uid, "😐 Пока без разницы")
-        assert "шаг сделан" in last_text(no_relief_msg).lower() or "не буду считать" in last_text(no_relief_msg).lower()
+        assert "шаг сделан" in all_text(no_relief_msg).lower() or "не буду считать" in all_text(no_relief_msg).lower()
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_skill_effect") == "no_change", profile
         assert "successful_skills" not in profile or not profile.get("successful_skills"), profile

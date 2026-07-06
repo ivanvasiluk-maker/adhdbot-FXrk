@@ -1241,6 +1241,7 @@ USER_FIELDS = [
     "active_attempt",
     "day_intro_sent",
     "crisis_redirected",
+    "last_mini_lesson_date",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1414,6 +1415,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "active_attempt": None,
         "day_intro_sent": 0,
         "crisis_redirected": 0,
+        "last_mini_lesson_date": None,
     }
 
 async def init_db(db_path: str):
@@ -1831,7 +1833,8 @@ EXTRA_USER_COLS = {
     "closed_day_extra_step_count": "INTEGER DEFAULT 0",
     "active_attempt": "TEXT",
     "day_intro_sent": "INTEGER DEFAULT 0",
-    "crisis_redirected": "INTEGER DEFAULT 0"
+    "crisis_redirected": "INTEGER DEFAULT 0",
+    "last_mini_lesson_date": "TEXT",
 }
 
 async def migrate_db(db_path: str):
