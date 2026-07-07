@@ -20,10 +20,9 @@ UserState = Dict[str, Any]
 
 SKILL_CARD_BUTTONS = [
     "✅ Сделал",
-    "❌ Не сделал",
-    "😣 Слишком сложно",
-    "🤔 Не понял",
-    "🆘 Кризис",
+    "🟡 Попробовал, но не вышло",
+    "↘️ Нужно проще",
+    "🌙 На сегодня достаточно",
 ]
 DONE_BUTTONS = ["🔁 Ещё круг", "🌙 На сегодня хватит"]
 DAY_STOP_BUTTONS = ["🧭 Моя карта", "📚 Почему это работает", "🌙 До завтра"]
@@ -109,6 +108,31 @@ def _skill_steps(skill: Dict[str, Any]) -> List[str]:
         candidates = how.split("→") if "→" in how else [how]
     steps = [str(item).strip() for item in candidates if str(item or "").strip()]
     return steps or ["Открой место, где лежит задача."]
+
+
+def _clean_skill_line(value: Any) -> str:
+    text = " ".join(str(value or "").strip().split())
+    for prefix in ("Навык дня:", "Навык:", "Сделай:", "Минимум:", "Попробуй:", "Делаешь только это:"):
+        if text.lower().startswith(prefix.lower()):
+            text = text[len(prefix):].strip()
+    return text
+
+
+def _unique_skill_steps(skill: Dict[str, Any]) -> List[str]:
+    result: List[str] = []
+    seen: set[str] = set()
+    for step in _skill_steps(skill):
+        clean = _clean_skill_line(step)
+        if not clean:
+            continue
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(clean)
+        if len(result) >= 3:
+            break
+    return result or ["Открой место, где лежит задача."]
 
 
 
@@ -217,50 +241,19 @@ def _target_header(target: str) -> str:
 def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     """Build a UI-neutral skill card from live skill fields."""
     trainer_key = _trainer_key(user_state)
-    target = _clamp_text(user_state.get("today_target"), 200, "сегодняшняя задача")
-    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(_skill_steps(skill), start=1))
-    minimum_action = skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд."
-    why_short = skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат."
-    skill_name = skill.get("name", "Микро-шаг")
-    visible_core_id = user_state.get("current_core_skill_id") or core_skill_id_for_variant(str(skill.get("skill_id") or ""))
-    visible_core_title = core_skill_title(str(visible_core_id))
-    variant_label = user_state.get("skill_variant_label") or "Вариант сейчас"
+    steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(_unique_skill_steps(skill), start=1))
+    minimum_action = _clean_skill_line(skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд.")
+    why_short = _clean_skill_line(skill.get("why_short") or skill.get("explain") or "Сейчас тренируем вход, а не результат.")
+    skill_name = _clean_skill_line(skill.get("name", "Микро-шаг"))
     trainer_variants = skill.get("trainer_variants") or {}
     trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha") or "Давай бережно: только маленький вход, без давления на результат."
-
-    if trainer_key == "beck":
-        text = (
-            f"{_trainer_header(user_state)}\n\n"
-            f"{_target_header(target)}\n\n"
-            f"🧩 Навык дня: {visible_core_title}\n\n"
-            f"{variant_label}:\n{skill_name}\n\n"
-            f"{trainer_line}\n\n"
-            f"Почему это работает:\n{why_short}\n\n"
-            f"Сделай:\n{steps_text}\n\n"
-            f"Минимум:\n{minimum_action}"
-        )
-    elif trainer_key == "skinny":
-        text = (
-            f"{_trainer_header(user_state)}\n\n"
-            f"{_target_header(target)}\n\n"
-            f"🧩 Навык дня: {visible_core_title}\n\n"
-            f"{variant_label}:\n{skill_name}\n\n"
-            f"{trainer_line}\n\n"
-            f"Делаешь только это:\n\n{steps_text}\n\n"
-            f"Минимум:\n{minimum_action}\n\n"
-            "Сделал — вернулся сюда."
-        )
-    else:
-        text = (
-            f"{_trainer_header(user_state)}\n\n"
-            f"{_target_header(target)}\n\n"
-            f"🧩 Навык дня: {visible_core_title}\n\n"
-            f"{variant_label}:\n{skill_name}\n\n"
-            f"{trainer_line}\n\n"
-            f"Попробуй:\n{steps_text}\n\n"
-            f"Минимум:\n{minimum_action}\n\n"
-            "Если не получится — это не провал, мы просто уменьшим шаг."
-        )
+    text = (
+        f"{_trainer_header(user_state)} {trainer_line}\n\n"
+        f"🧩 Навык: {skill_name}\n\n"
+        f"{why_short}\n\n"
+        f"Сделай:\n{steps_text}\n\n"
+        f"Минимум:\n{minimum_action}"
+    )
 
     return _screen(
         text=text,
