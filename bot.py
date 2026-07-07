@@ -5237,11 +5237,15 @@ def _day3_offer_profile_points(summary: Dict[str, Any], profile: Dict[str, Any])
 
 
 def _real_attempts_count(summary: Dict[str, Any], profile: Dict[str, Any]) -> int:
+    skill_rows = ((summary.get("skill_map") or {}).get("skills") or []) if isinstance(summary.get("skill_map"), dict) else []
     return max(
         int(summary.get("done_count") or profile.get("done_count") or 0),
         int(profile.get("action_done_count") or 0),
+        sum(1 for item in skill_rows if int(item.get("attempt_count") or 0) > 0),
+        int(summary.get("crisis_count") or profile.get("crisis_count") or 0),
         len(_profile_list(profile.get("completed_skills_effect_unknown"))),
         len(_profile_list(profile.get("successful_skills"))),
+        len(_profile_list(profile.get("failed_skills"))),
     )
 
 
@@ -5249,9 +5253,9 @@ def _day3_offer_success_points(summary: Dict[str, Any], profile: Dict[str, Any])
     attempts = _real_attempts_count(summary, profile)
     if attempts < 3:
         return [
-            "появились первые гипотезы, но данных пока мало",
-            "нужно проверить реакции на нескольких реальных попытках",
-            "полный режим нужен, чтобы не давать случайные советы",
+            "у нас появились первые гипотезы, но пока мало реальных попыток",
+            "ещё несколько коротких проверок помогут понять, что действительно помогает тебе",
+            "пока держимся фактов и не делаем уверенных выводов раньше данных",
         ]
     points: List[str] = []
     if int(summary.get("return_count") or profile.get("return_count") or 0) > 0:
@@ -5293,10 +5297,13 @@ def _day3_offer_breakdown_point(summary: Dict[str, Any], profile: Dict[str, Any]
 
 
 def day3_attempt_count(summary: Dict[str, Any], profile: Dict[str, Any]) -> int:
+    skill_rows = ((summary.get("skill_map") or {}).get("skills") or []) if isinstance(summary.get("skill_map"), dict) else []
     return max(
         int(summary.get("done_count") or 0),
         int(profile.get("action_done_count") or 0),
         int(profile.get("attempts_started") or 0),
+        sum(1 for item in skill_rows if int(item.get("attempt_count") or 0) > 0),
+        int(summary.get("crisis_count") or profile.get("crisis_count") or 0),
         len(_profile_list(profile.get("successful_skills"))),
         len(_profile_list(profile.get("failed_skills"))),
     )
@@ -5313,29 +5320,96 @@ def day3_first_working_entry(summary: Dict[str, Any], profile: Dict[str, Any]) -
     return "маленький вход в задачу"
 
 
+def _offer_full_mode_specifics_text() -> str:
+    return (
+        "В полном режиме бот будет:\n"
+        "— хранить историю попыток;\n"
+        "— показывать, какие навыки дали эффект;\n"
+        "— подбирать следующий навык по повторяющемуся механизму;\n"
+        "— давать недельный маршрут;\n"
+        "— помогать возвращаться после срывов;\n"
+        "— показывать расширенную карту без общих формулировок."
+    )
+
+
+def _offer_skill_fact(summary: Dict[str, Any], *, helpful: bool) -> str:
+    skill_rows = ((summary.get("skill_map") or {}).get("skills") or []) if isinstance(summary.get("skill_map"), dict) else []
+    if helpful:
+        ranked = sorted(
+            (
+                item for item in skill_rows
+                if int(item.get("helpful_count") or 0) > 0 or int(item.get("completed_count") or 0) > 0
+            ),
+            key=lambda item: (-int(item.get("helpful_count") or 0), -int(item.get("completed_count") or 0), item.get("title") or ""),
+        )
+        if ranked:
+            top = ranked[0]
+            count = max(int(top.get("helpful_count") or 0), int(top.get("completed_count") or 0), 1)
+            return f"{top.get('title') or _skill_label(top.get('skill_id'))} ({count} раз)"
+        return "пока явного лидера нет"
+    ranked = sorted(
+        (
+            item for item in skill_rows
+            if int(item.get("stuck_count") or 0) > 0 or str(item.get("status") or "") in {"not_helpful", "not_fit_today"}
+        ),
+        key=lambda item: (-int(item.get("stuck_count") or 0), item.get("title") or ""),
+    )
+    if ranked:
+        top = ranked[0]
+        count = max(int(top.get("stuck_count") or 0), 1)
+        return f"{top.get('title') or _skill_label(top.get('skill_id'))} ({count} раз)"
+    return "пока нет уверенного анти-примера"
+
+
+def _offer_main_obstacle(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    if summary.get("attention_pattern") == "scroll_autopilot" or int(summary.get("attention_escape_count") or 0) > 0:
+        return "напряжение перед задачей и уход в быстрый стимул"
+    if profile.get("main_pattern") in {"anxiety_avoidance", "shame_self_attack", "perfectionism_start_block"} or profile.get("avoidance_reason") == "fear_of_bad_result":
+        return "страх ошибки, оценки или самокритика на старте"
+    if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
+        return "слишком большой первый шаг"
+    if summary.get("preferred_activation") == "body_doubling":
+        return "старт без внешней опоры"
+    return "пока проверяем, что именно делает вход дорогим"
+
+
+def _offer_next_experiment(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    hypothesis = str(summary.get("main_hypothesis") or profile.get("main_hypothesis") or "").strip()
+    if hypothesis:
+        return hypothesis
+    if summary.get("attention_pattern") == "scroll_autopilot" or int(summary.get("attention_escape_count") or 0) > 0:
+        return "проверить, помогает ли убрать быстрый стимул до старта"
+    if profile.get("avoidance_reason") == "fear_of_bad_result":
+        return "проверить вход через плохой черновик без требования качества"
+    if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
+        return "проверить ещё более маленький первый шаг"
+    return "сделать ещё несколько коротких проверок и смотреть, где вход дешевле"
+
+
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
     attempts = day3_attempt_count(summary, profile)
-    working_entry = day3_first_working_entry(summary, profile)
-    breakdown = _day3_offer_breakdown_point(summary, profile)
+    if attempts < 3:
+        return (
+            "У нас появились первые гипотезы, но пока мало реальных попыток.\n"
+            "Ещё несколько коротких проверок помогут понять, что действительно помогает тебе, а не звучит убедительно в теории.\n\n"
+            "Ты можешь продолжать в базовом режиме.\n"
+            "Полный режим нужен только тогда, когда тебе полезно видеть историю попыток и получать более точный маршрут.\n\n"
+            f"{_offer_full_mode_specifics_text()}"
+        )
+    blocked_by = _offer_main_obstacle(summary, profile)
+    helpful_skill = _offer_skill_fact(summary, helpful=True)
+    not_helpful_skill = _offer_skill_fact(summary, helpful=False)
+    next_experiment = _offer_next_experiment(summary, profile)
     return (
-        "За эти дни бот собрал первую карту: где ты застреваешь, что запускает срыв и какие входы уже помогают.\n\n"
-        f"Что уже видно по данным:\n"
-        f"• попыток/проверок: {attempts};\n"
-        f"• первый рабочий вход: {working_entry};\n"
-        f"• главный цикл для проверки: {breakdown}.\n\n"
-        "Сейчас можно либо остаться в базовом режиме, либо реально пройти путь и закрепить изменения.\n\n"
-        "Главный следующий шаг — путь с куратором.\n"
-        "Это не ещё одна консультация. Это ускоритель персонализации: живой человек смотрит на карту, помогает выбрать главный механизм и не даёт потерять темп в первые сложные дни.\n\n"
-        "Путь с куратором:\n"
-        "• живой разбор карты;\n"
-        "• настройка личного маршрута;\n"
-        "• выбор приоритетного механизма;\n"
-        "• помощь, если бот не понял;\n"
-        "• поддержка в первые сложные дни;\n"
-        "• закрепление навыков;\n"
-        "• переход от «иногда попробовал» к устойчивой системе.\n\n"
-        "Ты уже начал. Теперь можно не оставлять это на уровне случайных попыток, а собрать систему, которая выдержит плохие дни.\n\n"
-        "Можно продолжать одному — базовый режим останется без стыда."
+        "Что уже видно:\n"
+        f"— попыток: {attempts};\n"
+        f"— чаще всего мешало: {blocked_by};\n"
+        f"— дало облегчение: {helpful_skill};\n"
+        f"— пока не помогло: {not_helpful_skill};\n"
+        f"— следующий эксперимент: {next_experiment}.\n\n"
+        "Ты можешь продолжать в базовом режиме.\n"
+        "Полный режим нужен только тогда, когда тебе полезно видеть историю попыток и получать более точный маршрут.\n\n"
+        f"{_offer_full_mode_specifics_text()}"
     )
 
 
@@ -5346,11 +5420,9 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
     success_block = "\n".join(f"• {point}" for point in success_points)
     return (
         "🧭 За первые дни — первичная карта, не окончательный вывод.\n"
-        "Мы уже видим первые гипотезы, но эта модель будет уточняться на реальных попытках.\n\n"
+        "Мы видим первые сигналы, но держим выводы привязанными только к реальным попыткам.\n\n"
         f"Что уже похоже на правду:\n{map_block}\n\n"
         f"Что стоит проверить дальше:\n{success_block}\n\n"
-        "Мы уже увидели твой паттерн. Дальше важно не потерять темп и не вернуться к старому циклу: "
-        "напряжение → избегание → облегчение сейчас → дороже вернуться потом.\n\n"
         f"{day3_personal_offer_text(summary, profile)}"
     )
 
@@ -5573,16 +5645,15 @@ async def send_full_mode_welcome(m: Message, u: Dict[str, Any]):
 def curator_path_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
     summary = build_profile_map_summary(u, profile)
     attempts = day3_attempt_count(summary, profile)
-    working_entry = day3_first_working_entry(summary, profile)
     map_points = "\n".join(f"• {x}" for x in _day3_offer_profile_points(summary, profile)[:3])
     return (
-        "👤 Первый шаг пути с куратором\n\n"
-        "Ты не просто записался(ась) в ожидание. Уже сейчас есть материал для живого разбора.\n\n"
-        f"Что передадим куратору:\n{map_points}\n"
+        "👤 Живой разбор карты\n\n"
+        "Сейчас бот не продаёт эту опцию как готовую услугу: у меня не зафиксированы специалист, срок ответа и стоимость.\n"
+        "Поэтому честно — это не обязательный шаг и не часть базового маршрута.\n\n"
+        "Ты можешь продолжать в базовом или полном режиме без этой опции.\n\n"
+        f"Если позже появится оформленный живой разбор, в заявку попадут только реальные факты:\n{map_points}\n"
         f"• попыток/проверок: {attempts};\n"
-        f"• первый рабочий вход: {working_entry}.\n\n"
-        "Куратор поможет выбрать главный механизм на ближайшую неделю: тревога, страх ошибки, перегруз, невозможность выбора, самокритика, быстрые награды или потеря смысла.\n\n"
-        "Следующий шаг: напиши одним сообщением, когда тебе удобно получить разбор карты: сегодня / завтра / на выходных. Я сохраню это как заявку и дам маршрут к записи."
+        f"• следующий эксперимент: {_offer_next_experiment(summary, profile)}."
     )
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -5613,7 +5684,7 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text="👤 Путь с куратором", callback_data="curator_path")],
+        [InlineKeyboardButton(text="👤 Живой разбор карты", callback_data="curator_path")],
         [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
         [InlineKeyboardButton(text="📚 Разница режимов", callback_data="offer_details")],
         [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
@@ -5628,7 +5699,7 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Путь с куратором", callback_data="curator_path")],
+        [InlineKeyboardButton(text="👤 Живой разбор карты", callback_data="curator_path")],
         [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
         [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
         [InlineKeyboardButton(text="🤔 Пока короткий режим", callback_data="stay_free")],
@@ -5652,22 +5723,17 @@ def offer_details_full_mode_text() -> str:
         "• базовое возвращение после срыва;\n"
         "• возможность продолжать самостоятельно.\n\n"
         "Полный режим:\n"
-        "• больше вариантов навыков;\n"
-        "• гибкие смены стратегии;\n"
-        "• история повторяющихся срывов;\n"
-        "• расширенная карта;\n"
-        "• недельный маршрут;\n"
-        "• сравнение, что реально работает;\n"
-        "• персонализация по механизму прокрастинации.\n\n"
-        "Путь с куратором:\n"
-        "• живой разбор карты;\n"
-        "• настройка маршрута;\n"
-        "• помощь в сложных случаях;\n"
-        "• поддержка в процессе;\n"
-        "• закрепление изменений;\n"
-        "• понятный ограниченный по времени формат.\n\n"
-        "Коротко: бесплатный режим помогает продолжать самому, полный режим даёт больше персонализации и данных, "
-        "а путь с куратором — это живой ускоритель, когда важно не потерять темп и выбрать главный механизм."
+        "• хранить историю попыток;\n"
+        "• показывать, какие навыки дали эффект;\n"
+        "• подбирать следующий навык по повторяющемуся механизму;\n"
+        "• давать недельный маршрут;\n"
+        "• помогать возвращаться после срывов;\n"
+        "• показывать расширенную карту без общих формулировок.\n\n"
+        "Живой разбор карты:\n"
+        "• сейчас не продаётся как готовая услуга, пока не определены специалист, срок ответа и стоимость;\n"
+        "• поэтому бот не создаёт давление и не обещает формат, которого ещё нет.\n\n"
+        "Ты можешь продолжать в базовом режиме.\n"
+        "Полный режим нужен только тогда, когда тебе полезно видеть историю попыток и получать более точный маршрут."
     )
 
 
@@ -5680,8 +5746,8 @@ def stay_free_text() -> str:
         "• короткая карта;\n"
         "• кризисная самопомощь;\n"
         "• закрытие дня.\n\n"
-        "Полный режим добавляет не просто больше техник, а сравнение эффектов, недельный план и персонализацию под повторяющиеся причины срывов.\n\n"
-        "Сегодня можно продолжить без оплаты."
+        "Ты можешь продолжать в базовом режиме.\n"
+        "Полный режим нужен только тогда, когда тебе полезно видеть историю попыток и получать более точный маршрут."
     )
 
 
@@ -7929,6 +7995,50 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
         await m.answer(gamify_status_line(u))
 
 
+RESUME_BLOCKED_ONBOARDING_STAGES = {
+    "start",
+    "ask_name",
+    "await_trainer",
+    "notification_consent",
+    "trainer_intro",
+    "await_input_mode",
+    "choose_input_mode",
+    "await_problem_text",
+    "await_problem_voice",
+    "taking_test",
+    "run_analysis",
+}
+
+
+def has_completed_profile_state(u: Dict[str, Any]) -> bool:
+    return bool(
+        int(u.get("profile_completed") or 0) == 1
+        or int(u.get("diagnostic_completed") or 0) == 1
+        or int(u.get("has_started_training") or 0) == 1
+        or u.get("first_start_date")
+    )
+
+
+async def resume_daily_flow(message: Message, u: Dict[str, Any], *, announce: bool = False) -> None:
+    if u.get("first_start_date") or int(u.get("has_started_training") or 0) == 1 or u.get("day_core_skill_date"):
+        sync_calendar_day(u)
+    if announce:
+        await message.answer("Продолжаем с того места, где остановились.")
+    await save_user(u, DB_PATH)
+    if (
+        current_skill_for_action(u)
+        or u.get("daily_skill_id")
+        or u.get("day_core_skill_id")
+        or u.get("current_day_id")
+        or day_closed_today(u)
+    ):
+        await send_current_skill(u["user_id"], message, u)
+        return
+    u["stage"] = "waiting_next_day"
+    await save_user(u, DB_PATH)
+    await start_day(message, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
+
+
 @router.message(CommandStart())
 async def cmd_start(m: Message):
     uid = m.from_user.id
@@ -7953,6 +8063,11 @@ async def cmd_start(m: Message):
         or u.get("daily_skill_id")
         or u.get("current_core_skill_id")
     )
+    if has_completed_profile_state(u):
+        await log_event(uid, "start_resume", {"stage": u.get("stage"), "day": u.get("day"), "profile_completed": True}, db_path=DB_PATH)
+        await resume_daily_flow(m, u, announce=True)
+        return
+
     has_persistent_state = bool(
         u.get("stage") not in {None, "", "start", "ask_name"}
         or u.get("name")
@@ -8040,6 +8155,9 @@ async def main_flow(m: Message):
     if await handle_admin_command(m, u, text):
         return
     if await handle_user_command(m, u, text):
+        return
+    if has_completed_profile_state(u) and str(u.get("stage") or "") in RESUME_BLOCKED_ONBOARDING_STAGES:
+        await resume_daily_flow(m, u, announce=True)
         return
     if TEST_CHEAT_CODE and text == TEST_CHEAT_CODE:
         await activate_test_cheat(m, u, "plain_code")
@@ -8421,6 +8539,9 @@ async def main_flow(m: Message):
     # Some users may have persisted stage="start" in DB (legacy default),
     # which should map to the first onboarding question instead of unknown-stage.
     if u.get("stage") == "start":
+        if has_completed_profile_state(u):
+            await resume_daily_flow(m, u, announce=True)
+            return
         u["stage"] = "ask_name"
         await save_user(u, DB_PATH)
         await m.answer(

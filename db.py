@@ -21,7 +21,7 @@ TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "de
 
 # Persistent user-state schema version. Migrations must be additive/non-destructive:
 # deploys must never drop the SQLite file or reset existing users.
-USER_STATE_SCHEMA_VERSION = 2
+USER_STATE_SCHEMA_VERSION = 3
 
 
 # ============================================================
@@ -60,6 +60,23 @@ USER_PROFILE_CORE_FIELDS = USER_PROFILE_LIST_FIELDS | USER_PROFILE_DICT_FIELDS |
     "preferred_trainer",
     "avatar_version",
     "profile_prompt",
+}
+
+POST_DIAGNOSTIC_STAGES = {
+    "confirm_analysis",
+    "analysis_details",
+    "working_map",
+    "analysis_rebuilt",
+    "analysis_contract",
+    "analysis_next_step",
+    "waiting_next_day",
+    "training",
+    "offer",
+    "closed_day_continue_confirm",
+    "day_core_stop",
+    "day_pause_confirm",
+    "curator_path",
+    "morning_checkin",
 }
 
 DEVELOPMENT_AVATAR_VERSION = 1
@@ -121,6 +138,19 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
         return parsed.astimezone(timezone.utc)
     except Exception:
         return None
+
+
+def _safe_json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
 
 
 def _as_list(value: Any) -> List[Any]:
@@ -1154,6 +1184,7 @@ USER_FIELDS = [
     "pending_skill_day",
     "today_target",
     "day",
+    "current_day",
     "day_number",
     "created_at",
     "updated_at",
@@ -1176,6 +1207,8 @@ USER_FIELDS = [
     "last_morning_checkin_date",
     "last_evening_checkin_date",
     "notifications_enabled",
+    "notification_consent",
+    "notification_time",
     "timezone",
     "reactivation_count",
     "pending_plan_change",
@@ -1186,7 +1219,16 @@ USER_FIELDS = [
     "analysis_retry_count",
     "has_started_training",
     "last_offer_shown_at",
+    "offer_seen",
     "profile_json",
+    "profile_completed",
+    "diagnostic_completed",
+    "coach_style",
+    "user_type_hypothesis",
+    "user_map_json",
+    "skill_effects_json",
+    "day_history_json",
+    "attempts_count",
     "last_micro_habit_id",
     "last_micro_habit_date",
     "micro_habit_json",
@@ -1211,6 +1253,7 @@ USER_FIELDS = [
     "success_repeat_count",
     "day_closed",
     "today_closed",
+    "today_started",
     "last_day_closed_at",
     "day_status",
     "current_day_id",
@@ -1218,6 +1261,14 @@ USER_FIELDS = [
     "daily_skill_id",
     "daily_skill_name",
     "daily_skill_status",
+    "day_skill_progress",
+    "daily_check_in_status",
+    "daily_reminder_status",
+    "skill_attempts_today",
+    "streak_counted_today",
+    "current_skill_completed_count",
+    "daily_replacement_count",
+    "replacements_today",
     "current_task_id",
     "current_task_title",
     "current_task_name",
@@ -1241,6 +1292,7 @@ USER_FIELDS = [
     "active_attempt",
     "day_intro_sent",
     "crisis_redirected",
+    "crisis_mode",
     "last_mini_lesson_date",
     # Spec: day/moment skill separation (section 3)
     "moment_skill_id",
@@ -1338,6 +1390,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "pending_skill_day": None,
         "today_target": None,
         "day": 1,
+        "current_day": 1,
         "day_number": 1,
         "points": 0,
         "level": 1,
@@ -1358,6 +1411,8 @@ def default_user(uid: int) -> Dict[str, Any]:
         "last_morning_checkin_date": None,
         "last_evening_checkin_date": None,
         "notifications_enabled": 1,
+        "notification_consent": 1,
+        "notification_time": None,
         "timezone": "Europe/Vilnius",
         "reactivation_count": 0,
         "pending_plan_change": None,
@@ -1370,8 +1425,17 @@ def default_user(uid: int) -> Dict[str, Any]:
         "analysis_retry_count": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
         "last_offer_shown_at": None,
+        "offer_seen": 0,
         "last_explanation_context": None,
         "profile_json": default_user_profile(trainer_key="marsha"),
+        "profile_completed": 0,
+        "diagnostic_completed": 0,
+        "coach_style": "marsha",
+        "user_type_hypothesis": None,
+        "user_map_json": None,
+        "skill_effects_json": None,
+        "day_history_json": None,
+        "attempts_count": 0,
         "last_micro_habit_id": None,
         "last_micro_habit_date": None,
         "micro_habit_json": None,
@@ -1395,6 +1459,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "success_repeat_count": 0,
         "day_closed": 0,
         "today_closed": 0,
+        "today_started": 0,
         "last_day_closed_at": None,
         "day_status": "open",
         "current_day_id": None,
@@ -1402,6 +1467,14 @@ def default_user(uid: int) -> Dict[str, Any]:
         "daily_skill_id": None,
         "daily_skill_name": None,
         "daily_skill_status": None,
+        "day_skill_progress": None,
+        "daily_check_in_status": "pending",
+        "daily_reminder_status": "enabled",
+        "skill_attempts_today": 0,
+        "streak_counted_today": 0,
+        "current_skill_completed_count": 0,
+        "daily_replacement_count": 0,
+        "replacements_today": 0,
         "current_task_id": None,
         "current_task_title": None,
         "current_task_name": None,
@@ -1425,6 +1498,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "active_attempt": None,
         "day_intro_sent": 0,
         "crisis_redirected": 0,
+        "crisis_mode": 0,
         "last_mini_lesson_date": None,
     }
 
@@ -1451,10 +1525,11 @@ async def init_db(db_path: str):
                 pending_skill_day INTEGER,
                 today_target TEXT,
                 day INTEGER,
+                current_day INTEGER,
                 day_number INTEGER,
                 created_at REAL,
                 updated_at TEXT,
-                schema_version INTEGER DEFAULT 2,
+                schema_version INTEGER DEFAULT 3,
                 first_start_date TEXT,
                 points INTEGER,
                 level INTEGER,
@@ -1473,6 +1548,8 @@ async def init_db(db_path: str):
                 last_morning_checkin_date TEXT,
                 last_evening_checkin_date TEXT,
                 notifications_enabled INTEGER DEFAULT 1,
+                notification_consent INTEGER DEFAULT 1,
+                notification_time TEXT,
                 timezone TEXT DEFAULT 'Europe/Vilnius',
                 reactivation_count INTEGER DEFAULT 0,
                 pending_plan_change TEXT,
@@ -1483,7 +1560,16 @@ async def init_db(db_path: str):
                 analysis_retry_count INTEGER,
                 has_started_training INTEGER,
                 last_offer_shown_at TEXT,
+                offer_seen INTEGER DEFAULT 0,
                 profile_json TEXT DEFAULT '{}',
+                profile_completed INTEGER DEFAULT 0,
+                diagnostic_completed INTEGER DEFAULT 0,
+                coach_style TEXT,
+                user_type_hypothesis TEXT,
+                user_map_json TEXT,
+                skill_effects_json TEXT,
+                day_history_json TEXT,
+                attempts_count INTEGER DEFAULT 0,
                 last_micro_habit_id TEXT,
                 last_micro_habit_date TEXT,
                 micro_habit_json TEXT,
@@ -1506,6 +1592,7 @@ async def init_db(db_path: str):
                 success_repeat_count INTEGER DEFAULT 0,
                 day_closed INTEGER DEFAULT 0,
                 today_closed INTEGER DEFAULT 0,
+                today_started INTEGER DEFAULT 0,
                 last_day_closed_at TEXT,
                 day_status TEXT DEFAULT 'open',
                 current_day_id TEXT,
@@ -1513,6 +1600,14 @@ async def init_db(db_path: str):
                 daily_skill_id TEXT,
                 daily_skill_name TEXT,
                 daily_skill_status TEXT,
+                day_skill_progress TEXT,
+                daily_check_in_status TEXT DEFAULT 'pending',
+                daily_reminder_status TEXT DEFAULT 'enabled',
+                skill_attempts_today INTEGER DEFAULT 0,
+                streak_counted_today INTEGER DEFAULT 0,
+                current_skill_completed_count INTEGER DEFAULT 0,
+                daily_replacement_count INTEGER DEFAULT 0,
+                replacements_today INTEGER DEFAULT 0,
                 current_task_id TEXT,
                 current_task_title TEXT,
                 current_task_name TEXT,
@@ -1534,7 +1629,8 @@ async def init_db(db_path: str):
                 closed_day_extra_step_count INTEGER DEFAULT 0,
                 active_attempt TEXT,
                 day_intro_sent INTEGER DEFAULT 0,
-                crisis_redirected INTEGER DEFAULT 0
+                crisis_redirected INTEGER DEFAULT 0,
+                crisis_mode INTEGER DEFAULT 0
             )
             """
         )
@@ -1664,6 +1760,7 @@ def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
         u.setdefault("chat_id", int(uid))
     day_value = int(u.get("day") or u.get("day_number") or 1)
     u["day"] = day_value
+    u["current_day"] = day_value
     u["day_number"] = day_value
     step_value = u.get("stage") or u.get("current_step") or "start"
     u["stage"] = step_value
@@ -1674,9 +1771,57 @@ def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
     trainer_value = u.get("trainer_key") or u.get("trainer") or "marsha"
     u["trainer_key"] = trainer_value
     u["trainer"] = trainer_value
+    u["coach_style"] = u.get("coach_style") or trainer_value
     mode_value = u.get("input_mode") or u.get("mode") or "text"
     u["input_mode"] = mode_value
     u["mode"] = mode_value
+    profile = _safe_json_dict(u.get("profile_json"))
+    diagnostic_completed = bool(
+        int(u.get("has_started_training") or 0) == 1
+        or u.get("first_start_date")
+        or str(u.get("stage") or "") in POST_DIAGNOSTIC_STAGES
+    )
+    u["diagnostic_completed"] = 1 if diagnostic_completed or int(u.get("diagnostic_completed") or 0) == 1 else 0
+    u["profile_completed"] = 1 if int(u.get("diagnostic_completed") or 0) == 1 or int(u.get("profile_completed") or 0) == 1 else 0
+    notifications_enabled = 1 if int(u.get("notifications_enabled", 1) or 0) == 1 else 0
+    u["notifications_enabled"] = notifications_enabled
+    u["notification_consent"] = notifications_enabled
+    if not u.get("notification_time") and notifications_enabled:
+        u["notification_time"] = "09:00"
+    attempts_count = max(
+        int(u.get("attempts_count") or 0),
+        int(u.get("done_count") or 0),
+        int(u.get("return_count") or 0),
+        len(_as_list(profile.get("successful_skills"))),
+        len(_as_list(profile.get("failed_skills"))),
+        len(_as_list(profile.get("completed_skills_effect_unknown"))),
+    )
+    u["attempts_count"] = attempts_count
+    u["offer_seen"] = 1 if u.get("last_offer_shown_at") or int(u.get("offer_seen") or 0) == 1 else 0
+    u["crisis_mode"] = 1 if str(u.get("safety_mode") or "none") != "none" or int(u.get("crisis_redirected") or 0) == 1 else 0
+    u["day_skill_progress"] = (
+        u.get("day_skill_progress")
+        or u.get("daily_skill_status")
+        or (_safe_json_dict(u.get("active_attempt")).get("attempt_status"))
+        or "not_started"
+    )
+    if not u.get("daily_check_in_status"):
+        u["daily_check_in_status"] = "done" if u.get("last_morning_checkin_date") else "pending"
+    if not u.get("daily_reminder_status"):
+        u["daily_reminder_status"] = "enabled" if notifications_enabled else "disabled"
+    profile_main = profile.get("main_hypothesis") or profile.get("main_pattern") or profile.get("avoidance_pattern")
+    if profile_main and not u.get("user_type_hypothesis"):
+        u["user_type_hypothesis"] = str(profile_main)
+    if profile.get("development_map") and not u.get("user_map_json"):
+        u["user_map_json"] = profile.get("development_map")
+    if not u.get("skill_effects_json"):
+        u["skill_effects_json"] = {
+            "helpful": _as_list(profile.get("successful_skills"))[-12:],
+            "not_helpful": _as_list(profile.get("failed_skills"))[-12:],
+            "unknown": _as_list(profile.get("completed_skills_effect_unknown"))[-12:],
+        }
+    if not u.get("day_history_json") and profile.get("development_history"):
+        u["day_history_json"] = profile.get("development_history")
     u["schema_version"] = max(int(u.get("schema_version") or 0), USER_STATE_SCHEMA_VERSION)
     u["safety_mode"] = u.get("safety_mode") or "none"
     u["safety_last_risk"] = u.get("safety_last_risk") or "unknown"
@@ -1758,7 +1903,7 @@ EXTRA_USER_COLS = {
     "trainer": "TEXT",
     "mode": "TEXT",
     "updated_at": "TEXT",
-    "schema_version": "INTEGER DEFAULT 2",
+    "schema_version": "INTEGER DEFAULT 3",
     "points": "INTEGER",
     "level": "INTEGER",
     "streak": "INTEGER",
@@ -1776,6 +1921,8 @@ EXTRA_USER_COLS = {
     "last_morning_checkin_date": "TEXT",
     "last_evening_checkin_date": "TEXT",
     "notifications_enabled": "INTEGER DEFAULT 1",
+    "notification_consent": "INTEGER DEFAULT 1",
+    "notification_time": "TEXT",
     "timezone": "TEXT DEFAULT 'Europe/Vilnius'",
     "reactivation_count": "INTEGER DEFAULT 0",
     "pending_plan_change": "TEXT",   # отложенная правка плана после кризиса
@@ -1788,9 +1935,19 @@ EXTRA_USER_COLS = {
     "pending_skill_id": "TEXT",
     "pending_skill_day": "INTEGER",
     "today_target": "TEXT",
+    "current_day": "INTEGER",
     "last_offer_shown_at": "TEXT",
+    "offer_seen": "INTEGER DEFAULT 0",
     "last_explanation_context": "TEXT",
     "profile_json": "TEXT DEFAULT '{}'",
+    "profile_completed": "INTEGER DEFAULT 0",
+    "diagnostic_completed": "INTEGER DEFAULT 0",
+    "coach_style": "TEXT",
+    "user_type_hypothesis": "TEXT",
+    "user_map_json": "TEXT",
+    "skill_effects_json": "TEXT",
+    "day_history_json": "TEXT",
+    "attempts_count": "INTEGER DEFAULT 0",
     "last_micro_habit_id": "TEXT",
     "last_micro_habit_date": "TEXT",
     "micro_habit_json": "TEXT",
@@ -1814,6 +1971,7 @@ EXTRA_USER_COLS = {
     "success_repeat_count": "INTEGER DEFAULT 0",
     "day_closed": "INTEGER DEFAULT 0",
     "today_closed": "INTEGER DEFAULT 0",
+    "today_started": "INTEGER DEFAULT 0",
     "last_day_closed_at": "TEXT",
     "day_status": "TEXT DEFAULT 'open'",
     "current_day_id": "TEXT",
@@ -1821,6 +1979,14 @@ EXTRA_USER_COLS = {
     "daily_skill_id": "TEXT",
     "daily_skill_name": "TEXT",
     "daily_skill_status": "TEXT",
+    "day_skill_progress": "TEXT",
+    "daily_check_in_status": "TEXT DEFAULT 'pending'",
+    "daily_reminder_status": "TEXT DEFAULT 'enabled'",
+    "skill_attempts_today": "INTEGER DEFAULT 0",
+    "streak_counted_today": "INTEGER DEFAULT 0",
+    "current_skill_completed_count": "INTEGER DEFAULT 0",
+    "daily_replacement_count": "INTEGER DEFAULT 0",
+    "replacements_today": "INTEGER DEFAULT 0",
     "current_task_id": "TEXT",
     "current_task_title": "TEXT",
     "current_task_name": "TEXT",
@@ -1844,6 +2010,7 @@ EXTRA_USER_COLS = {
     "active_attempt": "TEXT",
     "day_intro_sent": "INTEGER DEFAULT 0",
     "crisis_redirected": "INTEGER DEFAULT 0",
+    "crisis_mode": "INTEGER DEFAULT 0",
     "last_mini_lesson_date": "TEXT",
     # Spec: day/moment skill separation (section 3)
     "moment_skill_id": "TEXT",
