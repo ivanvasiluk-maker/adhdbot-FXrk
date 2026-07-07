@@ -94,6 +94,11 @@ async def main() -> None:
             saved = await get_user(uid, db_path)
             assert saved["stage"] == "start"
             assert saved["current_task_title"] is None
+            assert saved.get("current_task_name") is None
+            assert saved.get("current_task_object") is None
+            assert saved.get("current_deadline") is None
+            assert saved.get("current_task_next_step") is None
+            assert saved.get("current_task_fear") is None
             assert saved["points"] == 0
             assert saved["streak"] == 0
             assert saved["done_count"] == 0

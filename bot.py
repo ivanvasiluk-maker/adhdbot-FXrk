@@ -401,6 +401,7 @@ kb_active_skill = ReplyKeyboardMarkup(
         [KeyboardButton(text="🟡 Не получилось")],
         [KeyboardButton(text="🌙 На сегодня достаточно")],
         [KeyboardButton(text="⚙️ Другой вариант")],
+        [KeyboardButton(text="📚 Почему это работает")],
     ],
     resize_keyboard=True,
 )
@@ -415,12 +416,35 @@ kb_first_day_skill = ReplyKeyboardMarkup(
 
 kb_skill_result_feedback = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Сделал — стало легче")],
-        [KeyboardButton(text="😐 Сделал — но легче не стало")],
-        [KeyboardButton(text="🚪 Сделал — начал задачу")],
-        [KeyboardButton(text="🟡 Не получилось"), KeyboardButton(text="🤷 Не мой навык")],
-        [KeyboardButton(text="😣 Слишком сложно"), KeyboardButton(text="🔄 Нужен другой вход")],
-        [KeyboardButton(text="⏳ Не пробовал / не успел")],
+        [KeyboardButton(text="✅ Сделал"), KeyboardButton(text="🟡 Попробовал, но не вышло")],
+        [KeyboardButton(text="🔄 Нужен другой вход"), KeyboardButton(text="⏳ Не успел / не пробовал")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_done_effect = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🚪 Начал задачу")],
+        [KeyboardButton(text="✅ Стало легче")],
+        [KeyboardButton(text="😐 Пока без разницы")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_obstacle = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😣 Слишком сложно")],
+        [KeyboardButton(text="📱 Унесло в телефон")],
+        [KeyboardButton(text="🧠 Застрял / не понял, что делать")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_skill_not_tried = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💪 Вернуться к шагу")],
+        [KeyboardButton(text="🔄 Выбрать другой вход")],
+        [KeyboardButton(text="🌙 На сегодня достаточно")],
     ],
     resize_keyboard=True,
 )
@@ -1235,6 +1259,7 @@ SKILL_STATUS_WORDING = {
     "promising": "есть первый сигнал, что помогает",
     "confirmed": "есть первый сигнал, что помогает",
     "not_helpful": "сейчас не подошёл",
+    "not_fit_today": "сегодня не повторяем",
 }
 
 
@@ -1320,7 +1345,10 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
             attempt_status = str(meta.get("attempt_status") or "")
             item["attempt_status"] = attempt_status or item.get("attempt_status")
             item["effect_status"] = effect_status or item.get("effect_status")
-            if effect_status in {"helped_start", "felt_easier"} or rating > 0 or result_status == "done_relief":
+            if str(meta.get("status") or "") == "not_fit_today":
+                item["last_result"] = "not_fit_today"
+                item["status"] = "not_fit_today"
+            elif effect_status in {"helped_start", "felt_easier"} or rating > 0 or result_status == "done_relief":
                 item["helpful_count"] = int(item.get("helpful_count") or 0) + 1
                 item["last_result"] = "helpful"
             elif result_status == "done_started_task":
@@ -1330,7 +1358,7 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
                 item["last_result"] = "neutral"
             elif effect_status == "not_my_skill":
                 item["last_result"] = "not_my_skill"
-            elif result_status in {"done_no_relief", "not_completed", "not_my_skill", "too_hard", "needs_other_entry", "not_tried"}:
+            elif result_status in {"done_no_relief", "not_completed", "not_my_skill", "too_hard", "needs_other_entry", "phone_distracted", "stuck_unclear", "not_tried"}:
                 item["last_result"] = result_status
 
     for sid in helpful_ids:
@@ -1355,7 +1383,9 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
         item["attempt_count"] = max(int(item["attempt_count"]), int(item["completed_count"]), int(item["stuck_count"]))
         effect_status = str(item.get("effect_status") or "")
         attempt_status = str(item.get("attempt_status") or "")
-        if effect_status in {"helped_start", "felt_easier"}:
+        if item.get("status") == "not_fit_today":
+            item["status"] = "not_fit_today"
+        elif effect_status in {"helped_start", "felt_easier"}:
             item["status"] = "promising"
         elif effect_status == "neutral":
             item["status"] = "tested_once"
@@ -2131,16 +2161,167 @@ async def record_today_progress_shown(u: Dict[str, Any], profile: Dict[str, Any]
     )
 
 
+def extract_task_context_from_text(text: str) -> Dict[str, str]:
+    """Best-effort extraction of the concrete postponed task from first diagnosis text."""
+    raw = re.sub(r"\s+", " ", str(text or "").strip())
+    low = raw.lower()
+    result = {
+        "current_task_name": "",
+        "current_task_object": "",
+        "current_deadline": "",
+        "current_task_next_step": "",
+        "current_task_fear": "",
+    }
+    if not raw:
+        return result
 
-def current_task_title(u: Dict[str, Any], fallback: str = "сегодняшняя задача") -> str:
-    title = str(u.get("current_task_title") or u.get("today_target") or "").strip()
+    if "завтра" in low:
+        result["current_deadline"] = "завтра"
+    elif "сегодня" in low:
+        result["current_deadline"] = "сегодня"
+    elif "дедлайн" in low:
+        match = re.search(r"дедлайн(?:\s+|:)([^.;,!?\n]+)", raw, flags=re.IGNORECASE)
+        if match:
+            result["current_deadline"] = match.group(1).strip()
+
+    object_patterns = (
+        ("презентац", "презентация"),
+        ("слайд", "слайд"),
+        ("отч", "отчёт"),
+        ("письм", "письмо"),
+        ("пост", "пост"),
+        ("таблиц", "таблица"),
+        ("документ", "документ"),
+    )
+    for needle, label_value in object_patterns:
+        if needle in low:
+            result["current_task_object"] = label_value
+            break
+
+    task_match = re.search(
+        r"(?:надо|нужно|должен|должна|хочу|пытаюсь|задача\s*[—:-]?)\s+([^.!?\n]+)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    task_name = task_match.group(1).strip(" ,;:—-") if task_match else ""
+    if not task_name and result["current_task_object"]:
+        sentence = next((part.strip() for part in re.split(r"[.!?]", raw) if result["current_task_object"][:6].lower() in part.lower()), "")
+        task_name = sentence
+    task_name = re.sub(r"\b(но|и)?\s*боюсь\b.*$", "", task_name, flags=re.IGNORECASE).strip(" ,;:—-")
+    task_name = re.sub(r"\b(дедлайн|срок)\b.*$", "", task_name, flags=re.IGNORECASE).strip(" ,;:—-")
+    task_name = re.sub(r"\s+к\s+(сегодня|завтра|понедельнику|вторнику|среде|четвергу|пятнице|субботе|воскресенью)\b.*$", "", task_name, flags=re.IGNORECASE).strip(" ,;:—-")
+    if task_name:
+        result["current_task_name"] = task_name[:140]
+
+    fear_match = re.search(r"(боюсь|страшно|стыдно)([^.!?\n]+)", raw, flags=re.IGNORECASE)
+    if fear_match:
+        fear_text = fear_match.group(0).strip(" ,;:—-")
+        if ("плох" in fear_text.lower() or "стыд" in fear_text.lower()) and "стыд" in low:
+            result["current_task_fear"] = "сделать плохо и испытать стыд"
+        else:
+            result["current_task_fear"] = fear_text[:160]
+
+    if result["current_task_object"] == "презентация":
+        result["current_task_next_step"] = "найти один слайд, который сейчас страшнее всего трогать"
+    elif result["current_task_object"]:
+        result["current_task_next_step"] = f"открыть {result['current_task_object']} на 10 секунд"
+    return result
+
+
+async def save_extracted_task_context(u: Dict[str, Any], text: str, *, source: str) -> Dict[str, str]:
+    context = extract_task_context_from_text(text)
+    task_name = context.get("current_task_name") or ""
+    if not task_name:
+        return context
+    u["current_task_name"] = task_name
+    u["current_task_object"] = context.get("current_task_object") or None
+    u["current_deadline"] = context.get("current_deadline") or None
+    u["current_task_next_step"] = context.get("current_task_next_step") or None
+    u["current_task_fear"] = context.get("current_task_fear") or None
+    if not u.get("current_task_title"):
+        await save_current_task(
+            u,
+            DB_PATH,
+            title=task_name,
+            next_step=context.get("current_task_next_step") or "",
+            object_name=context.get("current_task_object") or "",
+            deadline=context.get("current_deadline") or "",
+            fear=context.get("current_task_fear") or "",
+        )
+    await log_event(u["user_id"], "analysis", "task_context_extracted", {"source": source, **context}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return context
+
+
+
+def current_task_title(u: Dict[str, Any], fallback: str = "важное дело, которое ты сейчас откладываешь") -> str:
+    title = str(u.get("current_task_name") or u.get("current_task_title") or u.get("today_target") or "").strip()
     if not title or title == "__target_not_selected__":
         return fallback
     return title
 
 
 def current_task_label(u: Dict[str, Any]) -> str:
-    return current_task_title(u, "сегодняшняя задача")
+    return current_task_title(u, "важное дело, которое ты сейчас откладываешь")
+
+
+def truly_smaller_step(u: Dict[str, Any], *, bump: bool = True) -> str:
+    """Return a strictly smaller step on each too-hard report."""
+    current = int(u.get("current_downscale_level") or 0)
+    level = min(5, current + 1) if bump else max(1, current)
+    if bump:
+        u["current_downscale_level"] = level
+    obj = str(u.get("current_task_object") or "").strip().lower()
+    task = current_task_title(u)
+    if "презентац" in obj or "презентац" in task.lower():
+        ladder = {
+            1: "Напиши 3 плохих тезиса для презентации. Не редактируй.",
+            2: "Напиши одну плохую строку для презентации.",
+            3: "Открой презентацию и просто поставь курсор.",
+            4: "Найди файл презентации. Не открывай, если это уже много.",
+            5: "Просто назови вслух: «я боюсь открыть презентацию».",
+        }
+    else:
+        ladder = {
+            1: f"Напиши 3 плохих тезиса про «{task}». Не редактируй.",
+            2: f"Напиши одну плохую строку про «{task}».",
+            3: f"Открой «{task}» и просто поставь курсор.",
+            4: f"Найди место или файл для «{task}». Не начинай работу.",
+            5: f"Просто назови вслух: «я боюсь открыть {task}».",
+        }
+    return ladder[level]
+
+
+def social_support_available(profile: Dict[str, Any]) -> bool:
+    return bool(int(profile.get("social_support_available") or 0) and int(profile.get("social_support_can_message") or 0))
+
+
+def social_support_shown_today(profile: Dict[str, Any], u: Dict[str, Any]) -> bool:
+    return profile.get("social_support_entry_date") == local_date_for_user(u)
+
+
+async def maybe_social_support_entry_option(u: Dict[str, Any]) -> List[str]:
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    if social_support_available(profile) and not social_support_shown_today(profile, u):
+        return ["👤 Написать человеку-опоре"]
+    return []
+
+
+async def mark_social_support_entry_shown(u: Dict[str, Any]) -> None:
+    await update_user_profile(
+        u["user_id"],
+        {"social_support_entry_date": local_date_for_user(u), "social_support_entry_count": 1},
+        DB_PATH,
+        source="social_support_entry",
+    )
+
+
+def social_support_entry_text(u: Dict[str, Any]) -> str:
+    task = current_task_title(u)
+    return (
+        "Можно использовать опору как вход, не как контроль.\n\n"
+        f"Текст человеку:\n«Я на 3 минуты открываю {task}. Потом напишу, получилось ли начать».\n\n"
+        "Это не обязательный отчёт и не давление."
+    )
 
 
 def task_needs_physical_step(title: str) -> bool:
@@ -3017,7 +3198,7 @@ SUCCESS_SECOND_STEP_DONE_TEXT = (
 
 def extra_microstep_prompt(u: Dict[str, Any]) -> str:
     sid = str(current_skill_id(u) or u.get("daily_skill_id") or u.get("current_skill_variant_id") or "")
-    task = current_task_title(u, "задачу")
+    task = current_task_title(u, "важное дело, которое ты сейчас откладываешь")
     if sid in {"open_only", "open_without_timer", "visible_next_step", "one_visible_step"}:
         return (
             "Отлично. Ещё 2 минуты — только если хочешь.\n"
@@ -3382,25 +3563,61 @@ async def handle_feedback_response(m: Message, u: Dict[str, Any], text: str) -> 
     return False
 
 
-SKILL_RESULT_STATUS_BY_BUTTON = {
-    "✅ Сделал — стало легче": ("done_relief", 1),
-    "😐 Сделал — но легче не стало": ("done_no_relief", 0),
-    "🚪 Сделал — начал задачу": ("done_started_task", 0),
-    "🟡 Не получилось": ("not_completed", 0),
-    "🤷 Не мой навык": ("not_my_skill", 0),
-    "😣 Слишком сложно": ("too_hard", 0),
-    "🔄 Нужен другой вход": ("needs_other_entry", 0),
-    "⏳ Не пробовал / не успел": ("not_tried", 0),
-    "⏳ Не успел попробовать": ("not_tried", 0),
-    "🚫 Не пробовал": ("not_tried", 0),
+SKILL_RESULT_STEP1_BUTTONS = {
+    "✅ Сделал",
+    "🟡 Попробовал, но не вышло",
+    "🔄 Нужен другой вход",
+    "⏳ Не успел / не пробовал",
+}
+
+SKILL_DONE_EFFECT_BY_BUTTON = {
+    "🚪 Начал задачу": ("done_started_task", "started_task", 0),
+    "✅ Стало легче": ("done_relief", "easier", 1),
+    "😐 Пока без разницы": ("done_no_relief", "no_change", 0),
+}
+
+SKILL_OBSTACLE_BY_BUTTON = {
+    "😣 Слишком сложно": "too_hard",
+    "📱 Унесло в телефон": "phone_distracted",
+    "🧠 Застрял / не понял, что делать": "stuck_unclear",
 }
 
 
 def skill_result_feedback_text(source: str = "done") -> str:
-    return (
-        "Зафиксируем честно, что произошло с навыком.\n\n"
-        "Выбери ближайший вариант — я не буду считать навык полезным без подтверждённого эффекта."
-    )
+    return "Что получилось?"
+
+
+def other_entry_options_for_user(u: Dict[str, Any]) -> list[str]:
+    attempt = active_attempt(u)
+    mechanism = str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or u.get("current_mechanism") or u.get("last_user_mechanism") or "")
+    sid = str(current_skill_id(u) or current_skill_for_action(u) or u.get("daily_skill_id") or "")
+    if mechanism == "phone" or "phone" in sid:
+        return ["📱 Убрать телефон на 2 минуты", "🖥 Открыть файл на 10 секунд", "👤 Написать человеку-опоре"]
+    if mechanism in {"fear_of_error", "self_criticism"} or sid in {"bad_draft", "bad_line"}:
+        return ["✍️ Одна плохая строка", "📌 Выбрать один слайд", "🗣️ Назвать, что страшно"]
+    if mechanism in {"overload", "meaning_loss"} or sid in {"one_visible_step", "open_only"}:
+        return ["📌 Назвать один следующий шаг", "🖥 Открыть файл на 10 секунд", "✍️ Одна плохая строка"]
+    return ["✍️ Одна плохая строка", "🖥 Открыть файл на 10 секунд", "👤 Написать человеку-опоре"]
+
+
+def other_entry_keyboard_for_user(u: Dict[str, Any]) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=label)] for label in other_entry_options_for_user(u)[:3]], resize_keyboard=True)
+
+
+async def other_entry_keyboard_for_user_async(u: Dict[str, Any]) -> ReplyKeyboardMarkup:
+    options = other_entry_options_for_user(u)[:3]
+    support = await maybe_social_support_entry_option(u)
+    if support and support[0] not in options:
+        options = (options[:2] + support)[:3]
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=label)] for label in options], resize_keyboard=True)
+
+
+async def other_entry_options_for_user_async(u: Dict[str, Any]) -> List[str]:
+    options = other_entry_options_for_user(u)[:3]
+    support = await maybe_social_support_entry_option(u)
+    if support and support[0] not in options:
+        options = (options[:2] + support)[:3]
+    return options
 
 
 async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: str = "done") -> bool:
@@ -3414,61 +3631,129 @@ async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: st
     return True
 
 
-async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str) -> bool:
-    if u.get("stage") != "skill_result_feedback":
-        return False
-    if text not in SKILL_RESULT_STATUS_BY_BUTTON:
-        await answer_with_keyboard(m, u, "Выбери, что реально произошло с навыком:", kb_skill_result_feedback, "skill_result_feedback")
-        return True
-    result_status, effect_rating = SKILL_RESULT_STATUS_BY_BUTTON[text]
+async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: str, result_status: str, effect: str, effect_rating: int, *, completed: bool, send_menu: bool = True) -> bool:
     sid = current_skill_id(u)
     profile = await get_user_profile(u["user_id"], DB_PATH)
-    helpful_count = int(profile.get("skill_helpful_confirmation_count") or 0)
-    patch = {
-        "last_skill_result_status": result_status,
-        "last_skill_effect": "helpful" if effect_rating > 0 else ("started_task" if result_status == "done_started_task" else "not_helpful"),
-    }
-    if effect_rating > 0:
-        helpful_count += 1
-        patch.update({
-            "best_skill": sid,
-            "last_successful_skill": sid,
-            "skill_helpful_confirmation_count": helpful_count,
-        })
-    elif result_status in {"not_completed", "not_my_skill", "too_hard", "needs_other_entry"}:
-        patch.update({"failed_skill": sid, "worst_skill": sid})
+    success_count = await count_distinct_skill_successes(u, sid, include_current=completed and effect in {"easier", "started_task"})
+    patch = {"last_skill_result_status": result_status, "last_skill_effect": effect, "last_skill_completed": completed}
+    not_fit = (not completed and result_status in {"not_completed", "too_hard", "needs_other_entry", "phone_distracted", "stuck_unclear", "not_my_skill"})
+    if completed and effect in {"easier", "started_task"}:
+        patch.update({"best_skill": sid, "last_successful_skill": sid, "skill_helpful_confirmation_count": success_count})
+    elif not_fit:
+        patch.update({"failed_skill": sid, "worst_skill": sid, "skill_status": "not_fit_today", **_not_fit_today_patch(u, profile, sid)})
+        u["daily_skill_status"] = "not_fit_today"
     u["stage"] = "success_menu"
-    effect_status = "felt_easier" if result_status == "done_relief" else "helped_start" if result_status == "done_started_task" else "neutral"
-    if result_status in {"not_completed", "too_hard", "needs_other_entry"}:
-        effect_status = "unknown"
-    elif result_status == "not_my_skill":
-        effect_status = "not_my_skill"
-    elif result_status == "not_tried":
-        effect_status = "unknown"
-    attempt_status = "completed" if result_status in {"done_helped", "done_no_relief", "done_started_task"} else "failed"
-    if result_status in {"done_relief", "not_my_skill"}:
-        attempt_status = "completed"
-    if result_status == "not_tried":
-        previous = active_attempt(u).get("attempt_status")
-        attempt_status = "completed" if previous == "completed" else "skipped"
+    effect_status = "felt_easier" if effect == "easier" else "helped_start" if effect == "started_task" else "neutral" if completed else "unknown"
+    attempt_status = "completed" if completed else ("skipped" if result_status == "not_tried" else "failed")
     sync_active_attempt(u, bump=True, attempt_status=attempt_status, effect_status=effect_status, is_closed=True)
     await save_user(u, DB_PATH)
-    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": result_status, "effect_rating": effect_rating, "button": text, "attempt_status": attempt_status, "effect_status": effect_status})
+    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": result_status, "effect": effect, "effect_rating": effect_rating, "button": text, "completed": completed, "attempt_status": attempt_status, "effect_status": effect_status, "status": "not_fit_today" if not_fit else "", "daily_session_id": u.get("daily_session_id"), "local_date": local_date_for_user(u), "action_id": u.get("current_action_id"), "source": u.get("last_day_source") or ""})
     await record_profile_signal(u["user_id"], "training", patch, source="skill_result_feedback")
     if effect_rating > 0:
         await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
-        msg = "Этот вход часто помогает тебе вернуться к задаче." if helpful_count >= 2 else "Есть первый сигнал, что этот вход тебе помогает."
-    elif result_status == "done_started_task":
-        msg = "Записал честно: шаг помог начать задачу. Эффект ещё не считаю подтверждённым."
-    elif result_status == "done_no_relief":
-        msg = "Записал честно: шаг сделан, но легче не стало. Не буду считать навык помогающим."
+        msg = f"Записал: {skill_confidence_text(success_count)}."
+    elif effect == "started_task":
+        await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
+        msg = f"Записал: шаг помог начать задачу. {skill_confidence_text(success_count)}."
+    elif completed:
+        skill = dict(SKILLS_DB.get(sid) or {})
+        skill.setdefault("skill_id", sid)
+        msg = "Записал: шаг сделан, но пока без заметной разницы. Не буду считать навык помогающим по одному результату.\n\n📚 Почему это может работать:\n" + daily_learning_text(skill)
     elif result_status == "not_tried":
-        msg = "Записал: не успел попробовать. Это не провал и не сигнал, что навык помогает."
+        msg = "Нормально. Это не провал и не оценка тебя."
     else:
         await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
         msg = "Записал: этот вход сейчас не подошёл. Не буду считать его помогающим."
-    await answer_with_keyboard(m, u, msg, success_menu_keyboard(u), "success_menu")
+    if send_menu:
+        await answer_with_keyboard(m, u, msg, success_menu_keyboard(u), "success_menu")
     return True
+
+
+async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str) -> bool:
+    stage = u.get("stage")
+    if stage not in {"skill_result_feedback", "skill_done_effect", "skill_obstacle", "skill_other_entry", "skill_not_tried"}:
+        return False
+    if stage == "skill_result_feedback":
+        if text == "✅ Сделал":
+            u["stage"] = "skill_done_effect"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Что изменилось после шага?", kb_skill_done_effect, "skill_done_effect")
+            return True
+        if text == "🟡 Попробовал, но не вышло":
+            sid = current_skill_id(u)
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            u["daily_skill_status"] = "not_fit_today"
+            await update_user_profile(u["user_id"], {"failed_skill": sid, "worst_skill": sid, "skill_status": "not_fit_today", **_not_fit_today_patch(u, profile, sid)}, DB_PATH, source="skill_result_step1_not_fit")
+            await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": "not_completed", "effect": "not_completed", "button": text, "completed": False, "status": "not_fit_today", "daily_session_id": u.get("daily_session_id"), "local_date": local_date_for_user(u), "action_id": u.get("current_action_id")})
+            u["stage"] = "skill_obstacle"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Что было главной помехой?", kb_skill_obstacle, "skill_obstacle")
+            return True
+        if text == "🔄 Нужен другой вход":
+            u["stage"] = "skill_other_entry"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Окей. Этот вход сейчас не твой. Что легче попробовать вместо него?", await other_entry_keyboard_for_user_async(u), "skill_other_entry")
+            return True
+        if text == "⏳ Не успел / не пробовал":
+            u["stage"] = "skill_not_tried"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Нормально. Это не провал и не оценка тебя.\n\nКогда вернёшься, начнём с того же минимума или подберём другой вход.", kb_skill_not_tried, "skill_not_tried")
+            return True
+        await answer_with_keyboard(m, u, "Что получилось?", kb_skill_result_feedback, "skill_result_feedback")
+        return True
+    if stage == "skill_done_effect":
+        if text not in SKILL_DONE_EFFECT_BY_BUTTON:
+            await answer_with_keyboard(m, u, "Что изменилось после шага?", kb_skill_done_effect, "skill_done_effect")
+            return True
+        result_status, effect, rating = SKILL_DONE_EFFECT_BY_BUTTON[text]
+        return await finalize_skill_result_feedback(m, u, text, result_status, effect, rating, completed=True)
+    if stage == "skill_obstacle":
+        if text not in SKILL_OBSTACLE_BY_BUTTON:
+            await answer_with_keyboard(m, u, "Что было главной помехой?", kb_skill_obstacle, "skill_obstacle")
+            return True
+        code = SKILL_OBSTACLE_BY_BUTTON[text]
+        await finalize_skill_result_feedback(m, u, text, code, code, 0, completed=False, send_menu=False)
+        u["stage"] = "downscale_action"
+        await save_user(u, DB_PATH)
+        if code == "too_hard":
+            msg = f"Уменьшаем реально на один уровень. Сейчас только это:\n{truly_smaller_step(u)}"
+            await save_user(u, DB_PATH)
+        elif code == "phone_distracted":
+            msg = "Ставим короткий барьер перед телефоном: положи телефон экраном вниз вне руки на 2 минуты. Потом только открой файл на 10 секунд."
+        else:
+            msg = "Берём один физический следующий шаг: поставь курсор в файл / открой вкладку / положи руку на первый предмет задачи. Без решения всей задачи."
+        await answer_with_keyboard(m, u, msg, action_keyboard(), "downscale")
+        return True
+    if stage == "skill_other_entry":
+        options = await other_entry_options_for_user_async(u)
+        if text not in options:
+            await answer_with_keyboard(m, u, "Выбери один более лёгкий вход:", await other_entry_keyboard_for_user_async(u), "skill_other_entry")
+            return True
+        await finalize_skill_result_feedback(m, u, text, "needs_other_entry", "needs_other_entry", 0, completed=False, send_menu=False)
+        u["stage"] = "downscale_action"
+        await save_user(u, DB_PATH)
+        if text == "👤 Написать человеку-опоре":
+            await mark_social_support_entry_shown(u)
+            await answer_with_keyboard(m, u, social_support_entry_text(u), action_keyboard(), "downscale")
+        else:
+            await answer_with_keyboard(m, u, f"Окей, пробуем другой вход: {text}. Сделай только это, без продолжения.", action_keyboard(), "downscale")
+        return True
+    if stage == "skill_not_tried":
+        if text == "💪 Вернуться к шагу":
+            u["stage"] = "downscale_action"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Возвращаемся к тому же минимуму. Сделай только первый маленький шаг.", action_keyboard(), "downscale")
+            return True
+        if text == "🔄 Выбрать другой вход":
+            u["stage"] = "skill_other_entry"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Окей. Этот вход сейчас не твой. Что легче попробовать вместо него?", await other_entry_keyboard_for_user_async(u), "skill_other_entry")
+            return True
+        if text == "🌙 На сегодня достаточно":
+            return await finalize_skill_result_feedback(m, u, text, "not_tried", "not_tried", 0, completed=False)
+        await answer_with_keyboard(m, u, "Выбери, как продолжить:", kb_skill_not_tried, "skill_not_tried")
+        return True
+    return False
 
 
 async def send_success_menu(m: Message, u: Dict[str, Any], *, source: str = "done"):
@@ -4572,6 +4857,7 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
         return True
 
     seen_today = _profile_list(profile.get("skill_replace_seen_today")) if profile.get("skill_replace_date") == today else []
+    seen_today.extend([sid for sid in not_fit_today_skills(u, profile) if sid not in seen_today])
     current_seen = current_skill_for_action(u)
     if current_seen and current_seen not in seen_today:
         seen_today.append(current_seen)
@@ -4605,6 +4891,7 @@ async def replace_skill_or_request_rediagnosis(m: Message, u: Dict[str, Any], re
         "skill_replace_seen_today": seen_today[-MAX_SKILL_REPLACEMENTS_BEFORE_REDIAGNOSIS:],
         "last_replacement_skill": new_sid,
         "last_replacement_reason": replacement_reason_code(reason),
+        **_not_fit_today_patch(u, profile, previous_sid),
     }, source="skill_replace")
     if previous_sid:
         await record_working_map_skill_result(u["user_id"], "failed_skills", previous_sid)
@@ -4778,24 +5065,21 @@ async def apply_skill_change(
     }, DB_PATH, SHEETS_WEBHOOK_URL)
     mark_action_card_active(u)
     await save_user(u, DB_PATH)
+    profile_for_not_fit = await get_user_profile(u["user_id"], DB_PATH)
     await record_profile_signal(u["user_id"], "training", {
         **skill_learning_signal_patch(previous_sid, reason_code, reason_code, tolerable_difficulty_for_reason(reason_code), new_sid),
         "last_replacement_skill": new_sid,
         "last_replacement_reason": reason_text,
         "skill_change_previous_skill": previous_sid,
         "skill_change_new_skill": new_sid,
+        **_not_fit_today_patch(u, profile_for_not_fit, previous_sid),
     }, source="skill_change_requested")
     if previous_sid:
         await record_working_map_skill_result(u["user_id"], "failed_skills", previous_sid)
     await update_user_profile(u["user_id"], {"user_model_events": model_events}, DB_PATH, source="skill_change_requested_events")
     text = (
-        "Навык заменён.\n"
-        f"{SKILL_LEARNING_REFRAME_TEXT}\n\n"
-        f"{intro}\n\n"
-        f"Новый навык:\n🧩 {new_name}\n\n"
-        f"Минимум:\n{minimum}\n\n"
-        f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
-        "Что получилось?"
+        "Навык заменён.\n\n"
+        f"{format_skill_card(u, skill, current_task_label(u))}"
     )
     await answer_with_keyboard(m, u, trainer_wrap(u, text, "change"), action_keyboard(), "skill_card")
 
@@ -5207,7 +5491,7 @@ def build_full_mode_plan(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str
         hypotheses.append(str(profile.get("main_hypothesis")))
     hypotheses.extend(_profile_list_values(profile.get("secondary_hypotheses"), 3))
     hypotheses = list(dict.fromkeys([x for x in hypotheses if x]))[:4]
-    task = current_task_title(u, "выбранной задаче")
+    task = current_task_title(u, "важное дело, которое ты сейчас откладываешь")
     step = str(u.get("current_next_physical_step") or "").strip()
     if not facts:
         facts = ["пока данных мало: есть только первые ответы и нажатия"]
@@ -5651,45 +5935,27 @@ def daily_learning_text(skill: Dict[str, Any]) -> str:
         return "ДБТ-навык: эффективность. Вопрос не «как правильно?», а «что сработает на 1% прямо сейчас?» — это можно занести в планер как минимум дня."
     return "ДБТ-навык: участие. На 60–120 секунд входишь в действие полностью, без требования идеального настроя; после отмечаешь один факт прогресса в дневнике или планере."
 
-def new_day_skill_card_text(skill: Dict[str, Any]) -> str:
-    if skill.get("daily_text"):
-        return (
-            f"{skill.get('daily_text')}\n\n"
-            f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
-            "Что получилось?"
-        )
-    skill_name = skill.get("name") or "Телефон вне руки на 3 минуты"
-    if (skill.get("skill_id") or "") in {"phone_far_3min", "phone_away_3_min"} or "телефон" in skill_name.lower():
-        return (
-            "🧩 Навык дня: Телефон вне руки на 3 минуты\n\n"
-            "Попробуй:\n"
-            "1. Положи телефон вне досягаемости руки.\n"
-            "2. Открой место задачи.\n"
-            "3. Не работай идеально. Просто побудь рядом с задачей 3 минуты.\n\n"
-            "Минимум:\n"
-            "положить телефон экраном вниз на расстояние вытянутой руки.\n\n"
-            f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
-            "Что получилось?"
-        )
+def new_day_skill_card_text(skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None) -> str:
+    skill_name = skill.get("name") or "Микро-шаг"
+    why_short = skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата."
     steps = skill.get("simple") or skill.get("steps") or []
     if isinstance(steps, list) and steps:
-        step_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(steps[:3]))
+        step_text = "\n".join(f"{i + 1}. {contextualize_task_text(step, u)}" for i, step in enumerate(steps[:3]))
     else:
-        step_text = skill.get("how") or skill.get("how_more") or "Сделай самый маленький вход в задачу 60–120 секунд."
-    minimum = skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу"
+        step_text = contextualize_task_text(skill.get("how") or skill.get("how_more") or "Открой задачу на 10 секунд и остановись.", u)
+    minimum = contextualize_task_text(skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу", u)
     return (
-        f"🧩 Навык дня: {skill_name}\n\n"
-        f"Попробуй:\n{step_text}\n\n"
-        f"Минимум:\n{minimum}\n\n"
-        f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
-        "Что получилось?"
+        f"🧩 Навык: {skill_name}\n\n"
+        f"{why_short}\n\n"
+        f"Сделай:\n{step_text}\n\n"
+        f"Минимум:\n{minimum}"
     )
 
 
-def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any]) -> str:
+def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any], u: Optional[Dict[str, Any]] = None) -> str:
     return (
         f"{new_day_context_message(profile)}\n\n"
-        f"{new_day_skill_card_text(skill)}"
+        f"{new_day_skill_card_text(skill, u)}"
     )
 
 
@@ -5724,6 +5990,74 @@ def _profile_or_user_int(u: Dict[str, Any], profile: Dict[str, Any], *keys: str)
     return 0
 
 
+def not_fit_today_skills(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> List[str]:
+    profile = profile or {}
+    today = local_date_for_user(u)
+    raw = profile.get("not_fit_today") or u.get("not_fit_today") or {}
+    if isinstance(raw, dict):
+        return [_canonical_daily_skill_id(sid) for sid in raw.get(today, []) if _canonical_daily_skill_id(sid) in SKILLS_DB]
+    return []
+
+
+def _not_fit_today_patch(u: Dict[str, Any], profile: Dict[str, Any], sid: str) -> Dict[str, Any]:
+    today = local_date_for_user(u)
+    raw = profile.get("not_fit_today") or {}
+    data = dict(raw) if isinstance(raw, dict) else {}
+    current = [str(x) for x in data.get(today, []) if x]
+    canonical = _canonical_daily_skill_id(sid)
+    if canonical and canonical not in current:
+        current.append(canonical)
+    data = {str(k): v for k, v in data.items() if str(k) == today}
+    data[today] = current[-12:]
+    return {"not_fit_today": data, "last_not_fit_today_skill": canonical, "last_not_fit_today_date": today}
+
+
+def skill_confidence_text(success_count: int) -> str:
+    if success_count <= 0:
+        return "ещё не проверяли"
+    if success_count == 1:
+        return "есть первый сигнал, что этот вход может помогать"
+    if success_count == 2:
+        return "этот вход повторно сработал; пока считаем его рабочим кандидатом"
+    return "похоже, это один из твоих устойчивых рабочих входов"
+
+
+async def count_distinct_skill_successes(u: Dict[str, Any], sid: str, *, include_current: bool = False) -> int:
+    sid = str(sid or "")
+    if not sid:
+        return 0
+    seen: set[str] = set()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT day_id, metadata FROM action_events WHERE user_id=? AND skill_id=? AND event_type='skill_result_reported' ORDER BY id",
+            (u["user_id"], sid),
+        )
+        rows = await cur.fetchall()
+    for day_id, raw_meta in rows:
+        try:
+            meta = json.loads(raw_meta or "{}") if isinstance(raw_meta, str) else {}
+        except Exception:
+            meta = {}
+        if not isinstance(meta, dict) or not meta.get("completed"):
+            continue
+        if str(meta.get("effect") or "") not in {"easier", "started_task"}:
+            continue
+        if str(meta.get("source") or "") == "admin_force_next_day":
+            continue
+        session_id = str(meta.get("daily_session_id") or "")
+        day_key = str(meta.get("local_date") or day_id or "")
+        key = session_id or day_key
+        if key:
+            seen.add(key)
+    if include_current:
+        session_id = str(u.get("daily_session_id") or "")
+        day_key = str(local_date_for_user(u) or u.get("current_day_id") or "")
+        key = session_id or day_key
+        if key:
+            seen.add(key)
+    return len(seen)
+
+
 def _daily_skill_history(u: Dict[str, Any], profile: Dict[str, Any]) -> List[str]:
     history = _profile_list(profile.get("skill_history")) or _profile_list(u.get("skill_history"))
     return [_canonical_daily_skill_id(sid) for sid in history if _canonical_daily_skill_id(sid) in SKILLS_DB]
@@ -5743,15 +6077,16 @@ def _first_available_skill_id(candidates: List[str], blocked: List[str]) -> str:
 def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     profile = profile or {}
     attempt = active_attempt(u)
+    blocked_today = not_fit_today_skills(u, profile)
     mechanism_skill = preferred_skill_for_mechanism(str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or ""))
-    if mechanism_skill in SKILLS_DB:
+    if mechanism_skill in SKILLS_DB and mechanism_skill not in blocked_today:
         skill = dict(SKILLS_DB[mechanism_skill])
         skill.setdefault("skill_id", mechanism_skill)
         skill.setdefault("id", mechanism_skill)
         skill.setdefault("variant", skill.get("variant") or mechanism_skill)
         return skill
     last_skills = _daily_skill_history(u, profile)[-3:]
-    blocked: List[str] = []
+    blocked: List[str] = list(blocked_today)
     for raw_sid in ("name_task_one_word", "open_without_timer", "task_naming", "open_only", "visible_next_step", "one_visible_step"):
         sid = _canonical_daily_skill_id(raw_sid)
         if sid in SKILLS_DB and (last_skills.count(sid) >= 2 or last_skills[-2:] == [sid, sid]):
@@ -5786,10 +6121,10 @@ def build_new_day_intro(
     include_context: bool = True,
 ) -> str:
     if include_context:
-        return new_day_skill_text(skill, profile or {})
+        return new_day_skill_text(skill, profile or {}, u)
     return (
         "Проверим новый вход: не “заставить себя”, а создать условия для старта.\n\n"
-        f"{new_day_skill_card_text(skill)}"
+        f"{new_day_skill_card_text(skill, u)}"
     )
 
 
@@ -5799,25 +6134,20 @@ def should_send_day_intro(u: Dict[str, Any]) -> bool:
 
 def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optional[Dict[str, Any]] = None) -> str:
     skill_name = skill.get("name") or "навык дня"
+    why_short = skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата."
     steps = skill.get("simple") or skill.get("steps") or []
     if isinstance(steps, list) and steps:
-        step_text = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(steps[:3]))
+        step_text = "\n".join(f"{i + 1}. {contextualize_task_text(step, u)}" for i, step in enumerate(steps[:3]))
     else:
-        step_text = skill.get("how") or skill.get("how_more") or "Сделай самый маленький вход в задачу 60–120 секунд."
-    minimum = skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу"
+        step_text = contextualize_task_text(skill.get("how") or skill.get("how_more") or "Сделай самый маленький вход в задачу 60–120 секунд.", u)
+    minimum = contextualize_task_text(skill.get("minimum") or skill.get("minimum_action") or "один маленький вход в задачу", u)
     head = f"{prefix}\n\n" if prefix else ""
-    task_line = f"📌 Дело: {current_task_label(u)}\n\n" if u else ""
-    status_note = str((u or {}).get("current_skill_status_text") or "").strip()
-    status_block = f"Статус проверки:\n{status_note}\n\n" if status_note else ""
     return (
         f"{head}"
-        f"{task_line}"
-        f"{status_block}"
-        f"🧩 Навык дня: {skill_name}\n\n"
-        f"Попробуй:\n{step_text}\n\n"
-        f"Минимум:\n{minimum}\n\n"
-        f"📚 Мини-урок:\n{daily_learning_text(skill)}\n\n"
-        "Что получилось?"
+        f"🧩 Навык: {skill_name}\n\n"
+        f"{why_short}\n\n"
+        f"Сделай:\n{step_text}\n\n"
+        f"Минимум:\n{minimum}"
     )
 
 
@@ -5835,6 +6165,7 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     sid = skill.get("skill_id") or skill.get("id") or plan[day - 1]
     u["day"] = day
     u["stage"] = "training"
+    u["last_day_source"] = source
     u["has_started_training"] = 1
     u["today_started"] = 1
     u["day_closed"] = 0
@@ -5958,7 +6289,7 @@ def closed_day_extra_used_today(u: Dict[str, Any]) -> bool:
 
 
 def next_step_prefix(u: Dict[str, Any], repeat: bool = False, voluntary: bool = False) -> str:
-    task = current_task_title(u, "выбранной задаче")
+    task = current_task_title(u, "важное дело, которое ты сейчас откладываешь")
     step = str(u.get("current_next_physical_step") or "").strip()
     done = int(u.get("done_count") or 0)
     if voluntary:
@@ -7291,10 +7622,15 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
         SHEETS_WEBHOOK_URL,
     )
 
-    text = (
-        f"{config.get('intro')}\n\n"
-        f"{format_skill_card(u, skill, current_task_label(u))}"
-    )
+    if "too_hard" in reason or reason in {"clarification_too_hard", "new_day_too_hard"}:
+        smaller = truly_smaller_step(u)
+        await save_user(u, DB_PATH)
+        text = f"Уменьшаем реально на один уровень. Сейчас только это:\n{smaller}"
+    else:
+        text = (
+            f"{config.get('intro')}\n\n"
+            f"{format_skill_card(u, skill, current_task_label(u))}"
+        )
     mark_action_card_active(u)
     sync_active_attempt(u, bump=True, attempt_status="not_tried", effect_status="unknown", is_closed=False)
     await save_user(u, DB_PATH)
@@ -7456,7 +7792,10 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
         await answer_with_keyboard(m, u, "Другой вариант:", kb_other_options, "more_actions")
         return True
     if kind == "why":
-        await answer_with_keyboard(m, u, day_lock_why_text(), kb_day_core_stop if day_closed_today(u) else kb_training_main, u.get("stage") or "training")
+        sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
+        skill = dict(SKILLS_DB.get(sid) or {})
+        skill.setdefault("skill_id", sid)
+        await answer_with_keyboard(m, u, "📚 Почему это работает:\n\n" + daily_learning_text(skill), kb_day_core_stop if day_closed_today(u) else action_keyboard(), u.get("stage") or "training")
         return True
     if kind == "why_skill":
         await log_event(u["user_id"], u.get("stage", ""), "why_skill_opened", {"source": "global_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -7482,7 +7821,7 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
 
 
 async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
-    target = current_task_title(u, str(u.get("today_target") or "сегодняшняя задача"))
+    target = current_task_title(u, str(u.get("today_target") or "важное дело, которое ты сейчас откладываешь"))
     screen = engine_get_next_screen(u, {"type": "target_submitted", "text": target})
     apply_engine_updates(u, screen)
     u["today_target"] = target
@@ -8287,9 +8626,6 @@ async def main_flow(m: Message):
                 }, source="downscale_done")
                 await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "after_downscale": True, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
                 await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
-                if should_show_day3_offer(u, int(u.get("day") or 1)):
-                    await show_day3_offer(m, u, "day3_auto")
-                    return
                 await send_success_menu(m, u, source="downscale_done")
                 return
 
@@ -8321,9 +8657,6 @@ async def main_flow(m: Message):
                 }, source="downscale_done")
                 await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "after_downscale": True, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
                 await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
-                if should_show_day3_offer(u, int(u.get("day") or 1)):
-                    await show_day3_offer(m, u, "day3_auto")
-                    return
                 await send_success_menu(m, u, source="downscale_name_done")
                 return
         if text in {"💪 Давай действие", "💪 Сделать микрошаг"}:
@@ -8557,7 +8890,7 @@ async def main_flow(m: Message):
     # ============================================================
     if u["stage"] == "trainer_intro":
         low = (text or "").lower()
-        if "да" in low:
+        if "да" in low or "готов" in low:
             # Диагностика: выбор способа
             u["stage"] = "await_input_mode"
             await save_user(u, DB_PATH)
@@ -8571,7 +8904,7 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer("Выбери другого тренера 👇", reply_markup=kb_trainers)
             return
-        await m.answer("Выбери: ✅ Да / ❌ Нет", reply_markup=kb_yes_no)
+        await m.answer("Выбери: ✅ Готов / ✅ Да / ❌ Нет", reply_markup=kb_yes_no)
         return
 
     # ============================================================
@@ -10183,6 +10516,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     analysis_result = build_analysis_result(comp, user_text)
     comp["analysis_result"] = analysis_result
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+    await save_extracted_task_context(u, user_text, source="initial_diagnosis")
     u["bucket"] = comp.get("bucket", bucket)
     plan_ids = build_28_day_plan(u["bucket"])
     recommended_variant = analysis_result.get("recommended_variant")
