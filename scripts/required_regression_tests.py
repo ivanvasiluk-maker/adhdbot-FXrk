@@ -256,6 +256,30 @@ async def test_curator_notification_sends_dm_to_ivan():
         assert "Когда удобно пользователю: сегодня" in fake_bot.sent[0][1]
 
 
+async def test_show_offer_force_enables_offer_prerequisites():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92009
+        u = default_user(uid)
+        u["day"] = 1
+        u["is_test_user"] = 1
+        u["fast_forward_enabled"] = 1
+        await save_user(u, bot.DB_PATH)
+        msg = FakeMessage(uid, "/show_offer")
+        assert await bot.handle_user_command(msg, u, msg.text) is True
+        fresh = await get_user(uid, bot.DB_PATH)
+        profile = await bot.get_user_profile(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh["stage"] == "offer"
+        assert fresh["day"] == 3
+        assert profile.get("completed_days") == [1, 2, 3]
+        assert profile.get("completed_skill_days") == [1, 2, 3]
+        assert profile.get("offer_shown") == 1
+        assert profile.get("offer_seen_at")
+        assert msg.answers
+
+
 async def test_day_intro_is_not_sent_twice():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
@@ -442,6 +466,7 @@ def run():
         test_crisis_redirect_does_not_offer_productivity_skill,
         test_social_support_option_only_when_available,
         test_curator_notification_sends_dm_to_ivan,
+        test_show_offer_force_enables_offer_prerequisites,
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,

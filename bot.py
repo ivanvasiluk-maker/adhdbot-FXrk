@@ -5576,6 +5576,42 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
     return True
 
 
+async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
+    """QA/manual command: enable all offer prerequisites and show the offer now."""
+    u["day"] = max(3, int(u.get("day") or 1))
+    u["is_test_user"] = 1
+    u["fast_forward_enabled"] = 1
+    u["free_mode"] = 0
+    u["last_offer_shown_at"] = None
+    await save_user(u, DB_PATH)
+    await update_user_profile(
+        u["user_id"],
+        {
+            "completed_days": [1, 2, 3],
+            "completed_skill_days": [1, 2, 3],
+            "offer_shown": 0,
+            "offer_seen_at": None,
+            "force_show_offer_enabled": 1,
+        },
+        DB_PATH,
+        source=source,
+    )
+    await log_event(u["user_id"], u.get("stage", ""), "show_offer_forced", {"source": source, "day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await show_day3_offer(m, u, source)
+    await update_user_profile(
+        u["user_id"],
+        {
+            "completed_days": [1, 2, 3],
+            "completed_skill_days": [1, 2, 3],
+            "offer_shown": 1,
+            "offer_seen_at": u.get("last_offer_shown_at"),
+            "force_show_offer_enabled": 1,
+        },
+        DB_PATH,
+        source=f"{source}_post_show",
+    )
+
+
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
     """Strict offer gate: never on days 1-2 or via test/force-day shortcuts."""
     if is_paid(u) or int(u.get("free_mode") or 0) == 1:
@@ -7123,7 +7159,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
             await m.answer("Команда доступна в QA-режиме. Отправь /test_access <код> или попроси добавить твой Telegram ID в ADMIN_IDS.")
             return True
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await maybe_show_offer(m, u, "manual_command")
+        await force_show_offer(m, u, "manual_command")
         return True
 
     if command == "/test_access":
@@ -7247,7 +7283,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/show_offer":
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await maybe_show_offer(m, u, "admin_command")
+        await force_show_offer(m, u, "admin_command")
         return True
 
     if command == "/simulate_payment":
@@ -7275,7 +7311,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/show_offer":
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await maybe_show_offer(m, u, "admin_command")
+        await force_show_offer(m, u, "admin_command")
         return True
 
     if command == "/simulate_payment":
