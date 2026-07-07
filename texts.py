@@ -1801,7 +1801,7 @@ kb_doubt_response = ReplyKeyboardMarkup(
 )
 
 kb_yes_no = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")]],
+    keyboard=[[KeyboardButton(text="✅ Готов"), KeyboardButton(text="✅ Да")], [KeyboardButton(text="❌ Нет")]],
     resize_keyboard=True
 )
 

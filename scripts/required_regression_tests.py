@@ -152,6 +152,18 @@ async def test_old_callback_after_day_close_does_not_modify_state():
     assert u["current_skill"] == "open_without_timer"
 
 
+async def test_ready_button_starts_input_mode():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92007; u = default_user(uid); u["stage"] = "trainer_intro"; await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "✅ Готов")
+        await bot.main_flow(m)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh["stage"] == "await_input_mode"
+
+
 async def test_crisis_phrase_stops_regular_skill_flow():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
@@ -365,6 +377,7 @@ def run():
     for fn in [
         test_old_callback_after_skill_change_does_not_modify_state,
         test_old_callback_after_day_close_does_not_modify_state,
+        test_ready_button_starts_input_mode,
         test_crisis_phrase_stops_regular_skill_flow,
         test_crisis_redirect_does_not_offer_productivity_skill,
         test_social_support_option_only_when_available,
