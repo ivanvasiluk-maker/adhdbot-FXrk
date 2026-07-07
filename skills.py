@@ -1851,22 +1851,27 @@ def format_skill(skill_id: str, trainer_key: str):
     if not raw_steps:
         # Fallback to single-step description if no structured steps provided
         raw_steps = [skill.get("how") or ""]
-    steps = "\n".join([f"{i+1}. {s}" for i, s in enumerate(raw_steps) if s])
-    explain = skill.get("explain", "")
-    if trainer_key == "skinny":
-        return f"🧩 {skill['name']}\n\n{steps}\n\nЗачем: {explain}"
-    if trainer_key == "marsha":
-        return (
-            f"🧩 {skill['name']}\n\n{steps}\n\n"
-            f"Зачем: {explain}\n\n"
-            "Ты справишься. Маленький шаг — уже шаг."
-        )
-    if trainer_key == "beck":
-        logic = explain or skill.get("goal", "")
-        return (
-            f"🧩 {skill['name']}\n"
-            f"Почему работает: {logic}\n\n"
-            f"Шаги:\n{steps}\n\n"
-            f"Минимум: {skill.get('minimum', '')}"
-        )
-    return f"🧩 {skill['name']}\n\n{steps}\n\nЗачем: {explain}"
+    clean_steps = []
+    seen = set()
+    for raw in raw_steps:
+        step = " ".join(str(raw or "").strip().split())
+        if not step or step.lower() in seen:
+            continue
+        seen.add(step.lower())
+        clean_steps.append(step)
+        if len(clean_steps) >= 3:
+            break
+    steps = "\n".join([f"{i+1}. {s}" for i, s in enumerate(clean_steps)])
+    explain = skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата."
+    voice = {
+        "beck": "Гипотеза: мысль → эмоция → избегание → последствия. Проверяем следующий маленький эксперимент.",
+        "skinny": "Один короткий подход. Без героизма.",
+        "marsha": "Давай бережно: только маленький вход, без давления на результат.",
+    }.get(trainer_key or "marsha", "Давай бережно: только маленький вход, без давления на результат.")
+    return (
+        f"{voice}\n\n"
+        f"🧩 Навык: {skill['name']}\n\n"
+        f"{explain}\n\n"
+        f"Сделай:\n{steps}\n\n"
+        f"Минимум:\n{skill.get('minimum_action') or skill.get('minimum') or ''}"
+    )

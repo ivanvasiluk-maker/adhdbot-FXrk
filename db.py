@@ -1265,6 +1265,7 @@ USER_FIELDS = [
     "daily_check_in_status",
     "daily_reminder_status",
     "skill_attempts_today",
+    "skill_attempts",
     "streak_counted_today",
     "current_skill_completed_count",
     "daily_replacement_count",
@@ -1290,6 +1291,8 @@ USER_FIELDS = [
     "closed_day_extra_step_date",
     "closed_day_extra_step_count",
     "active_attempt",
+    "active_flow",
+    "last_safe_screen",
     "day_intro_sent",
     "crisis_redirected",
     "crisis_mode",
@@ -1468,9 +1471,12 @@ def default_user(uid: int) -> Dict[str, Any]:
         "daily_skill_name": None,
         "daily_skill_status": None,
         "day_skill_progress": None,
+        "active_flow": None,
+        "last_safe_screen": None,
         "daily_check_in_status": "pending",
         "daily_reminder_status": "enabled",
         "skill_attempts_today": 0,
+        "skill_attempts": [],
         "streak_counted_today": 0,
         "current_skill_completed_count": 0,
         "daily_replacement_count": 0,
@@ -1863,6 +1869,23 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
                 u['active_attempt'] = None
         else:
             u['active_attempt'] = None
+        if 'skill_attempts' in u and u.get('skill_attempts'):
+            try:
+                parsed = json.loads(u['skill_attempts']) if isinstance(u['skill_attempts'], str) else u['skill_attempts']
+                u['skill_attempts'] = parsed if isinstance(parsed, list) else []
+            except Exception:
+                u['skill_attempts'] = []
+        else:
+            u['skill_attempts'] = []
+        for json_field in ("active_flow", "last_safe_screen"):
+            if json_field in u and u.get(json_field):
+                try:
+                    parsed = json.loads(u[json_field]) if isinstance(u[json_field], str) else u[json_field]
+                    u[json_field] = parsed if isinstance(parsed, dict) else None
+                except Exception:
+                    u[json_field] = None
+            else:
+                u[json_field] = None
         return sync_user_state_aliases(u)
 
 async def save_user(u: Dict[str, Any], db_path: str):
@@ -1983,6 +2006,7 @@ EXTRA_USER_COLS = {
     "daily_check_in_status": "TEXT DEFAULT 'pending'",
     "daily_reminder_status": "TEXT DEFAULT 'enabled'",
     "skill_attempts_today": "INTEGER DEFAULT 0",
+    "skill_attempts": "TEXT",
     "streak_counted_today": "INTEGER DEFAULT 0",
     "current_skill_completed_count": "INTEGER DEFAULT 0",
     "daily_replacement_count": "INTEGER DEFAULT 0",
@@ -2008,6 +2032,8 @@ EXTRA_USER_COLS = {
     "closed_day_extra_step_date": "TEXT",
     "closed_day_extra_step_count": "INTEGER DEFAULT 0",
     "active_attempt": "TEXT",
+    "active_flow": "TEXT",
+    "last_safe_screen": "TEXT",
     "day_intro_sent": "INTEGER DEFAULT 0",
     "crisis_redirected": "INTEGER DEFAULT 0",
     "crisis_mode": "INTEGER DEFAULT 0",

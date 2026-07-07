@@ -480,12 +480,34 @@ def _target_header_text(today_target: str, user: dict | None = None) -> str:
 
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     """Single compact skill card without duplicated title/minimum/lesson blocks."""
-    steps = [contextualize_task_text(step, user) for step in _skill_steps(skill)][:3]
+    def clean(value: object) -> str:
+        text = " ".join(str(value or "").strip().split())
+        for prefix in ("Навык дня:", "Навык:", "Сделай:", "Минимум:", "Попробуй:", "Делаешь только это:"):
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):].strip()
+        return text
+
+    steps = []
+    seen = set()
+    for step in _skill_steps(skill):
+        item = clean(contextualize_task_text(step, user))
+        if not item or item.lower() in seen:
+            continue
+        seen.add(item.lower())
+        steps.append(item)
+        if len(steps) >= 3:
+            break
     steps_text = "\n".join(f"{idx}. {step}" for idx, step in enumerate(steps, start=1))
-    minimum_action = contextualize_task_text(skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд.", user)
-    why_short = skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата."
-    skill_name = skill.get("name") or "Микро-шаг"
+    minimum_action = clean(contextualize_task_text(skill.get("minimum_action") or skill.get("minimum") or skill.get("micro") or "Открыть задачу на 30 секунд.", user))
+    why_short = clean(skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата.")
+    skill_name = clean(skill.get("name") or "Микро-шаг")
+    trainer_voice = {
+        "beck": "Гипотеза: мысль → эмоция → избегание → последствия. Проверяем следующий маленький эксперимент.",
+        "skinny": "Один короткий подход. Без героизма.",
+        "marsha": "Давай бережно: только маленький вход, без давления на результат.",
+    }.get((user or {}).get("trainer_key") or "marsha")
     return (
+        f"{trainer_voice}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
         f"{why_short}\n\n"
         "Сделай:\n"
@@ -1362,8 +1384,8 @@ kb_done = kb_action_outcome
 
 kb_success_next = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ Ещё 2 минуты")],
-        [KeyboardButton(text="💪 Продолжить тренировку")],
+        [KeyboardButton(text="💪 Закрепить ещё 2 минуты")],
+        [KeyboardButton(text="🧭 Следующий шаг по маршруту")],
         [KeyboardButton(text="🌙 На сегодня достаточно")],
     ],
     resize_keyboard=True,
@@ -1371,7 +1393,7 @@ kb_success_next = ReplyKeyboardMarkup(
 
 kb_success_limit = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💪 Продолжить тренировку")],
+        [KeyboardButton(text="🧭 Следующий шаг по маршруту")],
         [KeyboardButton(text="🌙 На сегодня достаточно")],
     ],
     resize_keyboard=True,
