@@ -599,6 +599,156 @@ def day3_offer_text(main_pattern: str = "сложно войти в действ
 
 
 
+def bucket_type_how_it_looks(bucket: str) -> str:
+    """Signs/symptoms of each procrastination type."""
+    data: dict = {
+        "anxiety": (
+            "— боится ошибиться;\n"
+            "— долго готовится;\n"
+            "— перепроверяет;\n"
+            "— избегает отправки, звонка, начала;\n"
+            "— тревога растёт от важности задачи;\n"
+            "— задача кажется опасной из-за оценки, последствий или неопределённости."
+        ),
+        "low_energy": (
+            "— «не могу», «нет сил», «ничего не имеет смысла»;\n"
+            "— задача ощущается физически тяжёлой;\n"
+            "— человек лежит, откладывает, избегает даже простого;\n"
+            "— стыд после бездействия усиливает отключение;\n"
+            "— часто нет ощущения награды от действия."
+        ),
+        "distractibility": (
+            "— телефон, YouTube, новости, чаты, игры;\n"
+            "— человек открывает задачу, но внимание быстро уходит;\n"
+            "— пытается «собраться», но вместо этого проваливается в стимуляцию;\n"
+            "— много переключений, мало завершений;\n"
+            "— задача может быть не страшной, но скучной, длинной или неструктурированной."
+        ),
+        "mixed": (
+            "— сначала тревога, потом телефон;\n"
+            "— сначала нет сил, потом самокритика;\n"
+            "— важная задача вызывает страх, а отвлечение даёт облегчение;\n"
+            "— человек одновременно устал, тревожен и перегружен;\n"
+            "— одно решение не работает стабильно."
+        ),
+    }
+    return data.get(bucket, data["mixed"])
+
+
+def bucket_type_principle(bucket: str) -> str:
+    """Main principle for each procrastination type."""
+    data: dict = {
+        "anxiety": (
+            "Сначала снизить физиологическое напряжение и цену ошибки.\n"
+            "Потом сделать безопасное приближение к задаче."
+        ),
+        "low_energy": (
+            "Не мотивировать и не требовать эмоций.\n"
+            "Сначала вернуть тело и минимальное движение.\n"
+            "Потом создать один маленький след действия."
+        ),
+        "distractibility": (
+            "Не бороться с силой воли.\n"
+            "Менять среду, уменьшать количество входов в отвлечение, делать возвращение видимым."
+        ),
+        "mixed": (
+            "Сначала определить, что сейчас сильнее:\n"
+            "— тело перегружено;\n"
+            "— тревога высокая;\n"
+            "— нет ясности;\n"
+            "— унесло в стимулы;\n"
+            "— включился стыд.\n\n"
+            "Только потом выбирать навык."
+        ),
+    }
+    return data.get(bucket, data["mixed"])
+
+
+def bucket_moment_skills(bucket: str) -> str:
+    """Skills to use in the moment for each procrastination type."""
+    data: dict = {
+        "anxiety": (
+            "— длинный выдох + стопы в пол;\n"
+            "— назвать страх одной фразой;\n"
+            "— «плохой черновик» без отправки;\n"
+            "— один факт вместо катастрофического прогноза;\n"
+            "— «отправлять не надо, только написать первую строку»;\n"
+            "— выбрать один вопрос, который реально требует ответа."
+        ),
+        "low_energy": (
+            "— вода / встать / открыть окно / сменить положение тела;\n"
+            "— «одна вещь в руках»;\n"
+            "— назвать задачу одним словом;\n"
+            "— сделать действие на 20 секунд;\n"
+            "— «не надо закончить, надо оставить след»;\n"
+            "— выбрать самый дешёвый физический шаг."
+        ),
+        "distractibility": (
+            "— телефон вне руки;\n"
+            "— одно окно / одна вкладка / одна задача;\n"
+            "— таймер 90 секунд;\n"
+            "— заметка «что делать после возврата»;\n"
+            "— экран блокировки с одной фразой;\n"
+            "— «сначала 60 секунд задачи, потом можно решить, нужен ли телефон»."
+        ),
+        "mixed": (
+            "— один вопрос: «что сейчас сильнее?»;\n"
+            "— тело → выдох / вода / встать;\n"
+            "— тревога → плохой черновик / факт вместо приговора;\n"
+            "— отвлечение → телефон вне руки;\n"
+            "— перегруз → выбрать один шаг;\n"
+            "— стыд → факт вместо самоприговора."
+        ),
+    }
+    return data.get(bucket, data["mixed"])
+
+
+def bucket_type_honest_explanation(bucket: str) -> str:
+    """Honest explanation of why the bot selects skills for this type (section 2 of spec)."""
+    data: dict = {
+        "anxiety": (
+            "Я не выбираю навыки случайно.\n"
+            "Сейчас твои ответы больше похожи на тревожный механизм.\n"
+            "Поэтому сначала будем проверять снижение тревоги и безопасное приближение к задаче.\n"
+            "Если навык не подходит, не будем повторять его по кругу — переключимся на другой вход.\n\n"
+            "Похоже, тебе трудно не потому, что ты не знаешь, что делать, а потому что цена ошибки "
+            "ощущается слишком высокой.\n"
+            "Поэтому первые навыки будут не про дисциплину, а про снижение тревоги и безопасное "
+            "приближение к задаче."
+        ),
+        "low_energy": (
+            "Я не выбираю навыки случайно.\n"
+            "Сейчас твои ответы больше похожи на истощённый механизм.\n"
+            "Поэтому сначала будем проверять минимальное физическое действие.\n"
+            "Если навык не подходит, не будем повторять его по кругу — переключимся на другой вход.\n\n"
+            "Сейчас не похоже, что тебе просто нужен план. Похоже, что сама задача требует слишком "
+            "много энергии.\n"
+            "Мы начнём не с продуктивности, а с минимального физического действия, которое возвращает "
+            "чувство контроля."
+        ),
+        "distractibility": (
+            "Я не выбираю навыки случайно.\n"
+            "Сейчас твои ответы больше похожи на отвлекающийся механизм.\n"
+            "Поэтому сначала будем проверять, как меняется старт при изменении среды.\n"
+            "Если навык не подходит, не будем повторять его по кругу — переключимся на другой вход.\n\n"
+            "Похоже, проблема начинается не в самой задаче, а в моменте, когда внимание уходит "
+            "в быстрые стимулы.\n"
+            "Поэтому сначала мы не будем требовать концентрации. Мы проверим, как меняется старт, "
+            "когда среда делает отвлечение чуть менее доступным."
+        ),
+        "mixed": (
+            "Я не выбираю навыки случайно.\n"
+            "Сейчас твои ответы больше похожи на смешанный механизм.\n"
+            "Поэтому сначала будем определять, что сильнее в конкретный момент.\n"
+            "Если навык не подходит, не будем повторять его по кругу — переключимся на другой вход.\n\n"
+            "Похоже, здесь несколько механизмов одновременно: тревога делает задачу тяжёлой, "
+            "а телефон быстро снимает напряжение.\n"
+            "Мы не будем искать одну «главную причину». Будем проверять, что помогает в конкретный момент."
+        ),
+    }
+    return data.get(bucket, data["mixed"])
+
+
 def preliminary_hypothesis_note() -> str:
     return (
         "Пока это предварительная карта.\n\n"
@@ -877,19 +1027,41 @@ def payment_includes_text() -> str:
 
 
 
-def morning_checkin_text(name: str) -> str:
+def morning_checkin_text(name: str = "", day_skill_name: str = "") -> str:
+    skill_line = f"\nТвой навык дня: **{day_skill_name}**.\n" if day_skill_name else "\n"
     return (
-        f"Доброе утро, {name}.\n\n"
-        "Что сегодня больше мешает?\n\n"
-        "Отметь состояние кнопкой или пришли голосовое — и я подберу core skill / версию шага на сегодня."
+        "Доброе утро.\n"
+        "Сегодня не надо «наверстать жизнь».\n"
+        "Достаточно проверить один навык и заметить, где именно становится трудно."
+        f"{skill_line}\n"
+        "Что сейчас ближе?"
     )
 
 
 def evening_checkin_text() -> str:
     return (
-        "Как прошёл день?\n\n"
-        "Важно не идеально.\n"
-        "Важно: был ли хоть один возврат к действию. Можно ответить кнопкой или голосом."
+        "Добрый вечер.\n"
+        "Закрывать день не обязательно, но полезно оставить один след.\n\n"
+        "Что сегодня было ближе?"
+    )
+
+
+def soft_checkin_text(variant: int = 1, anxious: bool = False) -> str:
+    """Soft 6-hour inactivity check-in. Three variants per spec section 4.2."""
+    if anxious:
+        return (
+            "Не нужно объяснять, почему ты пропал.\n\n"
+            "Просто выбери:"
+        )
+    if variant == 2:
+        return (
+            "Проверяю не дисциплину, а состояние.\n\n"
+            "Тебе сейчас нужен:"
+        )
+    return (
+        "Я не видел тебя несколько часов.\n"
+        "Это не значит, что ты сорвался.\n\n"
+        "Что сейчас больше похоже на правду?"
     )
 
 
@@ -908,19 +1080,132 @@ def reactivation_text(count: int) -> str:
 
 kb_morning_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📱 Залипаю"), KeyboardButton(text="🚪 Не могу начать")],
-        [KeyboardButton(text="😵 Нет сил"), KeyboardButton(text="🌀 Всё слишком большое")],
-        [KeyboardButton(text="😬 Тревога")],
+        [KeyboardButton(text="⚡ Есть силы начать")],
+        [KeyboardButton(text="😶 Пока не включился")],
+        [KeyboardButton(text="😣 Уже тревожно")],
+        [KeyboardButton(text="📱 Уже унесло в телефон")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 kb_evening_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ сделал"), KeyboardButton(text="😐 частично")],
-        [KeyboardButton(text="❌ не сделал"), KeyboardButton(text="↩️ срывался, но возвращался")],
+        [KeyboardButton(text="🚪 Я всё-таки начал")],
+        [KeyboardButton(text="🟡 Пробовал, но застрял")],
+        [KeyboardButton(text="📱 Почти весь день уносило")],
+        [KeyboardButton(text="🫠 Не было сил")],
+        [KeyboardButton(text="🌙 Не хочу разбирать, просто закрыть день")],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
+)
+
+# Soft 6-hour inactivity check-in keyboard (spec 4.2 variant 1)
+kb_soft_checkin = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📱 Унесло в телефон")],
+        [KeyboardButton(text="😣 Задача стала тяжёлой")],
+        [KeyboardButton(text="🫠 Нет сил")],
+        [KeyboardButton(text="✅ Я занимался другим важным")],
+        [KeyboardButton(text="🌙 На сегодня уже достаточно")],
+    ],
+    resize_keyboard=True,
+)
+
+# Soft check-in variant 2 (needs/options)
+kb_soft_checkin_v2 = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📌 Один очень маленький шаг")],
+        [KeyboardButton(text="🔄 Другой навык")],
+        [KeyboardButton(text="🫁 Пауза")],
+        [KeyboardButton(text="✅ Ничего, я сам вернусь позже")],
+    ],
+    resize_keyboard=True,
+)
+
+# Soft check-in for anxious user (variant 3)
+kb_soft_checkin_anxious = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😬 Тревожно начинать")],
+        [KeyboardButton(text="📱 Отвлёкся")],
+        [KeyboardButton(text="🧠 Слишком много в голове")],
+        [KeyboardButton(text="✅ Хочу сделать маленький шаг")],
+    ],
+    resize_keyboard=True,
+)
+
+# Reminder opt-out buttons (spec 4.4)
+kb_no_reminders_today = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔕 Не писать сегодня")],
+        [KeyboardButton(text="⏰ Напомни позже")],
+        [KeyboardButton(text="🌙 На сегодня достаточно")],
+        [KeyboardButton(text="✅ Я сам вернусь")],
+    ],
+    resize_keyboard=True,
+)
+
+# Safety: new 3-button check per spec section 8.2
+kb_safety_new_check = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🆘 Да, могу быть в опасности")],
+        [KeyboardButton(text="😟 Не уверен(а)")],
+        [KeyboardButton(text="✅ Я в безопасности, но мне очень плохо")],
+    ],
+    resize_keyboard=True,
+)
+
+# Safety: after "да" or "не уверен" (spec 8.3)
+kb_safety_not_safe_steps = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📞 Я звоню / пишу человеку")],
+        [KeyboardButton(text="👥 Я сейчас не один(одна)")],
+        [KeyboardButton(text="🆘 Нужна экстренная помощь")],
+        [KeyboardButton(text="✅ Я в безопасности сейчас")],
+    ],
+    resize_keyboard=True,
+)
+
+# Safety: after "я в безопасности, но плохо" (spec 8.4)
+kb_safety_bad_but_safe = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🫁 Длинный выдох и стопы на пол")],
+        [KeyboardButton(text="💧 Вода или умыться")],
+        [KeyboardButton(text="👥 Написать одному человеку")],
+        [KeyboardButton(text="🌙 Закрыть день без разбора")],
+    ],
+    resize_keyboard=True,
+)
+
+# Skill result keyboard (spec section 6)
+kb_skill_result = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Стало легче"), KeyboardButton(text="🚪 Начал задачу")],
+        [KeyboardButton(text="😐 Без разницы"), KeyboardButton(text="😣 Слишком сложно")],
+        [KeyboardButton(text="🔄 Нужен другой вход"), KeyboardButton(text="🌙 На сегодня достаточно")],
+    ],
+    resize_keyboard=True,
+)
+
+# Post-skill continuation after positive result (spec section 9)
+kb_skill_continue_positive = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ Ещё 2 минуты")],
+        [KeyboardButton(text="📌 Закрепить и остановиться")],
+        [KeyboardButton(text="🔄 Проверить другой навык")],
+        [KeyboardButton(text="🌙 Закрыть на сегодня")],
+    ],
+    resize_keyboard=True,
+)
+
+# Post-skill continuation after neutral/negative result (spec section 9)
+kb_skill_continue_negative = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🫁 Сначала успокоиться")],
+        [KeyboardButton(text="📵 Убрать отвлечение")],
+        [KeyboardButton(text="📌 Сделать шаг ещё меньше")],
+        [KeyboardButton(text="🌙 На сегодня достаточно")],
+    ],
+    resize_keyboard=True,
 )
 
 
@@ -941,6 +1226,44 @@ def notifications_consent_text() -> str:
         "— если ты пропадёшь, мягко вернуть\n\n"
         "Можно отключить в любой момент."
     )
+
+
+# ============================================================
+# SAFETY FLOW TEXTS (spec section 8)
+# ============================================================
+
+SAFETY_NEW_CHECK_TEXT = (
+    "Я слышу, что тебе сейчас очень тяжело.\n\n"
+    "Сейчас не будем разбирать задачу и не будем требовать действий.\n"
+    "Мне важно сначала понять, в безопасности ли ты.\n\n"
+    "Ты сейчас можешь причинить себе вред или боишься, что не справишься в ближайшие часы?"
+)
+
+SAFETY_NOT_SAFE_TEXT = (
+    "Пожалуйста, не оставайся сейчас один(одна) с этим.\n\n"
+    "Сделай один шаг безопасности:\n"
+    "— позвони в экстренную службу;\n"
+    "— позвони человеку, который может быть рядом;\n"
+    "— напиши кому-то: «Мне очень плохо, побудь со мной на связи»;\n"
+    "— перейди туда, где есть люди.\n\n"
+    "Бот не заменяет экстренную помощь."
+)
+
+SAFETY_CONFIRMED_TEXT = (
+    "Хорошо. Сейчас не нужно возвращаться к задаче.\n"
+    "На сегодня достаточно.\n"
+    "Когда станет стабильнее, бот поможет снова выбрать маленький шаг."
+)
+
+SAFETY_BAD_BUT_SAFE_TEXT = (
+    "Хорошо. Тогда не будем сейчас чинить всю жизнь и не будем требовать продуктивности.\n\n"
+    "Выбери, что тебе доступнее на ближайшие 60 секунд:"
+)
+
+SAFETY_BAD_AFTER_STEP_TEXT = (
+    "Сейчас важнее состояние, чем задача.\n"
+    "Можно вернуться к тренировке позже — без штрафа и без объяснений."
+)
 
 
 def user_help_text() -> str:
