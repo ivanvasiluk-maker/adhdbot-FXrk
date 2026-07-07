@@ -1071,11 +1071,17 @@ def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str
 
 def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = "marsha") -> str:
     """Expand only the current analysis with facts and hypotheses separated."""
+    from texts import bucket_type_honest_explanation
+    bucket = str(comp.get("bucket") or "mixed")
+    if bucket not in ("anxiety", "low_energy", "distractibility", "mixed"):
+        bucket = "mixed"
+    honest_block = "\n\n---\n\n" + bucket_type_honest_explanation(bucket)
+
     analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
     details_by_trainer = analysis_result.get("detailed_analysis_by_trainer") if isinstance(analysis_result.get("detailed_analysis_by_trainer"), dict) else {}
     scripted = details_by_trainer.get(trainer_key) or details_by_trainer.get("marsha")
     if scripted:
-        return str(scripted)
+        return str(scripted) + honest_block
 
     pattern = str(comp.get("live_pattern") or "default_start_block")
     core_hypothesis = _analysis_result_core_hypothesis(pattern)
@@ -1087,11 +1093,11 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
             "Пока у меня мало данных, поэтому не буду делать вид, что всё понял. "
             "Давай уточним 3 короткими вопросами — и я соберу первую рабочую модель.\n\n"
             "Это пока не диагноз и не окончательный вывод. Это рабочий цикл, который мы проверяем по твоим действиям."
-        )
+        ) + honest_block
     recommended_variant = str((comp.get("analysis_result") or {}).get("recommended_variant") or _recommended_skill_for_pattern(pattern).get("recommended_variant") or "open_only")
     skills_focus = comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else []
     details = _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus)
-    return details.get(trainer_key) or details["marsha"]
+    return (details.get(trainer_key) or details["marsha"]) + honest_block
 
 
 def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Dict[str, Any]] = None) -> str:
