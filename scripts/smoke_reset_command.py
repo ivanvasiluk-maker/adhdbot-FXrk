@@ -69,8 +69,15 @@ async def main() -> None:
             u["trial_phase"] = "paid"
             u["access_status"] = "paid"
             u["paid_until"] = "2099-01-01T00:00:00Z"
+            u["day"] = 3
+            u["offer_shown"] = 1
+            u["last_offer_shown_at"] = "2026-06-01T00:03:00Z"
             u["profile_json"] = {
                 "best_skill": "open_only",
+                "completed_days": [1, 2, 3],
+                "completed_skill_days": [1, 2, 3],
+                "offer_shown": 1,
+                "offer_seen_at": "2026-06-01T00:03:00Z",
                 "successful_skills": ["open_only"],
                 "user_model_events": [{"event_type": "intervention_helpful", "source_skill_id": "open_only"}],
             }
@@ -94,6 +101,11 @@ async def main() -> None:
             saved = await get_user(uid, db_path)
             assert saved["stage"] == "start"
             assert saved["current_task_title"] is None
+            assert saved.get("current_task_name") is None
+            assert saved.get("current_task_object") is None
+            assert saved.get("current_deadline") is None
+            assert saved.get("current_task_next_step") is None
+            assert saved.get("current_task_fear") is None
             assert saved["points"] == 0
             assert saved["streak"] == 0
             assert saved["done_count"] == 0
@@ -104,9 +116,16 @@ async def main() -> None:
             assert saved["trial_phase"] == "trial3"
             assert saved["access_status"] == "trial"
             assert saved["paid_until"] is None
+            assert saved["day"] == 1
+            assert saved["last_offer_shown_at"] is None
             profile_json = json.loads(saved["profile_json"]) if isinstance(saved["profile_json"], str) else saved["profile_json"]
+            assert not profile_json.get("completed_days")
+            assert not profile_json.get("completed_skill_days")
+            assert not profile_json.get("offer_shown")
+            assert not profile_json.get("offer_seen_at")
             assert not profile_json.get("successful_skills")
             assert not profile_json.get("user_model_events")
+            assert bot.can_show_offer(saved, profile_json) is False
             async with bot.aiosqlite.connect(db_path) as db:
                 for table in ("events", "user_days", "skill_attempts", "action_events", "user_feedback", "user_tasks", "user_sessions"):
                     count = (await (await db.execute(f"SELECT COUNT(*) FROM {table} WHERE user_id=?", (uid,))).fetchone())[0]

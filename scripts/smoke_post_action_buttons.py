@@ -179,8 +179,9 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         not_my_msg = await send(uid, "🤷 Не моё")
-        assert "Это не откат" in last_text(not_my_msg), last_text(not_my_msg)
-        assert "Новый навык" in last_text(not_my_msg), last_text(not_my_msg)
+        assert "Навык заменён" in last_text(not_my_msg), last_text(not_my_msg)
+        assert last_text(not_my_msg).count("🧩 Навык:") == 1, last_text(not_my_msg)
+        assert last_text(not_my_msg).count("Минимум:") == 1, last_text(not_my_msg)
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_not_fit_reason") == "not_my_skill", profile
         assert profile.get("last_not_fit_skill"), profile
@@ -209,10 +210,10 @@ async def run() -> None:
         stale_repeat_msg = await send(uid, "🔁 Ещё круг")
         assert "день уже закрыт, и минимум ты выполнил" in last_text(stale_repeat_msg).lower(), last_text(stale_repeat_msg)
         assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {"✅ Да, ещё один короткий шаг", "🌙 Нет, оставить день закрытым"}
-        assert "Навык дня" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
+        assert "🧩 Навык:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
         voluntary_msg = await send(uid, "✅ Да, ещё один короткий шаг")
         assert "Добровольный короткий подход" in last_text(voluntary_msg), last_text(voluntary_msg)
-        assert "Навык дня" in last_text(voluntary_msg), last_text(voluntary_msg)
+        assert "🧩 Навык:" in last_text(voluntary_msg), last_text(voluntary_msg)
 
         u = await get_user(uid, db_path)
         u.update({"stage": "ask_name", "name": ""})
@@ -229,7 +230,7 @@ async def run() -> None:
         await save_user(u, db_path)
         action_with_stuck_msg = await send(uid, "💪 Давай действие")
         assert "Я услышал" in last_text(action_with_stuck_msg), last_text(action_with_stuck_msg)
-        assert "Навык дня" not in last_text(action_with_stuck_msg), last_text(action_with_stuck_msg)
+        assert "🧩 Навык:" not in last_text(action_with_stuck_msg), last_text(action_with_stuck_msg)
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         training_map_msg = await send(uid, "🧭 Моя карта")
@@ -261,15 +262,18 @@ async def run() -> None:
         phone_text = last_text(phone_msg)
         assert "Телефон / YouTube / новости" in phone_text, phone_text
         assert "Убрать телефон вне руки" in phone_text, phone_text
-        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 На сегодня достаточно", "⚙️ Другой вариант"}
+        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 На сегодня достаточно", "⚙️ Другой вариант", "📚 Почему это работает"}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
-        assert "Зафиксируем честно" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
-        assert {"✅ Сделал — стало легче", "😐 Сделал — но легче не стало", "🚪 Сделал — начал задачу", "🟡 Не получилось", "🤷 Не мой навык", "😣 Слишком сложно", "🔄 Нужен другой вход", "⏳ Не пробовал / не успел"}.issubset(keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]))
-        no_relief_msg = await send(uid, "😐 Сделал — но легче не стало")
-        assert "не стало" in last_text(no_relief_msg).lower()
+        assert "Что получилось?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
+        assert keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Попробовал, но не вышло", "🔄 Нужен другой вход", "⏳ Не успел / не пробовал"}
+        effect_msg = await send(uid, "✅ Сделал")
+        assert "Что изменилось после шага?" in last_text(effect_msg), last_text(effect_msg)
+        assert keyboard_texts(effect_msg.answers[-1]["reply_markup"]) == {"🚪 Начал задачу", "✅ Стало легче", "😐 Пока без разницы"}
+        no_relief_msg = await send(uid, "😐 Пока без разницы")
+        assert "шаг сделан" in last_text(no_relief_msg).lower() or "не буду считать" in last_text(no_relief_msg).lower()
         profile = await get_user_profile(uid, db_path)
-        assert profile.get("last_skill_effect") == "not_helpful", profile
+        assert profile.get("last_skill_effect") == "no_change", profile
         assert "successful_skills" not in profile or not profile.get("successful_skills"), profile
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
@@ -304,7 +308,7 @@ async def run() -> None:
         assert "Это не откат" in repeated_text, repeated_text
         assert "даже маленький шаг к задаче слишком дорогой" in repeated_text, repeated_text
         assert "положи ладонь на стол" in repeated_text, repeated_text
-        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 На сегодня достаточно", "⚙️ Другой вариант"}
+        assert keyboard_texts(repeated_cognitive_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 На сегодня достаточно", "⚙️ Другой вариант", "📚 Почему это работает"}
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_not_fit_skill"), profile
         assert profile.get("last_not_fit_reason") in {"overwhelm", "shame", "phone", "energy", "not_my_skill"}, profile
@@ -330,9 +334,11 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         success_msg = await send(uid, "✅ Сделал")
-        assert "Зафиксируем честно" in last_text(success_msg), last_text(success_msg)
-        success_msg = await send(uid, "✅ Сделал — стало легче")
-        assert "Есть первый сигнал" in last_text(success_msg), last_text(success_msg)
+        assert "Что получилось?" in last_text(success_msg), last_text(success_msg)
+        success_msg = await send(uid, "✅ Сделал")
+        assert "Что изменилось после шага?" in last_text(success_msg), last_text(success_msg)
+        success_msg = await send(uid, "✅ Стало легче")
+        assert "первый сигнал" in last_text(success_msg), last_text(success_msg)
         assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "💪 Продолжить тренировку", "🌙 На сегодня достаточно"}
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")

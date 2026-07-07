@@ -110,10 +110,10 @@ async def main() -> None:
             user, blocked_msg = await send(uid, "💪 Давай действие")
             assert user["current_day_id"] == day_id
             assert "Хочешь сделать ещё один короткий добровольный подход?" in joined(blocked_msg)
-            assert "🧩 Навык дня" not in joined(blocked_msg)
+            assert "🧩 Навык:" not in joined(blocked_msg)
             user, voluntary_msg = await send(uid, "✅ Да, ещё один короткий шаг")
             assert "Добровольный короткий подход" in joined(voluntary_msg)
-            assert "🧩 Навык дня" in joined(voluntary_msg)
+            assert "🧩 Навык:" in joined(voluntary_msg)
             user, second_extra_msg = await send(uid, "💪 Давай действие")
             assert "добровольный дополнительный подход сегодня уже был" in joined(second_extra_msg)
 
@@ -122,11 +122,13 @@ async def main() -> None:
             user, force_msg = await send(uid, "/force_next_day")
             assert "Тестовый переход выполнен. Открыт День 2." in joined(force_msg)
             assert "🌱 Новый день" in force_msg.answers[-2]
-            assert "🧩 Навык дня" not in force_msg.answers[-2]
+            assert "🧩 Навык:" not in force_msg.answers[-2]
             assert "🌱 Новый день" not in force_msg.answers[-1]
             assert "Вчера мы увидели" not in force_msg.answers[-1]
-            assert "🧩 Навык дня" in force_msg.answers[-1]
-            assert "📚 Мини-урок" in force_msg.answers[-1]
+            assert "🧩 Навык:" in force_msg.answers[-1]
+            assert "🧩 Навык:" in force_msg.answers[-1]
+            assert "Минимум:" in force_msg.answers[-1]
+            assert "📚 Мини-урок" not in force_msg.answers[-1]
             assert user["current_day_id"] != day_id
             assert int(user.get("done_count") or 0) == before_done
             assert int(user.get("skill_attempts_today") or 0) == 0
