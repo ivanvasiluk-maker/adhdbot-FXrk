@@ -18,12 +18,21 @@ from texts import format_skill_card  # noqa: E402
 
 
 class FakeFromUser:
-    def __init__(self, user_id: int): self.id = user_id
+    def __init__(self, user_id: int):
+        self.id = user_id
+        self.username = f"qa_{user_id}"
+        self.first_name = "QA"
+
+
+class FakeChat:
+    def __init__(self, chat_id: int):
+        self.id = chat_id
 
 
 class FakeMessage:
     def __init__(self, user_id: int, text: str = ""):
         self.from_user = FakeFromUser(user_id)
+        self.chat = FakeChat(user_id)
         self.text = text
         self.voice = None
         self.bot = None
@@ -284,6 +293,149 @@ async def test_day_intro_is_not_sent_twice():
         assert "🌱 Новый день" not in "\n".join(m2.answers)
 
 
+def test_should_show_day3_offer_after_test_access():
+    """After /test_access (is_test_user=1, payment_status=test), the day-3 offer
+    must still auto-trigger in test mode.  It should only be suppressed once the
+    user completes the actual payment flow (full_mode=1)."""
+    from db import default_user as du
+    # Simulate user state after /test_access
+    u_test = du(99801)
+    u_test["is_test_user"] = 1
+    u_test["payment_status"] = "test"
+    u_test["trial_phase"] = "paid"
+    u_test["fast_forward_enabled"] = 1
+    u_test["full_mode"] = 0
+    u_test["free_mode"] = 0
+    assert bot.should_show_day3_offer(u_test, 3), (
+        "Offer should auto-trigger for test users after /test_access (full_mode=0)"
+    )
+
+    # After /simulate_payment full_mode is set to 1 — offer must be suppressed
+    u_paid = dict(u_test)
+    u_paid["full_mode"] = 1
+    assert not bot.should_show_day3_offer(u_paid, 3), (
+        "Offer must NOT auto-trigger once full_mode=1 (payment completed)"
+    )
+
+    # Free-mode users must never see the offer
+    u_free = dict(u_test)
+    u_free["free_mode"] = 1
+    assert not bot.should_show_day3_offer(u_free, 3), (
+        "Offer must NOT auto-trigger for free-mode users"
+    )
+
+
+def test_day3_offer_low_data_stays_honest():
+    summary = {"done_count": 1, "skill_map": {"skills": []}}
+    profile = {"successful_skills": ["open_only"]}
+    text = bot.day3_personal_offer_text(summary, profile)
+    assert "У нас появились первые гипотезы" in text
+    assert "первый рабочий вход" not in text
+    assert "мы уже увидели твой паттерн" not in text.lower()
+    assert "не потерять темп" not in text.lower()
+
+
+def test_day3_offer_after_three_attempts_uses_real_facts():
+    summary = {
+        "done_count": 4,
+        "main_hypothesis": "проверить вход через плохой черновик",
+        "attention_pattern": "scroll_autopilot",
+        "attention_escape_count": 2,
+        "skill_map": {
+            "skills": [
+                {"skill_id": "open_only", "title": "Открыть задачу", "attempt_count": 3, "completed_count": 2, "helpful_count": 2, "stuck_count": 0},
+                {"skill_id": "bad_draft_entry", "title": "Плохой черновик", "attempt_count": 2, "completed_count": 0, "helpful_count": 0, "stuck_count": 2},
+            ]
+        },
+    }
+    profile = {}
+    text = bot.day3_personal_offer_text(summary, profile)
+    assert "Что уже видно:" in text
+    assert "— попыток: 4;" in text
+    assert "— дало облегчение: Открыть задачу (2 раз)" in text
+    assert "— пока не помогло: Плохой черновик (2 раз)" in text
+    assert "— следующий эксперимент: проверить вход через плохой черновик." in text
+    assert "путь с куратором" not in text.lower()
+    assert "не потерять темп" not in text.lower()
+
+
+async def test_completed_profile_start_resumes_without_onboarding():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 92007
+        u = default_user(uid)
+        u.update({
+            "name": "Иван",
+            "trainer_key": "beck",
+            "stage": "start",
+            "day": 3,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "is_test_user": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+        })
+        await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "/start")
+        await bot.cmd_start(m)
+        bot.DB_PATH = old
+        joined = "\n".join(m.answers)
+        assert "Как к тебе обращаться?" not in joined
+        assert "Выбери тренера" not in joined
+        assert "Готов начать разбор и перейти к первому дню?" not in joined
+        assert "Продолжаем с того места, где остановились." in joined
+
+
+async def test_force_next_day_and_set_day_keep_saved_profile_state():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 92008
+        u = default_user(uid)
+        u.update({
+            "name": "Иван",
+            "trainer_key": "beck",
+            "notifications_enabled": 1,
+            "stage": "training",
+            "day": 2,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "is_test_user": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+            "current_task_title": "дописать письмо",
+            "done_count": 2,
+        })
+        await save_user(u, bot.DB_PATH)
+        msg_next = FakeMessage(uid, "/force_next_day")
+        assert await bot.handle_admin_command(msg_next, u, "/force_next_day")
+        fresh = await get_user(uid, bot.DB_PATH)
+        assert fresh["name"] == "Иван"
+        assert fresh["trainer_key"] == "beck"
+        assert fresh["current_task_title"] == "дописать письмо"
+        assert int(fresh.get("attempts_count") or 0) >= 2
+        msg_set = FakeMessage(uid, "/set_day 3")
+        assert await bot.handle_admin_command(msg_set, fresh, "/set_day 3")
+        updated = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert updated["name"] == "Иван"
+        assert updated["trainer_key"] == "beck"
+        assert updated["current_task_title"] == "дописать письмо"
+        assert int(updated.get("day") or 0) == 3
+        assert int(updated.get("profile_completed") or 0) == 1
+
+
 def run():
     for fn in [
         test_rendered_skill_card_has_one_title_and_one_minimum,
@@ -302,6 +454,9 @@ def run():
         test_skill_confidence_levels,
         test_last_user_mechanism_overrides_old_hypothesis,
         test_anxiety_does_not_select_phone_distraction_skill,
+        test_should_show_day3_offer_after_test_access,
+        test_day3_offer_low_data_stays_honest,
+        test_day3_offer_after_three_attempts_uses_real_facts,
     ]: fn()
     for fn in [
         test_old_callback_after_skill_change_does_not_modify_state,
@@ -313,6 +468,8 @@ def run():
         test_curator_notification_sends_dm_to_ivan,
         test_show_offer_force_enables_offer_prerequisites,
         test_day_intro_is_not_sent_twice,
+        test_completed_profile_start_resumes_without_onboarding,
+        test_force_next_day_and_set_day_keep_saved_profile_state,
     ]: asyncio.run(fn())
     print("[TEST] required regressions OK")
 
