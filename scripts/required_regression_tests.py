@@ -35,9 +35,17 @@ class FakeMessage:
         self.chat = FakeChat(user_id)
         self.text = text
         self.voice = None
+        self.bot = None
         self.answers: list[str] = []
     async def answer(self, text: str, **kwargs):
         self.answers.append(str(text)); return None
+
+
+class FakeTelegramBot:
+    def __init__(self):
+        self.sent: list[tuple[int, str]] = []
+    async def send_message(self, chat_id: int, text: str, **kwargs):
+        self.sent.append((chat_id, str(text))); return None
 
 
 class FakeCallback:
@@ -106,6 +114,38 @@ def test_not_fit_today_blocks_mechanism_skill_selection():
     profile = {"not_fit_today": {today: ["phone_away_3_min"]}}
     skill = bot.select_daily_skill(u, profile)
     assert skill["skill_id"] != "phone_away_3_min"
+
+
+def test_can_show_offer_strict_day_gate():
+    u = default_user(1)
+    profile = {"completed_days": [1, 2], "completed_skill_days": [1, 2]}
+    u["day"] = 1
+    assert bot.can_show_offer(u, profile) is False
+    u["day"] = 2
+    assert bot.can_show_offer(u, profile) is False
+    u["day"] = 3
+    assert bot.can_show_offer(u, profile) is False
+    profile = {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3]}
+    assert bot.can_show_offer(u, profile) is True
+    profile["offer_shown"] = 1
+    assert bot.can_show_offer(u, profile) is False
+
+
+def test_set_day_3_alone_does_not_show_offer():
+    u = default_user(1)
+    u["day"] = 3
+    assert bot.can_show_offer(u, {}) is False
+
+
+def test_curator_contact_points_to_ivan():
+    u = default_user(1)
+    text = bot.curator_path_text(u, {})
+    assert bot.CURATOR_TELEGRAM_ID == 312112015
+    assert "https://t.me/Ivan_Vasiliuk" in text
+
+
+def test_curator_path_removes_extra_reply_buttons():
+    assert bot.curator_path_reply_markup().__class__.__name__ == "ReplyKeyboardRemove"
 
 
 def test_skill_confidence_levels():
@@ -198,6 +238,22 @@ async def test_social_support_option_only_when_available():
         await bot.mark_social_support_entry_shown(u)
         assert await bot.maybe_social_support_entry_option(u) == []
         bot.DB_PATH = old
+
+
+async def test_curator_notification_sends_dm_to_ivan():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92008; u = default_user(uid); await save_user(u, bot.DB_PATH)
+        fake_message = FakeMessage(uid)
+        fake_bot = FakeTelegramBot()
+        fake_message.bot = fake_bot
+        assert await bot.notify_curator_map_review(fake_message, u, {}, "test", "сегодня") is True
+        bot.DB_PATH = old
+        assert fake_bot.sent
+        assert fake_bot.sent[0][0] == 312112015
+        assert "Заявка на живой разбор карты" in fake_bot.sent[0][1]
+        assert "Когда удобно пользователю: сегодня" in fake_bot.sent[0][1]
 
 
 async def test_day_intro_is_not_sent_twice():
@@ -367,6 +423,10 @@ def run():
         test_not_my_skill_maps_to_not_suitable_now,
         test_not_fit_today_status_wording,
         test_not_fit_today_blocks_mechanism_skill_selection,
+        test_can_show_offer_strict_day_gate,
+        test_set_day_3_alone_does_not_show_offer,
+        test_curator_contact_points_to_ivan,
+        test_curator_path_removes_extra_reply_buttons,
         test_skill_confidence_levels,
         test_last_user_mechanism_overrides_old_hypothesis,
         test_anxiety_does_not_select_phone_distraction_skill,
@@ -381,6 +441,7 @@ def run():
         test_crisis_phrase_stops_regular_skill_flow,
         test_crisis_redirect_does_not_offer_productivity_skill,
         test_social_support_option_only_when_available,
+        test_curator_notification_sends_dm_to_ivan,
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,

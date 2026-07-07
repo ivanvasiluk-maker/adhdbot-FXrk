@@ -26,7 +26,7 @@ from typing import Dict, Any, Optional, List
 
 import aiosqlite
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message, CallbackQuery, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
@@ -97,6 +97,11 @@ def env_bool(name: str, default: str = "") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on", "debug", "check"}
 
 
+def env_int(name: str, default: str = "0") -> int:
+    raw = os.getenv(name, default).strip()
+    return int(raw) if raw.isdigit() else int(default)
+
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
@@ -111,6 +116,17 @@ PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
 PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
 ENABLE_PAYMENTS = env_bool("ENABLE_PAYMENTS")
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "").strip()
+CURATOR_TELEGRAM_ID = env_int("CURATOR_TELEGRAM_ID", "312112015")
+CURATOR_USERNAME = os.getenv("CURATOR_USERNAME", "Ivan_Vasiliuk").strip().lstrip("@")
+
+
+def curator_contact_url() -> str:
+    return f"https://t.me/{CURATOR_USERNAME}" if CURATOR_USERNAME else ""
+
+
+def curator_path_reply_markup() -> ReplyKeyboardRemove:
+    """Live-review offer message must not leave the day-menu reply keyboard on screen."""
+    return ReplyKeyboardRemove()
 
 # Unlock full flow while testing (set TEST_MODE=1)
 TEST_MODE = env_bool("TEST_MODE")
@@ -528,6 +544,60 @@ kb_map_with_trainer = ReplyKeyboardMarkup(
 def is_free_after_day3(u: Dict[str, Any]) -> bool:
     return int(u.get("free_mode") or 0) == 1 and calendar_program_day(u) >= 3 and not is_paid(u)
 
+
+
+def _profile_day_list(value: Any) -> List[int]:
+    if isinstance(value, list):
+        raw = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            raw = parsed if isinstance(parsed, list) else []
+        except Exception:
+            raw = []
+    else:
+        raw = []
+    days: List[int] = []
+    for item in raw:
+        try:
+            day = int(item)
+        except (TypeError, ValueError):
+            continue
+        if day not in days:
+            days.append(day)
+    return sorted(days)
+
+
+def _with_day(days: List[int], day: int) -> List[int]:
+    return sorted({*days, int(day)})
+
+
+def completed_days_for_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> List[int]:
+    profile = profile or {}
+    return _profile_day_list(profile.get("completed_days") or u.get("completed_days"))
+
+
+def completed_skill_days_for_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> List[int]:
+    profile = profile or {}
+    return _profile_day_list(profile.get("completed_skill_days") or u.get("completed_skill_days"))
+
+
+def offer_was_shown(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> bool:
+    profile = profile or {}
+    return bool(profile.get("offer_shown") or u.get("offer_shown") or profile.get("offer_seen_at") or u.get("last_offer_shown_at"))
+
+
+def can_show_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> bool:
+    profile = profile or {}
+    current_day = int(u.get("day") or u.get("current_day") or 1)
+    completed_days = set(completed_days_for_offer(u, profile))
+    completed_skill_days = set(completed_skill_days_for_offer(u, profile))
+    return (
+        current_day >= 3
+        and {1, 2, 3}.issubset(completed_days)
+        and {1, 2, 3}.issubset(completed_skill_days)
+        and not offer_was_shown(u, profile)
+    )
 
 def offer_shown_today(u: Dict[str, Any]) -> bool:
     raw = u.get("last_offer_shown_at")
@@ -5421,7 +5491,9 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
     """Show the adaptive day-3 map and paid continuation offer."""
     u["stage"] = "offer"
     set_current_state(u, STATE_OFFER_SCREEN, close_action=True)
-    u["last_offer_shown_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    offer_seen_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    u["last_offer_shown_at"] = offer_seen_at
+    u["offer_shown"] = 1
     set_last_explanation_context(
         u,
         "offer",
@@ -5431,6 +5503,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "Реши: продолжать коротко или включить полный режим."
     )
     await save_user(u, DB_PATH)
+    await update_user_profile(u["user_id"], {"offer_shown": 1, "offer_seen_at": offer_seen_at}, DB_PATH, source="offer_shown")
 
     profile = await get_user_profile(u["user_id"], DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
@@ -5481,26 +5554,38 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
 
     await answer_with_inline_screen(m, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(u["user_id"]), "offer")
 
-def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
-    """Day 3 offer is shown only for unpaid users outside free mode.
+def _profile_from_user_for_offer(u: Dict[str, Any]) -> Dict[str, Any]:
+    raw = u.get("profile_json") or {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
 
-    Admin fast-forward (testmode/flag) allows testing offer path without waiting 3 days.
-    In test mode we check full_mode (set only by grant_paid_access / /simulate_payment) rather
-    than is_paid, because /test_access sets is_test_user=1 and payment_status="test" which would
-    make is_paid() return True and permanently block the offer auto-trigger for testers.
-    """
-    if day_core_test_mode_enabled(u):
-        if int(u.get("full_mode") or 0) == 1 or int(u.get("free_mode") or 0) == 1:
-            return False
-        return True
-    if offer_shown_today(u):
+
+async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    if not should_show_day3_offer({**u, "profile_json": profile}, int(u.get("day") or 1)):
+        await log_event(u["user_id"], u.get("stage", ""), "offer_blocked_by_guard", {"source": source, "day": int(u.get("day") or 1), "completed_days": completed_days_for_offer(u, profile), "completed_skill_days": completed_skill_days_for_offer(u, profile), "offer_shown": offer_was_shown(u, profile)}, DB_PATH, SHEETS_WEBHOOK_URL)
         return False
-    state = dict(u)
-    state["day"] = calendar_program_day(state)
-    if not engine_should_show_offer(state):
+    await show_day3_offer(m, u, source)
+    return True
+
+
+def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
+    """Strict offer gate: never on days 1-2 or via test/force-day shortcuts."""
+    if is_paid(u) or int(u.get("free_mode") or 0) == 1:
         return False
     has_payment_url = bool(PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)
-    return ENABLE_PAYMENTS or has_payment_url
+    if not (ENABLE_PAYMENTS or has_payment_url):
+        return False
+    state = dict(u)
+    state["day"] = int(day or state.get("day") or 1)
+    return can_show_offer(state, _profile_from_user_for_offer(state))
 
 
 def is_admin(user_id: int) -> bool:
@@ -5636,6 +5721,7 @@ def curator_path_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
     summary = build_profile_map_summary(u, profile)
     attempts = day3_attempt_count(summary, profile)
     map_points = "\n".join(f"• {x}" for x in _day3_offer_profile_points(summary, profile)[:3])
+    curator_contact = curator_contact_url() or "куратору"
     return (
         "👤 Живой разбор карты\n\n"
         "Сейчас бот не продаёт эту опцию как готовую услугу: у меня не зафиксированы специалист, срок ответа и стоимость.\n"
@@ -5643,8 +5729,48 @@ def curator_path_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
         "Ты можешь продолжать в базовом или полном режиме без этой опции.\n\n"
         f"Если позже появится оформленный живой разбор, в заявку попадут только реальные факты:\n{map_points}\n"
         f"• попыток/проверок: {attempts};\n"
-        f"• следующий эксперимент: {_offer_next_experiment(summary, profile)}."
+        f"• первый рабочий вход: {working_entry}.\n\n"
+        "Куратор поможет выбрать главный механизм на ближайшую неделю: тревога, страх ошибки, перегруз, невозможность выбора, самокритика, быстрые награды или потеря смысла.\n\n"
+        f"Следующий шаг: напиши одним сообщением, когда тебе удобно получить разбор карты: сегодня / завтра / на выходных. "
+        f"Я отправлю заявку Ивану и дам прямой контакт: {curator_contact}"
     )
+
+
+def curator_review_notification_text(u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> str:
+    summary = build_profile_map_summary(u, profile)
+    map_points = "\n".join(f"• {x}" for x in _day3_offer_profile_points(summary, profile)[:3])
+    username = str(u.get("username") or "").strip()
+    user_link = f"@{username}" if username else f"id:{u.get('user_id')}"
+    note_line = f"\n\nКогда удобно пользователю: {note[:240]}" if note else ""
+    return (
+        "👤 Заявка на живой разбор карты\n\n"
+        f"Пользователь: {user_link}\n"
+        f"ID: {u.get('user_id')}\n"
+        f"День: {u.get('day')}\n"
+        f"Источник: {source}\n\n"
+        f"Карта:\n{map_points}"
+        f"{note_line}"
+    )
+
+
+async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> bool:
+    """Send a curator-review request to the configured Telegram account when possible."""
+    if not CURATOR_TELEGRAM_ID:
+        return False
+    bot_obj = getattr(sender, "bot", None)
+    if bot_obj is None and getattr(sender, "message", None) is not None:
+        bot_obj = getattr(sender.message, "bot", None)
+    if bot_obj is None:
+        await log_event(u["user_id"], "offer", "curator_notification_skipped", {"source": source, "reason": "no_bot"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return False
+    try:
+        await bot_obj.send_message(CURATOR_TELEGRAM_ID, curator_review_notification_text(u, profile, source, note))
+    except Exception as e:
+        log.warning("Failed to notify curator %s: %s", CURATOR_TELEGRAM_ID, e)
+        await log_event(u["user_id"], "offer", "curator_notification_failed", {"source": source, "error": str(e)[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return False
+    await log_event(u["user_id"], "offer", "curator_notification_sent", {"source": source, "curator_id": CURATOR_TELEGRAM_ID}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return True
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -6570,13 +6696,21 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
     u["day_status"] = "closed"
     mark_current_skill_status(u, "closed")
     sync_active_attempt(u, bump=True, is_closed=True, day_closed=True)
+    completed_actions_today = 0
     try:
         summary_counts = await get_honest_day_counts(u)
-        if summary_counts.get("completed_actions_today", 0) > 0 and not int(u.get("streak_counted_today") or 0):
+        completed_actions_today = int(summary_counts.get("completed_actions_today") or 0)
+        if completed_actions_today > 0 and not int(u.get("streak_counted_today") or 0):
             u["streak"] = int(u.get("streak") or 0) + 1
             u["streak_counted_today"] = 1
     except Exception:
         pass
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    day_number = int(u.get("day") or 1)
+    completed_days = _with_day(completed_days_for_offer(u, profile), day_number)
+    completed_skill_days = completed_skill_days_for_offer(u, profile)
+    if completed_actions_today > 0:
+        completed_skill_days = _with_day(completed_skill_days, day_number)
     set_current_state(u, STATE_DAY_CLOSED, close_action=True)
     await record_profile_signal(
         u["user_id"],
@@ -6586,6 +6720,8 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
             "today_closed": 1,
             "last_day_closed_at": today,
             "day_status": "closed",
+            "completed_days": completed_days,
+            "completed_skill_days": completed_skill_days,
         },
         source=source,
     )
@@ -6987,7 +7123,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
             await m.answer("Команда доступна в QA-режиме. Отправь /test_access <код> или попроси добавить твой Telegram ID в ADMIN_IDS.")
             return True
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await show_day3_offer(m, u, "manual_command")
+        await maybe_show_offer(m, u, "manual_command")
         return True
 
     if command == "/test_access":
@@ -7111,7 +7247,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/show_offer":
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await show_day3_offer(m, u, "admin_command")
+        await maybe_show_offer(m, u, "admin_command")
         return True
 
     if command == "/simulate_payment":
@@ -7139,7 +7275,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/show_offer":
         await log_event(uid, u.get("stage", ""), "show_offer_command", {"source": "admin_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await show_day3_offer(m, u, "admin_command")
+        await maybe_show_offer(m, u, "admin_command")
         return True
 
     if command == "/simulate_payment":
@@ -7264,14 +7400,21 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         sid = current_skill_id(u)
         username = getattr(m.from_user, "username", None) or ""
         plan = get_current_plan(u)
+        profile = await get_user_profile(uid, DB_PATH)
         await m.answer(
             "DEBUG USER\n"
             f"telegram_id: {uid}\n"
             f"user_id: {uid}\n"
             f"username: @{username if username else '-'}\n"
             f"day: {u.get('day')}\n"
+            f"current_day: {u.get('day')}\n"
             f"current_state: {u.get('current_state')}\n"
             f"stage: {u.get('stage')}\n"
+            f"completed_days: {completed_days_for_offer(u, profile)}\n"
+            f"completed_skill_days: {completed_skill_days_for_offer(u, profile)}\n"
+            f"offer_shown: {str(offer_was_shown(u, profile)).lower()}\n"
+            f"offer_seen_at: {profile.get('offer_seen_at') or u.get('last_offer_shown_at') or '-'}\n"
+            f"can_show_offer: {str(can_show_offer(u, profile)).lower()}\n"
             f"plan: {plan}\n"
             f"is_testmode: {str(bool(int(u.get('is_test_user') or 0))).lower()}\n"
             f"is_paid: {str(bool(is_paid(u))).lower()}\n"
@@ -7553,7 +7696,7 @@ async def ask_today_action(m: Message, u: Dict[str, Any]):
     await save_user(u, DB_PATH)
     if day > 3 and not is_paid(u) and int(u.get("free_mode") or 0) != 1 and not day_core_test_mode_enabled(u) and not TEST_MODE and not offer_shown_today(u):
         await log_event(u["user_id"], "offer", "paywall_after_trial", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await show_day3_offer(m, u, "paywall_after_trial")
+        await maybe_show_offer(m, u, "paywall_after_trial")
         return
 
     today = local_date_for_user(u)
@@ -7787,6 +7930,10 @@ async def close_day_from_global_button(m: Message, u: Dict[str, Any], source: st
     u["stage"] = "day_core_stop"
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "training", "day_closed_global_button", {"day": current_day, "day_id": u.get("current_day_id"), "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    if can_show_offer(u, profile):
+        await maybe_show_offer(m, u, "day3_completed")
+        return
     if await ask_product_value_feedback(m, u):
         return
     if await ask_day_value_feedback(m, u):
@@ -9778,9 +9925,6 @@ async def main_flow(m: Message):
             await record_development_avatar_event(u["user_id"], "skill_done", DB_PATH, {"skill_id": sid, "streak": int(u.get("streak") or 0), "target": u.get("today_target") or ""})
             await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
             await log_engine_events(u, screen)
-            if should_show_day3_offer(u, day):
-                await show_day3_offer(m, u, "day3_auto")
-                return
             await send_success_menu(m, u, source="action_done")
             return
 
@@ -9810,13 +9954,6 @@ async def main_flow(m: Message):
                 pass
             if day == 7:
                 await send_weekly_summary(m, u, DB_PATH)
-            if should_show_day3_offer(u, day):
-                await show_route(m, u, "day3_summary")
-                await show_day3_offer(m, u, "day3_auto")
-                return
-            if not TEST_MODE and day >= 7 and u.get("trial_phase") in ("trial3", "trial7", None) and not offer_shown_today(u):
-                await show_day3_offer(m, u, "trial_paywall_after_return")
-                return
             await send_success_menu(m, u, source="return")
             return
 
@@ -10276,10 +10413,14 @@ async def main_flow(m: Message):
         u["curator_availability_note"] = text[:240]
         u["stage"] = "waiting_next_day"
         await save_user(u, DB_PATH)
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        await notify_curator_map_review(m, u, profile, "availability_message", text[:240])
         await answer_with_keyboard(
             m,
             u,
-            "Записал. Первый шаг пути с куратором — живой разбор твоей карты и выбор главного механизма на ближайшую неделю.\n\nПока ждёшь разбор, короткий маршрут остаётся: один маленький вход в день и кризисный возврат, если сорвёт.",
+            f"Записал. Первый шаг пути с куратором — живой разбор твоей карты и выбор главного механизма на ближайшую неделю.\n\n"
+            f"Я отправил заявку Ивану. Если хочешь ускорить контакт, можно написать напрямую: {curator_contact_url() or 'Ивану'}\n\n"
+            "Пока ждёшь разбор, короткий маршрут остаётся: один маленький вход в день и кризисный возврат, если сорвёт.",
             kb_training_main,
             "training_main",
         )
@@ -10637,7 +10778,8 @@ async def on_offer_callbacks(c: CallbackQuery):
         u["curator_interest_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         await save_user(u, DB_PATH)
         await log_event(uid, "offer", "curator_path_requested", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await c.message.answer(curator_path_text(u, profile), reply_markup=kb_training_main)
+        await notify_curator_map_review(c, u, profile, "inline_offer")
+        await c.message.answer(curator_path_text(u, profile), reply_markup=curator_path_reply_markup())
         await c.answer()
         return
 
