@@ -78,6 +78,9 @@ async def main() -> None:
             offer = FakeMessage(uid, "/show_offer")
             assert await bot.handle_admin_command(offer, u, offer.text) is True
             assert "Выбери действие" not in "\n".join(offer.answers)
+            offer_with_mention = FakeMessage(uid, "/show_offer@TestBot")
+            assert await bot.handle_admin_command(offer_with_mention, u, offer_with_mention.text) is True
+            assert "Выбери действие" not in "\n".join(offer_with_mention.answers)
         finally:
             bot.DB_PATH = old_db
             bot.TEST_CHEAT_CODE = old_code
