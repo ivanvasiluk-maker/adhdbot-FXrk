@@ -37,6 +37,22 @@ TEXT_EXTENSIONS = {
     ".yml",
 }
 
+REQUIRED_CORE_SKILL_CARD_MARKERS = (
+    '"✅ Сделал"',
+    '"🟡 Попробовал, но не вышло"',
+    '"↘️ Нужно проще"',
+    '"🌙 На сегодня достаточно"',
+)
+FAILED_ATTEMPT_BUTTONS = (
+    '"🟡 Попробовал, но не вышло"',
+    '"❌ Не сделал"',
+)
+CRISIS_ENTRY_MARKERS = (
+    "🆘 Кризис",
+    "Нужна срочная помощь",
+    "Кризис прокрастинации",
+)
+
 
 def repo_files() -> list[Path]:
     """Return files that should be safe to ship in the Docker build context."""
@@ -111,6 +127,19 @@ def check_file(path: Path) -> list[str]:
     ]
 
 
+def has_any_marker(text_blob: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in text_blob for marker in markers)
+
+
+def check_crisis_entrypoint(text_blob: str, errors: list[str]) -> None:
+    lowered_text = text_blob.lower()
+    if not any(marker.lower() in lowered_text for marker in CRISIS_ENTRY_MARKERS):
+        errors.append(
+            "launch invariant: crisis entry point missing "
+            '(expected "🆘 Кризис", "Нужна срочная помощь" or "Кризис прокрастинации")'
+        )
+
+
 
 def check_launch_week_invariants() -> list[str]:
     """Guard the launch-week UX invariants that do not need live Telegram/Sheets credentials."""
@@ -133,16 +162,20 @@ def check_launch_week_invariants() -> list[str]:
         if marker in bot_text or marker in texts_text:
             errors.append(f"launch invariant: forbidden post-analysis course/contract marker remains: {marker!r}")
 
-    required_skill_buttons = (
-        '"✅ Сделал"',
-        '"❌ Не сделал"',
-        '"😣 Слишком сложно"',
-        '"🤔 Не понял"',
-        '"🆘 Кризис"',
-    )
-    for marker in required_skill_buttons:
+    for marker in REQUIRED_CORE_SKILL_CARD_MARKERS:
+        if marker == '"🟡 Попробовал, но не вышло"':
+            continue
         if marker not in engine_text:
             errors.append(f"launch invariant: core skill-card button missing: {marker}")
+    if not has_any_marker(engine_text, FAILED_ATTEMPT_BUTTONS):
+        errors.append(
+            'launch invariant: core skill-card failed-attempt button missing: '
+            '"🟡 Попробовал, но не вышло" or "❌ Не сделал"'
+        )
+
+    combined_launch_text = "\n".join((bot_text, texts_text, engine_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8"), (REPO_ROOT / "skills.py").read_text(encoding="utf-8")))
+    check_crisis_entrypoint(combined_launch_text, errors)
+
     for marker in ('"✅ Сделал(а)"', '"↩️ Вернулся(лась)"', '"ℹ️ Подробнее"'):
         if marker in engine_text:
             errors.append(f"launch invariant: stale core skill-card button remains: {marker}")
