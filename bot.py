@@ -6213,6 +6213,47 @@ def curator_review_notification_text(u: Dict[str, Any], profile: Dict[str, Any],
     )
 
 
+def offer_request_notification_text(u: Dict[str, Any], source: str, form_text: str, m: Optional[Message] = None) -> str:
+    tg_user = getattr(m, "from_user", None) if m is not None else None
+    username = str(getattr(tg_user, "username", "") or u.get("username") or "").strip()
+    first_name = str(getattr(tg_user, "first_name", "") or u.get("name") or "").strip()
+    last_name = str(getattr(tg_user, "last_name", "") or "").strip()
+    lang = str(getattr(tg_user, "language_code", "") or u.get("language_code") or "").strip()
+    email_match = re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", form_text or "")
+    tg_label = f"@{username}" if username else "—"
+    return (
+        "✍️ Заявка из offer\n\n"
+        f"Формат: {u.get('pending_offer_request_format') or source}\n"
+        f"User ID: {u.get('user_id')}\n"
+        f"TG: {tg_label}\n"
+        f"First: {first_name or '—'}\n"
+        f"Last: {last_name or '—'}\n"
+        f"Lang: {lang or '—'}\n"
+        f"Email: {email_match.group(0) if email_match else 'не распознан'}\n\n"
+        f"Сообщение пользователя:\n{(form_text or '').strip()[:2000]}"
+    )
+
+
+async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form_text: str) -> bool:
+    """Send an offer sign-up/request form to Ivan via Telegram DM when possible."""
+    if not CURATOR_TELEGRAM_ID:
+        return False
+    bot_obj = getattr(sender, "bot", None)
+    if bot_obj is None and getattr(sender, "message", None) is not None:
+        bot_obj = getattr(sender.message, "bot", None)
+    if bot_obj is None:
+        await log_event(u["user_id"], "offer", "offer_request_notification_skipped", {"source": source, "reason": "no_bot"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return False
+    try:
+        await bot_obj.send_message(CURATOR_TELEGRAM_ID, offer_request_notification_text(u, source, form_text, sender if isinstance(sender, Message) else getattr(sender, "message", None)))
+    except Exception as e:
+        log.warning("Failed to notify offer request recipient %s: %s", CURATOR_TELEGRAM_ID, e)
+        await log_event(u["user_id"], "offer", "offer_request_notification_failed", {"source": source, "error": str(e)[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return False
+    await log_event(u["user_id"], "offer", "offer_request_notification_sent", {"source": source, "curator_id": CURATOR_TELEGRAM_ID}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return True
+
+
 async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> bool:
     """Send a curator-review request to the configured Telegram account when possible."""
     if not CURATOR_TELEGRAM_ID:
@@ -6243,6 +6284,8 @@ OFFER_CALLBACKS = {
     "back": "offer:back",
     "continue_training": "offer:continue_training",
     "choose_later": "offer:choose_later",
+    "request_live": "offer:request_live",
+    "request_guided": "offer:request_guided",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -6295,9 +6338,42 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def offer_variant_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    if request_callback:
+        rows.append([InlineKeyboardButton(text="✍️ Написать / записаться", callback_data=request_callback)])
+    rows.extend([
         [InlineKeyboardButton(text="← Назад к вариантам", callback_data=OFFER_CALLBACKS["back"])],
+        [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+        [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def offer_request_form_text(format_label: str) -> str:
+    return (
+        f"Ок, соберём заявку на формат: {format_label}.\n\n"
+        "Напиши одним сообщением:\n"
+        "1. Имя\n"
+        "2. Ник в Telegram\n"
+        "3. Почта\n"
+        "4. Что хочешь разобрать / какой запрос\n\n"
+        "Можно коротко. Я добавлю к заявке твой Telegram ID автоматически."
+    )
+
+
+def offer_request_submitted_text(sent: bool) -> str:
+    contact = curator_contact_url() or "@Ivan_Vasiliuk"
+    sent_line = "Я отправил заявку Ивану." if sent else "Я записал заявку, но не смог автоматически отправить её в личку Ивану из этого окружения."
+    return (
+        f"{sent_line}\n\n"
+        f"Если хочешь ускорить контакт, можно написать напрямую: {contact}\n\n"
+        "Можешь вернуться к тренировке или выбрать позже."
+    )
+
+
+def offer_request_done_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
         [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
     ])
@@ -6357,11 +6433,11 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return offer_variant_inline_keyboard(user_id)
+    return offer_variant_inline_keyboard(user_id, OFFER_CALLBACKS["request_live"])
 
 
 def tariff_specialist_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return offer_variant_inline_keyboard(user_id)
+    return offer_variant_inline_keyboard(user_id, OFFER_CALLBACKS["request_guided"])
 
 
 def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -11438,6 +11514,20 @@ async def main_flow(m: Message):
         )
         return
 
+    if u.get("stage") == "offer_request_form":
+        request_text = (text or "").strip()
+        if len(request_text) < 5:
+            await m.answer("Напиши, пожалуйста, одним сообщением: имя, ник в Telegram, почту и коротко запрос.")
+            return
+        source = str(u.get("pending_offer_request_format") or "offer_request")
+        u["last_offer_action"] = "offer_request_submitted"
+        u["stage"] = OFFER_MENU_STAGE
+        await save_user(u, DB_PATH)
+        sent = await notify_offer_request(m, u, source, request_text)
+        await log_event(u["user_id"], "offer", "offer_request_submitted", {"format": source, "sent": sent, "text_len": len(request_text)}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(m, u, offer_request_submitted_text(sent), offer_request_done_keyboard(), "offer")
+        return
+
     # Если дошли до сюда — неизвестный этап. Не сбрасываем пользователя в /start:
     # возвращаем к безопасному меню текущего дня.
     raw_stage = str(u.get("stage") or "")
@@ -11866,6 +11956,17 @@ async def on_offer_callbacks(c: CallbackQuery):
     if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
         await log_event(uid, "offer", "offer_menu_left", {"source": data}, DB_PATH, SHEETS_WEBHOOK_URL)
         await leave_offer_menu(c.message, u, data)
+        await c.answer()
+        return
+
+    if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"]}:
+        format_label = "Живой разбор" if data == OFFER_CALLBACKS["request_live"] else "Бот + специалист"
+        u["stage"] = "offer_request_form"
+        u["pending_offer_request_format"] = format_label
+        u["last_offer_action"] = data
+        await save_user(u, DB_PATH)
+        await log_event(uid, "offer", "offer_request_form_opened", {"format": format_label}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await c.message.answer(offer_request_form_text(format_label), reply_markup=ReplyKeyboardRemove())
         await c.answer()
         return
 

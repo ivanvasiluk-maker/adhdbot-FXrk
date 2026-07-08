@@ -22,6 +22,8 @@ class FakeFromUser:
         self.id = user_id
         self.username = f"qa_{user_id}"
         self.first_name = "QA"
+        self.last_name = "Tester"
+        self.language_code = "ru"
 
 
 class FakeChat:
@@ -353,6 +355,35 @@ async def test_auto_offer_marks_once_but_manual_offer_stays_available():
         bot.DB_PATH = old
         assert manual_user.get("offer_mode") == "manual"
         assert manual_msg.answers
+
+
+async def test_offer_request_form_sends_application_to_curator():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92012
+        u = default_user(uid)
+        u.update({"day": 1, "stage": bot.OFFER_PREVIEW_STAGE, "is_test_user": 1, "offer_mode": "preview"})
+        await save_user(u, bot.DB_PATH)
+
+        request_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["request_live"])
+        await bot.on_offer_callbacks(request_cb)
+        opened = await get_user(uid, bot.DB_PATH)
+        assert opened["stage"] == "offer_request_form"
+        assert opened.get("pending_offer_request_format") == "Живой разбор"
+        assert "Имя" in "\n".join(request_cb.message.answers)
+
+        form_msg = FakeMessage(uid, "Иван\\n@Ivan_Vasiliuk\\nivan.vasiluk@gmail.com\\nХочу разобрать прокрастинацию")
+        form_msg.bot = FakeTelegramBot()
+        await bot.main_flow(form_msg)
+        submitted = await get_user(uid, bot.DB_PATH)
+        sent_text = form_msg.bot.sent[0][1]
+        bot.DB_PATH = old
+        assert submitted["stage"] == bot.OFFER_MENU_STAGE
+        assert "Заявка из offer" in sent_text
+        assert "ivan.vasiluk@gmail.com" in sent_text
+        assert "Хочу разобрать прокрастинацию" in sent_text
+        assert "Я отправил заявку Ивану" in "\n".join(form_msg.answers)
 
 
 async def test_day_intro_is_not_sent_twice():
@@ -741,6 +772,7 @@ def run():
         test_show_offer_force_enables_offer_prerequisites,
         test_offer_preview_menu_callbacks_do_not_go_stale,
         test_auto_offer_marks_once_but_manual_offer_stays_available,
+        test_offer_request_form_sends_application_to_curator,
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,
