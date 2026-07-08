@@ -325,6 +325,39 @@ kb_closed_day_continue = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_closed_day_extra_step = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🟡 Не получилось")],
+        [KeyboardButton(text="🌙 Точно закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_extra_done = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Завершить")],
+        [KeyboardButton(text="➕ Ещё один короткий шаг")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_extra_failed = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Завершить")],
+        [KeyboardButton(text="↘️ Дать совсем проще")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_extra_tiny = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🌙 Завершить")],
+    ],
+    resize_keyboard=True,
+)
+
 kb_feedback_instruction_clarity = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟢 Да, очень понятно")],
@@ -7233,23 +7266,48 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
     await answer_with_keyboard(m, u, build_current_skill_text(skill, next_step_prefix(u, repeat=True), u), action_keyboard(), "next_logical_step")
 
 
+CLOSED_DAY_VOLUNTARY_STEP_TEXT = (
+    "День уже закрыт. Это не отменяется.\n\n"
+    "Но если хочешь — можно сделать один добровольный короткий шаг.\n"
+    "Без долга, без оценки, без продолжения марафона.\n\n"
+    "🧩 Мини-навык: Оставить видимый следующий шаг\n\n"
+    "Сделай:\n"
+    "1. Открой задачу.\n"
+    "2. Оставь одну подсказку для завтра: «продолжить с…».\n"
+    "3. Закрой.\n\n"
+    "Минимум:\n"
+    "одна заметка для себя."
+)
+
+CLOSED_DAY_VOLUNTARY_DONE_TEXT = (
+    "Готово. Это дополнительный шаг, не новая обязанность.\n\n"
+    "День остаётся закрытым.\n"
+    "На сегодня достаточно."
+)
+
+CLOSED_DAY_VOLUNTARY_FAILED_TEXT = (
+    "Ок. Не тянем дальше.\n\n"
+    "День уже был закрыт, значит минимум на сегодня сохранён.\n"
+    "Ничего не испорчено."
+)
+
+CLOSED_DAY_VOLUNTARY_TINY_TEXT = (
+    "Совсем простой вариант.\n\n"
+    "Посмотри на задачу 10 секунд и скажи:\n"
+    "«Я продолжу с этого места завтра».\n\n"
+    "Это тоже засчитывается как возвращение."
+)
+
+
 async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
-    if closed_day_extra_used_today(u):
-        await answer_with_keyboard(m, u, "На сегодня достаточно: добровольный дополнительный подход уже был. День остаётся закрытым.", kb_day_core_stop, "day_core_stop")
-        return
-    sid = current_skill_for_action(u) or "visible_next_step"
-    if sid not in SKILLS_DB:
-        sid = next(iter(SKILLS_DB))
-    skill = dict(SKILLS_DB[sid])
-    skill.setdefault("skill_id", sid)
-    u["stage"] = "training"
+    sid = "visible_next_step" if "visible_next_step" in SKILLS_DB else ("one_visible_step" if "one_visible_step" in SKILLS_DB else str(current_skill_for_action(u) or next(iter(SKILLS_DB))))
+    u["stage"] = "closed_day_voluntary_step"
     u["closed_day_extra_step_date"] = local_date_for_user(u)
     u["closed_day_extra_step_count"] = int(u.get("closed_day_extra_step_count") or 0) + 1
     u["daily_skill_status"] = "voluntary_extra"
-    mark_action_card_active(u)
     await save_user(u, DB_PATH)
-    await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": "closed_day_continue", "voluntary": True})
-    await answer_with_keyboard(m, u, build_current_skill_text(skill, next_step_prefix(u, voluntary=True), u), action_keyboard(), "closed_day_voluntary_step")
+    await bot_record_action_event(u, "extra_step_after_day_closed", skill_id=sid, metadata={"source": "closed_day_continue", "day_stays_closed": True})
+    await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_STEP_TEXT, kb_closed_day_extra_step, "closed_day_voluntary_step")
 
 
 async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low: str) -> bool:
@@ -7258,8 +7316,34 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         return False
     if not day_closed_today(u):
         return False
-    if u.get("stage") == "closed_day_voluntary_step" and text in ACTION_OUTCOME_BUTTONS:
-        return False
+    if u.get("stage") in {"closed_day_voluntary_step", "closed_day_voluntary_tiny"}:
+        if text in {"✅ Сделал", "✅ Сделал(а)"} or ("сделал" in low and "не сделал" not in low):
+            u["stage"] = "day_core_stop"
+            set_current_state(u, STATE_PAUSED, close_action=True)
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_DONE_TEXT, kb_closed_day_extra_done, "day_core_stop")
+            return True
+        if text in {"🟡 Не получилось", "🟡 Попробовал, но не вышло", "🟡 Не вышло"}:
+            u["stage"] = "closed_day_voluntary_failed"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_FAILED_TEXT, kb_closed_day_extra_failed, "closed_day_voluntary_failed")
+            return True
+        if text in {"🌙 Точно закрыть день", "🌙 Завершить"}:
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            return True
+    if u.get("stage") == "closed_day_voluntary_failed":
+        if text == "↘️ Дать совсем проще":
+            u["stage"] = "closed_day_voluntary_tiny"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_TINY_TEXT, kb_closed_day_extra_tiny, "closed_day_voluntary_tiny")
+            return True
+        if text == "🌙 Завершить":
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            return True
     kind = global_button_kind(text, low) if is_known_reply_button(text) or text else ""
     if u.get("stage") == "closed_day_continue_confirm":
         if text == "✅ Да, ещё один короткий шаг" or low.startswith("да"):
@@ -7285,14 +7369,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
         return True
     if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё один короткий шаг", "➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "🧭 Давай действие", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
-        if closed_day_extra_used_today(u):
-            u["stage"] = "day_core_stop"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "День уже закрыт, и один добровольный дополнительный подход сегодня уже был. Лучше оставить день закрытым.", kb_day_core_stop, "day_core_stop")
-            return True
-        u["stage"] = "closed_day_continue_confirm"
-        await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+        await open_closed_day_voluntary_step(m, u)
         return True
     if kind in DAY_CLOSED_BLOCKED_KINDS:
         u["stage"] = "day_core_stop"
@@ -7407,9 +7484,7 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
         return
     if current_skill_completed_or_closed(user):
         if day_closed_today(user, profile):
-            user["stage"] = "closed_day_continue_confirm"
-            await save_user(user, DB_PATH)
-            await answer_with_keyboard(message, user, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(message, user)
             return
         await open_next_logical_step(message, user, source="send_current_skill_after_completion")
         return
@@ -7458,15 +7533,11 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
     if await maybe_resume_pending_stuck_validation(message, user):
         return
     if day_closed_today(user, profile):
-        user["stage"] = "closed_day_continue_confirm"
-        await save_user(user, DB_PATH)
-        await answer_with_keyboard(message, user, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+        await open_closed_day_voluntary_step(message, user)
         return
     if current_skill_completed_or_closed(user):
         if day_closed_today(user, profile):
-            user["stage"] = "closed_day_continue_confirm"
-            await save_user(user, DB_PATH)
-            await answer_with_keyboard(message, user, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(message, user)
             return
         await open_next_logical_step(message, user, source="action_request_after_completion")
         return
@@ -8708,9 +8779,7 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
     if kind == "action":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         if day_closed_today(u, profile):
-            u["stage"] = "closed_day_continue_confirm"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(m, u)
             return True
         if u.get("current_next_physical_step"):
             await m.answer(returning_to_task_text(u))
@@ -8728,9 +8797,7 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
     if kind == "repeat":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         if day_closed_today(u, profile):
-            u["stage"] = "closed_day_continue_confirm"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(m, u)
             return True
         await handle_action_request(u["user_id"], m, u, repeat=True)
         return True
