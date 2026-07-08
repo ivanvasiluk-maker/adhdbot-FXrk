@@ -2906,6 +2906,10 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
     _append_unique_clean(reported, profile.get("confirmed_signals"), limit=5)
     if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
         _append_unique_clean(reported, ["уход в быстрые стимулы / Telegram / новости"], limit=5)
+    if profile.get("avoidance_reason") == "fear_of_bad_result" or profile.get("main_pattern") in {"anxiety_avoidance", "shame_self_attack", "perfectionism_start_block"}:
+        _append_unique_clean(reported, ["страх ошибки и оценки"], limit=5)
+    if int(profile.get("downscale_count") or 0):
+        _append_unique_clean(reported, ["слишком большой первый шаг"], limit=5)
 
     hypotheses: List[str] = []
     for e in events:
@@ -2922,6 +2926,9 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
 
     skill_map = profile.get("_skill_map") if isinstance(profile, dict) else {}
     checked = _checked_skill_lines(profile, events, skill_map, limit=5)
+    effective = [line for line in checked if "помог" in line.lower() or "подтверж" in line.lower() or "рабоч" in line.lower()]
+    if not effective:
+        effective = checked[:2]
 
     offered = [_event_skill_text(e) for e in events if e["event_type"] in {"intervention_offered", "intervention_attempted"}]
     legacy_next = [profile.get("recommended_core_skill"), profile.get("recommended_variant"), profile.get("best_variant")]
@@ -2935,16 +2942,34 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
     else:
         next_test = "выбрать один маленький вход в задачу и отметить честный результат"
 
+    if len(effective) < 2:
+        for fallback in ("написать плохой черновик без редактирования", "убрать телефон вне руки"):
+            if fallback not in effective:
+                effective.append(fallback)
+            if len(effective) >= 2:
+                break
+    bundle = [
+        "Убрать телефон на 3 минуты.",
+        "Открыть задачу.",
+        "Написать одну плохую строку.",
+    ]
+    recovery = [
+        "не ругать себя",
+        "назвать механизм",
+        "сделать один минимальный вход",
+    ]
     text = (
-        "🧭 Твоя короткая карта\n\n"
-        "Что ты описал\n"
-        f"{_map_bullets(reported, 'данных пока мало — ждём твоих слов и фактов', limit=5)}\n\n"
-        "Что мы пока предполагаем\n"
-        f"{_map_bullets(hypotheses, 'пока вход в задачу может быть слишком большим', limit=5)}\n\n"
-        "Что уже проверили\n"
-        f"{_map_bullets(checked, 'данных пока мало', limit=5)}\n\n"
-        "Что проверим следующим\n"
-        f"— {next_test}"
+        "🧭 Твоя рабочая карта\n\n"
+        "Что чаще всего мешает начать:\n"
+        f"{_map_bullets(reported, 'данных пока мало — ждём твоих слов и фактов', limit=2)}\n\n"
+        "Что уже помогало:\n"
+        f"{_map_bullets(effective, 'пока проверяем первые входы', limit=2)}\n\n"
+        "Что пока неясно:\n"
+        f"— {(hypotheses[0] if hypotheses else next_test)}\n\n"
+        "Твоя ближайшая связка:\n"
+        + "\n".join(f"{i}. {step}" for i, step in enumerate(bundle, start=1))
+        + "\n\nКогда сорвался:\n"
+        + "\n".join(f"— {step};" for step in recovery)
     )
     if contradiction:
         text = f"{text}\n\n{contradiction}"

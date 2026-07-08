@@ -13,7 +13,7 @@ os.environ.setdefault("BOT_TOKEN", "")
 os.environ.setdefault("OPENAI_API_KEY", "")
 
 import bot  # noqa: E402
-from db import default_user, init_db, migrate_db, save_user, get_user, update_user_profile  # noqa: E402
+from db import default_user, init_db, migrate_db, save_user, get_user, update_user_profile, render_short_user_map  # noqa: E402
 from texts import format_skill_card  # noqa: E402
 
 
@@ -125,9 +125,9 @@ def test_can_show_offer_strict_day_gate():
     assert bot.can_show_offer(u, profile) is False
     u["day"] = 3
     assert bot.can_show_offer(u, profile) is False
-    profile = {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3]}
+    profile = {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3], "action_done_count": 3}
     assert bot.can_show_offer(u, profile) is True
-    profile["offer_shown"] = 1
+    profile["offer_seen_at"] = bot.dt.datetime.now(bot.dt.timezone.utc).isoformat()
     assert bot.can_show_offer(u, profile) is False
 
 
@@ -306,6 +306,7 @@ def test_should_show_day3_offer_after_test_access():
     u_test["fast_forward_enabled"] = 1
     u_test["full_mode"] = 0
     u_test["free_mode"] = 0
+    u_test["profile_json"] = {"action_done_count": 3}
     assert bot.should_show_day3_offer(u_test, 3), (
         "Offer should auto-trigger for test users after /test_access (full_mode=0)"
     )
@@ -329,7 +330,8 @@ def test_day3_offer_low_data_stays_honest():
     summary = {"done_count": 1, "skill_map": {"skills": []}}
     profile = {"successful_skills": ["open_only"]}
     text = bot.day3_personal_offer_text(summary, profile)
-    assert "У нас появились первые гипотезы" in text
+    assert "Полный режим — это не давление" in text
+    assert "Пока это не окончательные выводы." in text
     assert "первый рабочий вход" not in text
     assert "мы уже увидели твой паттерн" not in text.lower()
     assert "не потерять темп" not in text.lower()
@@ -350,13 +352,121 @@ def test_day3_offer_after_three_attempts_uses_real_facts():
     }
     profile = {}
     text = bot.day3_personal_offer_text(summary, profile)
-    assert "Что уже видно:" in text
-    assert "— попыток: 4;" in text
-    assert "— дало облегчение: Открыть задачу (2 раз)" in text
-    assert "— пока не помогло: Плохой черновик (2 раз)" in text
-    assert "— следующий эксперимент: проверить вход через плохой черновик." in text
+    assert "Полный режим — это не давление" in text
+    assert "— попыток уже было: 4" in text
+    assert "— что выглядит полезным: Открыть задачу (2 раз)" in text
+    assert "— пока неясно: Плохой черновик (2 раз), следующий тест — проверить вход через плохой черновик." in text
+    assert "Базовый режим остаётся доступным." in text
     assert "путь с куратором" not in text.lower()
     assert "не потерять темп" not in text.lower()
+
+
+def test_early_days_use_personal_bundle_after_two_attempts():
+    profile = {
+        "action_done_count": 2,
+        "downscale_count": 1,
+        "attention_pattern": "scroll_autopilot",
+        "avoidance_reason": "fear_of_bad_result",
+    }
+    u3 = default_user(93003)
+    u3["day"] = 3
+    text3 = bot.new_day_skill_text({"name": "Новый навык", "simple": ["Сделай новый шаг"]}, profile, u3)
+    assert "Данных пока мало" not in text3
+    assert "Проверим новый вход" not in text3
+    assert "Сегодня проверим не новый совет, а твою рабочую связку." in text3
+    assert "1. Телефон вне руки на 3 минуты." in text3
+    assert "3. Написать один плохой черновик." in text3
+
+    u4 = dict(u3)
+    u4["day"] = 4
+    text4 = bot.new_day_skill_text({"name": "Новый навык", "simple": ["Сделай новый шаг"]}, profile, u4)
+    assert "Вчера вход получился." in text4
+    assert "3. 3 минуты рядом с задачей." in text4
+
+    u5 = dict(u3)
+    u5["day"] = 5
+    text5 = bot.new_day_skill_text({"name": "Новый навык", "simple": ["Сделай новый шаг"]}, profile, u5)
+    assert "У тебя уже есть личная схема возврата:" in text5
+    assert "Сегодня проверим, что мешает вернуться после отвлечения." in text5
+
+
+def test_contextual_buttons_match_current_question():
+    u = default_user(93008)
+    u["stage"] = "skill_done_effect"
+    assert bot.button_fits_current_state("✅ Стало легче", u)
+    assert bot.button_fits_current_state("😐 Без разницы", u)
+    assert not bot.button_fits_current_state("✅ Сделал", u)
+    assert not bot.button_fits_current_state("🧭 Следующий шаг", u)
+    assert not bot.button_fits_current_state("💪 Продолжить тренировку", u)
+
+    u["stage"] = "downscale_action"
+    assert bot.button_fits_current_state("✅ Сделал", u)
+    assert bot.button_fits_current_state("↘️ Нужно проще", u)
+    assert not bot.button_fits_current_state("🧭 Следующий шаг", u)
+    assert not bot.button_fits_current_state("💪 Продолжить тренировку", u)
+
+    u["stage"] = "success_menu"
+    assert bot.button_fits_current_state("➕ Ещё 2 минуты", u)
+    assert bot.button_fits_current_state("🧭 Следующий шаг", u)
+    assert bot.button_fits_current_state("🌙 Закрыть день", u)
+    assert not bot.button_fits_current_state("✅ Сделал", u)
+
+
+def test_skinny_uses_direct_respectful_phrases():
+    u = default_user(93010)
+    u["trainer_key"] = "skinny"
+    assert bot.trainer_not_tried_text(u) == "Стопор зафиксирован. Не обсуждаем его бесконечно. Уменьшаем шаг."
+    assert "Минимум выполнен. День уже не слит." in bot.trainer_post_minimum_text(u)
+    assert "Можем сделать ещё один короткий подход. Не обязателен." in bot.trainer_repeat_limit_text(u)
+    assert bot.trainer_skill_learning_reframe_text(u) == "Этот шаг оказался слишком большим. Хорошо. Теперь знаем размер следующего."
+    assert "Это не откат" not in bot.day_closed_action_text(u)
+
+
+def test_offer_gate_requires_attempts_and_respects_cooldown():
+    u = default_user(93009)
+    u["day"] = 3
+    profile = {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3], "action_done_count": 2}
+    assert not bot.can_show_offer(u, profile)
+    profile["action_done_count"] = 3
+    assert bot.can_show_offer(u, profile)
+    profile["offer_seen_at"] = bot.dt.datetime.now(bot.dt.timezone.utc).isoformat()
+    assert not bot.can_show_offer(u, profile)
+    profile["offer_seen_at"] = (bot.dt.datetime.now(bot.dt.timezone.utc) - bot.dt.timedelta(days=8)).isoformat()
+    assert bot.can_show_offer(u, profile)
+    profile["offer_suppressed_until"] = (bot.dt.datetime.now(bot.dt.timezone.utc) + bot.dt.timedelta(days=7)).isoformat()
+    assert not bot.can_show_offer(u, profile)
+    profile.pop("offer_suppressed_until")
+    u["stage"] = "downscale_action"
+    u["current_state"] = bot.STATE_AWAITING_RESULT
+    assert not bot.can_show_offer(u, profile)
+
+
+def test_offer_text_and_map_are_specific_without_curator_button():
+    summary = {
+        "done_count": 3,
+        "attention_pattern": "scroll_autopilot",
+        "attention_escape_count": 1,
+        "skill_map": {"skills": [{"skill_id": "bad_draft", "title": "Плохой черновик", "completed_count": 2, "helpful_count": 1}]},
+    }
+    text = bot.day3_personal_offer_text(summary, {})
+    assert "За первые попытки уже появились первые сигналы:" in text
+    assert "Пока это не окончательные выводы." in text
+    assert "Базовый режим остаётся доступным." in text
+    keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
+    assert "👤 Живой разбор карты" not in keyboard_text
+    assert "🧭 Показать мою карту" in keyboard_text
+    assert "↩️ Вернуться к текущему шагу" in keyboard_text
+
+    map_text = render_short_user_map({
+        "attention_pattern": "scroll_autopilot",
+        "avoidance_reason": "fear_of_bad_result",
+        "_skill_map": {"skills": [{"skill_id": "bad_draft", "status": "confirmed"}]},
+    })
+    assert "🧭 Твоя рабочая карта" in map_text
+    assert "Что чаще всего мешает начать:" in map_text
+    assert "Что уже помогало:" in map_text
+    assert "Твоя ближайшая связка:" in map_text
+    assert "Когда сорвался:" in map_text
 
 
 async def test_completed_profile_start_resumes_without_onboarding():
@@ -436,6 +546,50 @@ async def test_force_next_day_and_set_day_keep_saved_profile_state():
         assert int(updated.get("profile_completed") or 0) == 1
 
 
+async def test_stuck_flow_asks_effect_before_aftercare():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 93007
+        u = default_user(uid)
+        u.update({
+            "stage": "training",
+            "day": 3,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+        })
+        await save_user(u, bot.DB_PATH)
+
+        fail_msg = FakeMessage(uid, "🟡 Не получилось")
+        await bot.main_flow(fail_msg)
+        assert "Стопор зафиксирован. Это не провал." in "\n".join(fail_msg.answers)
+
+        reason_msg = FakeMessage(uid, "📱 Ушёл в телефон / YouTube")
+        await bot.main_flow(reason_msg)
+        reason_text = "\n".join(reason_msg.answers)
+        assert "Нужен только один микро-шаг." in reason_text
+        assert "Телефон / YouTube / новости: убрать из руки" in reason_text
+
+        done_msg = FakeMessage(uid, "✅ Сделал")
+        await bot.main_flow(done_msg)
+        assert "Стало хоть на 5% легче?" in "\n".join(done_msg.answers)
+
+        effect_msg = FakeMessage(uid, "👍 Да")
+        await bot.main_flow(effect_msg)
+        effect_text = "\n".join(effect_msg.answers)
+        bot.DB_PATH = old
+        assert "Этот стопор сейчас удалось обойти через Телефон / YouTube / новости: убрать из руки." in effect_text
+        assert "Что тебе нужнее дальше?" in effect_text
+        assert "Возвращаемся к основному навыку дня" not in effect_text
+
+
 def run():
     for fn in [
         test_rendered_skill_card_has_one_title_and_one_minimum,
@@ -457,6 +611,11 @@ def run():
         test_should_show_day3_offer_after_test_access,
         test_day3_offer_low_data_stays_honest,
         test_day3_offer_after_three_attempts_uses_real_facts,
+        test_early_days_use_personal_bundle_after_two_attempts,
+        test_contextual_buttons_match_current_question,
+        test_skinny_uses_direct_respectful_phrases,
+        test_offer_gate_requires_attempts_and_respects_cooldown,
+        test_offer_text_and_map_are_specific_without_curator_button,
     ]: fn()
     for fn in [
         test_old_callback_after_skill_change_does_not_modify_state,
@@ -470,6 +629,7 @@ def run():
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,
+        test_stuck_flow_asks_effect_before_aftercare,
     ]: asyncio.run(fn())
     print("[TEST] required regressions OK")
 

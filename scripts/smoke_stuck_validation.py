@@ -78,9 +78,9 @@ async def main() -> None:
             await init_db(bot.DB_PATH)
             await migrate_db(bot.DB_PATH)
             failed_buttons = keyboard_texts(kb_failed)
-            assert "🤷 Не понимаю, зачем это делать" in failed_buttons
-            assert "🫨 Тревога и перегруз" in failed_buttons
-            assert "🧨 Самокритика после срыва" in failed_buttons
+            assert "🫥 Не понимаю, зачем вообще делать" in failed_buttons
+            assert "😰 Тревога или внутреннее напряжение" in failed_buttons
+            assert "🗯 Слишком сильно ругаю себя" in failed_buttons
             assert "🆘 Мне небезопасно" not in failed_buttons
             assert bot.classify_free_stuck_text("залип в YouTube и новости") == "phone"
             assert bot.stuck_reason_code_from_text("читаю новости вместо задачи") == "phone"
@@ -97,7 +97,7 @@ async def main() -> None:
 
             uid = 9301
             await seed_user(uid)
-            u, prompt, _ = await send(uid, "🎙️ Опишу голосом или текстом")
+            u, prompt, _ = await send(uid, "✍️ Опишу сам(а)")
             assert "Я сначала попробую понять" in prompt
             assert u["stage"] == "stuck_reason_text"
 
