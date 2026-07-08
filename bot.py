@@ -5807,35 +5807,14 @@ def _offer_next_experiment(summary: Dict[str, Any], profile: Dict[str, Any]) -> 
 
 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    attempts = day3_attempt_count(summary, profile)
-    blocked_by = _offer_main_obstacle(summary, profile)
-    helpful_skill = _offer_skill_fact(summary, helpful=True)
-    not_helpful_skill = _offer_skill_fact(summary, helpful=False)
-    next_experiment = _offer_next_experiment(summary, profile)
-    personal_signals = [
-        f"попыток уже было: {attempts}",
-        f"чаще всего мешает: {blocked_by}",
-        f"что выглядит полезным: {helpful_skill}",
-    ]
     return (
-        "Полный режим — это не давление и не «плати, чтобы стать нормальным».\n\n"
-        "За первые попытки уже появились первые сигналы:\n\n"
-        + "\n".join(f"— {item}" for item in personal_signals)
-        + "\n\nНапример:\n"
-        f"— {blocked_by};\n"
-        f"— {helpful_skill};\n"
-        f"— пока неясно: {not_helpful_skill}, следующий тест — {next_experiment}.\n\n"
-        "Пока это не окончательные выводы.\n"
-        "Но уже можно не просто выдавать новые техники, а собрать твой рабочий маршрут.\n\n"
-        "В полном режиме SKILLER будет:\n\n"
-        "— хранить, какие шаги реально сработали;\n"
-        "— замечать, что именно ломает вход: страх ошибки, телефон, перегруз или самокритика;\n"
-        "— собирать твою личную связку навыков;\n"
-        "— показывать, что делать в момент стопора;\n"
-        "— давать недельный маршрут, а не случайные упражнения;\n"
-        "— помогать возвращаться после отвлечения и срывов.\n\n"
-        "Базовый режим остаётся доступным.\n"
-        "Полный нужен только тогда, когда тебе полезнее видеть свою историю и получать более точные следующие шаги."
+        "Полный режим помогает не начинать каждый день с нуля.\n\n"
+        "За первые попытки уже видно:\n"
+        "— что мешает тебе начать;\n"
+        "— какие шаги помогают сдвинуться;\n"
+        "— где чаще происходит срыв.\n\n"
+        "Можно продолжать самостоятельно или выбрать формат с живой поддержкой.\n\n"
+        "Выбери, что тебе подходит:"
     )
 
 
@@ -6234,11 +6213,11 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
-        [InlineKeyboardButton(text="📚 Чем отличается полный режим", callback_data="offer_details")],
-        [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
-        [InlineKeyboardButton(text="🤔 Остаться в базовом режиме", callback_data="stay_free")],
-        [InlineKeyboardButton(text="↩️ Вернуться к текущему шагу", callback_data="continue_free")],
+        [InlineKeyboardButton(text="🤖 Бот — €9.99 / мес.", url=payment_month_url())],
+        [InlineKeyboardButton(text="👤 Живой разбор — €59", callback_data="curator_path")],
+        [InlineKeyboardButton(text="⭐ Бот + специалист — €149 / мес.", callback_data="specialist_path")],
+        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data="offer_details")],
+        [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data="stay_free")],
     ]
     if PAYMENT_ACCEPT_ANY:
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data="confirm_test_payment")])
@@ -6249,10 +6228,10 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
-        [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
-        [InlineKeyboardButton(text="🤔 Остаться в базовом режиме", callback_data="stay_free")],
-        [InlineKeyboardButton(text="↩️ Вернуться к текущему шагу", callback_data="continue_free")],
+        [InlineKeyboardButton(text="🤖 Выбрать бот", url=payment_month_url())],
+        [InlineKeyboardButton(text="👤 Выбрать живой разбор", callback_data="curator_path")],
+        [InlineKeyboardButton(text="⭐ Выбрать бот + специалист", callback_data="specialist_path")],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data="offer_back")],
     ])
 
 
@@ -6265,25 +6244,16 @@ def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_full_mode_text() -> str:
     return (
-        "📚 Честная разница режимов\n\n"
-        "Бесплатный режим:\n"
-        "• один базовый навык в день;\n"
-        "• кризис прокрастинации;\n"
-        "• краткая карта;\n"
-        "• базовое возвращение после срыва;\n"
-        "• возможность продолжать самостоятельно.\n\n"
-        "Полный режим:\n"
-        "• хранить историю попыток;\n"
-        "• показывать, какие навыки дали эффект;\n"
-        "• подбирать следующий навык по повторяющемуся механизму;\n"
-        "• давать недельный маршрут;\n"
-        "• помогать возвращаться после срывов;\n"
-        "• показывать расширенную карту без общих формулировок.\n\n"
-        "Живой разбор карты:\n"
-        "• сейчас не продаётся как готовая услуга, пока не определены специалист, срок ответа и стоимость;\n"
-        "• поэтому бот не создаёт давление и не обещает формат, которого ещё нет.\n\n"
-        "Ты можешь продолжать в базовом режиме.\n"
-        "Полный режим нужен только тогда, когда тебе полезно видеть историю попыток и получать более точный маршрут."
+        "📚 Форматы SKILLER\n\n"
+        "🤖 Бот — €9.99 / месяц\n"
+        "Для самостоятельной тренировки.\n"
+        "Бот даёт навыки, хранит попытки и собирает личный маршрут.\n\n"
+        "👤 Живой разбор — €59 разово\n"
+        "Для тех, кто хочет быстрее понять свой паттерн.\n"
+        "Специалист смотрит карту и даёт маршрут на 7–14 дней.\n\n"
+        "⭐ Бот + специалист — €149 / месяц\n"
+        "Для тех, кому трудно держать темп одному.\n"
+        "Бот работает каждый день, а специалист раз в неделю смотрит прогресс и помогает скорректировать маршрут."
     )
 
 
@@ -11592,7 +11562,7 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
 # CALLBACKS
 # ============================================================
 
-@router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"offer_details", "show_map", "stay_free", "continue_free", "test_payment", "confirm_test_payment", "curator_path"})
+@router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"offer_details", "offer_back", "show_map", "stay_free", "continue_free", "test_payment", "confirm_test_payment", "curator_path", "specialist_path"})
 async def on_offer_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
@@ -11608,16 +11578,24 @@ async def on_offer_callbacks(c: CallbackQuery):
         await reject_lost_callback(c, u, "offer_stage_mismatch")
         return
 
-    if data == "curator_path":
+    if data in {"curator_path", "specialist_path"}:
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         u["stage"] = "curator_path"
         u["curator_interest_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         await save_user(u, DB_PATH)
-        await log_event(uid, "offer", "curator_path_requested", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "curator_path_requested", {"source": "inline_offer", "format": data}, DB_PATH, SHEETS_WEBHOOK_URL)
         await notify_curator_map_review(c, u, profile, "inline_offer")
         await c.message.answer(curator_path_text(u, profile), reply_markup=curator_path_reply_markup())
         await resume_after_offer_if_needed(c.message, u)
+        await c.answer()
+        return
+
+    if data == "offer_back":
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        summary = build_profile_map_summary(u, profile)
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
