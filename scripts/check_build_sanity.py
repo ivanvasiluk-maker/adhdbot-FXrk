@@ -212,20 +212,18 @@ def check_launch_week_invariants() -> list[str]:
             errors.append(f"adult gamification invariant: forbidden game marker remains in UI text: {marker!r}")
 
     day3_offer_required = (
-        "Полный режим — это не давление",
-        "За первые попытки уже появились первые сигналы:",
-        "Пока это не окончательные выводы.",
-        "Базовый режим остаётся доступным.",
-        "хранить, какие шаги реально сработали",
-        "собирать твою личную связку навыков",
-        "давать недельный маршрут, а не случайные упражнения",
-        "Показать мою карту",
-        "Остаться в базовом режиме",
-        "Вернуться к текущему шагу",
-        "Полный режим €14.98",
+        "€9.99",
+        "€59",
+        "€149",
+        "Бот",
+        "Живой разбор",
+        "Бот + специалист",
+        "Сравнить форматы",
+        "Остаться в коротком режиме",
     )
+    all_text_blob = bot_text
     for marker in day3_offer_required:
-        if marker not in bot_text:
+        if marker not in all_text_blob:
             errors.append(f"day3 offer invariant: missing marker: {marker!r}")
 
     db_text = (REPO_ROOT / "db.py").read_text(encoding="utf-8")
