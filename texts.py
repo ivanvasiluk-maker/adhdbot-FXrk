@@ -1385,6 +1385,8 @@ kb_success_next = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Ещё 2 минуты")],
         [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -1393,6 +1395,8 @@ kb_success_next = ReplyKeyboardMarkup(
 kb_success_limit = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,

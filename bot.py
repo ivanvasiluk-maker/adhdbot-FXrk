@@ -551,6 +551,8 @@ kb_success_no_extra = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Ещё 2 минуты")],
         [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,

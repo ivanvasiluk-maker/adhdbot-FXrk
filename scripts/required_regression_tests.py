@@ -514,6 +514,8 @@ def test_contextual_buttons_match_current_question():
     u["stage"] = "success_menu"
     assert bot.button_fits_current_state("➕ Ещё 2 минуты", u)
     assert bot.button_fits_current_state("🧭 Следующий шаг", u)
+    assert bot.button_fits_current_state("🔄 Сменить навык", u)
+    assert bot.button_fits_current_state("🎭 Сменить тренера", u)
     assert bot.button_fits_current_state("🌙 Закрыть день", u)
     assert not bot.button_fits_current_state("✅ Сделал", u)
 
