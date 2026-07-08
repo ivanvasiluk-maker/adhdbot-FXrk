@@ -22,6 +22,8 @@ class FakeFromUser:
         self.id = user_id
         self.username = f"qa_{user_id}"
         self.first_name = "QA"
+        self.last_name = "Tester"
+        self.language_code = "ru"
 
 
 class FakeChat:
@@ -271,13 +273,117 @@ async def test_show_offer_force_enables_offer_prerequisites():
         fresh = await get_user(uid, bot.DB_PATH)
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh["stage"] == "offer"
-        assert fresh["day"] == 3
-        assert profile.get("completed_days") == [1, 2, 3]
-        assert profile.get("completed_skill_days") == [1, 2, 3]
-        assert profile.get("offer_shown") == 1
-        assert profile.get("offer_seen_at")
+        assert fresh["stage"] == bot.OFFER_PREVIEW_STAGE
+        assert fresh["day"] == 1
+        assert fresh.get("offer_mode") == "preview"
+        assert not profile.get("offer_shown")
+        assert not profile.get("offer_seen_at")
         assert msg.answers
+        assert "Это можно посмотреть заранее" in "\n".join(msg.answers)
+
+
+async def test_offer_preview_menu_callbacks_do_not_go_stale():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92010
+        u = default_user(uid)
+        u.update({
+            "day": 1,
+            "stage": "training",
+            "previous_stage": "",
+            "is_test_user": 1,
+            "has_started_training": 1,
+            "current_skill": "open_without_timer",
+            "daily_skill_id": "open_without_timer",
+        })
+        await save_user(u, bot.DB_PATH)
+
+        msg = FakeMessage(uid, "/show_offer")
+        assert await bot.handle_user_command(msg, u, msg.text) is True
+        fresh = await get_user(uid, bot.DB_PATH)
+        assert fresh["stage"] == bot.OFFER_PREVIEW_STAGE
+        assert fresh.get("previous_stage") == "training"
+
+        live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
+        await bot.on_offer_callbacks(live_cb)
+        assert "Этот шаг уже закрыт" not in "\n".join(live_cb.message.answers)
+        assert any("Живой разбор" in answer for answer in live_cb.message.answers)
+
+        bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
+        await bot.on_offer_callbacks(bot_cb)
+        assert "Этот шаг уже закрыт" not in "\n".join(bot_cb.message.answers)
+        assert any("SKILLER Бот" in answer for answer in bot_cb.message.answers)
+
+        later_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["continue_training"])
+        await bot.on_offer_callbacks(later_cb)
+        resumed = await get_user(uid, bot.DB_PATH)
+        profile = await bot.get_user_profile(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert resumed["stage"] == "training"
+        assert resumed.get("last_offer_action") == bot.OFFER_CALLBACKS["continue_training"]
+        assert not profile.get("offer_shown")
+
+
+async def test_auto_offer_marks_once_but_manual_offer_stays_available():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92011
+        u = default_user(uid)
+        u.update({"day": 3, "stage": "day_core_stop", "is_test_user": 1})
+        await save_user(u, bot.DB_PATH)
+        await update_user_profile(
+            uid,
+            {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3]},
+            bot.DB_PATH,
+            source="test_offer_auto",
+        )
+
+        auto_msg = FakeMessage(uid, "")
+        await bot.show_day3_offer(auto_msg, u, "test_auto", mode="auto")
+        user_after_auto = await get_user(uid, bot.DB_PATH)
+        assert user_after_auto.get("last_offer_shown_at")
+
+        second_auto_msg = FakeMessage(uid, "")
+        fresh = await get_user(uid, bot.DB_PATH)
+        assert await bot.maybe_show_offer(second_auto_msg, fresh, "test_auto_again") is False
+
+        manual_msg = FakeMessage(uid, "/show_offer")
+        assert await bot.handle_user_command(manual_msg, fresh, manual_msg.text) is True
+        manual_user = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert manual_user.get("offer_mode") == "manual"
+        assert manual_msg.answers
+
+
+async def test_offer_request_form_sends_application_to_curator():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
+        uid = 92012
+        u = default_user(uid)
+        u.update({"day": 1, "stage": bot.OFFER_PREVIEW_STAGE, "is_test_user": 1, "offer_mode": "preview"})
+        await save_user(u, bot.DB_PATH)
+
+        request_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["request_live"])
+        await bot.on_offer_callbacks(request_cb)
+        opened = await get_user(uid, bot.DB_PATH)
+        assert opened["stage"] == "offer_request_form"
+        assert opened.get("pending_offer_request_format") == "Живой разбор"
+        assert "Имя" in "\n".join(request_cb.message.answers)
+
+        form_msg = FakeMessage(uid, "Иван\\n@Ivan_Vasiliuk\\nivan.vasiluk@gmail.com\\nХочу разобрать прокрастинацию")
+        form_msg.bot = FakeTelegramBot()
+        await bot.main_flow(form_msg)
+        submitted = await get_user(uid, bot.DB_PATH)
+        sent_text = form_msg.bot.sent[0][1]
+        bot.DB_PATH = old
+        assert submitted["stage"] == bot.OFFER_MENU_STAGE
+        assert "Заявка из offer" in sent_text
+        assert "ivan.vasiluk@gmail.com" in sent_text
+        assert "Хочу разобрать прокрастинацию" in sent_text
+        assert "Я отправил заявку Ивану" in "\n".join(form_msg.answers)
 
 
 async def test_day_intro_is_not_sent_twice():
@@ -664,6 +770,9 @@ def run():
         test_social_support_option_only_when_available,
         test_curator_notification_sends_dm_to_ivan,
         test_show_offer_force_enables_offer_prerequisites,
+        test_offer_preview_menu_callbacks_do_not_go_stale,
+        test_auto_offer_marks_once_but_manual_offer_stays_available,
+        test_offer_request_form_sends_application_to_curator,
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,

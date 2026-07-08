@@ -325,6 +325,39 @@ kb_closed_day_continue = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_closed_day_extra_step = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🟡 Не получилось")],
+        [KeyboardButton(text="🌙 Точно закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_extra_done = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Завершить")],
+        [KeyboardButton(text="➕ Ещё один короткий шаг")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_extra_failed = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🌙 Завершить")],
+        [KeyboardButton(text="↘️ Дать совсем проще")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_extra_tiny = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🌙 Завершить")],
+    ],
+    resize_keyboard=True,
+)
+
 kb_feedback_instruction_clarity = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟢 Да, очень понятно")],
@@ -5822,19 +5855,29 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
     return day3_personal_offer_text(summary, profile)
 
 
-async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
+OFFER_MENU_STAGE = "OFFER_MENU"
+OFFER_PREVIEW_STAGE = "OFFER_PREVIEW"
+OFFER_STAGES = {"offer", OFFER_MENU_STAGE, OFFER_PREVIEW_STAGE}
+
+
+async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: str = "auto"):
     """Show the adaptive day-3 map and paid continuation offer."""
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
         previous_flow["resume_after_offer"] = True
         previous_flow.setdefault("source", source)
         u["safety_resume_context"] = json.dumps({"active_flow": previous_flow}, ensure_ascii=False)
-    u["stage"] = "offer"
-    set_active_flow(u, "offer", source=source, resume_after_offer=bool(previous_flow), previous_flow=previous_flow)
+    is_preview = mode == "preview"
+    is_auto = mode == "auto"
+    u["previous_stage"] = previous_flow.get("stage") if previous_flow else u.get("stage")
+    u["stage"] = OFFER_PREVIEW_STAGE if is_preview else OFFER_MENU_STAGE
+    u["offer_mode"] = mode
+    set_active_flow(u, "offer", source=source, resume_after_offer=bool(previous_flow), previous_flow=previous_flow, offer_mode=mode)
     set_current_state(u, STATE_OFFER_SCREEN, close_action=False)
     offer_seen_at = dt.datetime.now(dt.timezone.utc).isoformat()
-    u["last_offer_shown_at"] = offer_seen_at
-    u["offer_shown"] = 1
+    if is_auto:
+        u["last_offer_shown_at"] = offer_seen_at
+        u["offer_shown"] = 1
     set_last_explanation_context(
         u,
         "offer",
@@ -5844,7 +5887,8 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "Реши: продолжать коротко или включить полный режим."
     )
     await save_user(u, DB_PATH)
-    await update_user_profile(u["user_id"], {"offer_shown": 1, "offer_seen_at": offer_seen_at}, DB_PATH, source="offer_shown")
+    if is_auto:
+        await update_user_profile(u["user_id"], {"offer_shown": 1, "offer_seen_at": offer_seen_at}, DB_PATH, source="offer_shown")
 
     profile = await get_user_profile(u["user_id"], DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
@@ -5888,12 +5932,19 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "price_month": "14.98",
         **profile_patch,
     }
-    await log_event(u["user_id"], "offer", "offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "offer", "offer_shown" if is_auto else "offer_preview_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "offer", "profile_map_updated", {"source": source, **profile_patch}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await log_event(u["user_id"], "offer", "day3_conclusion_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
-    await log_event(u["user_id"], "offer", "adaptive_offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "offer", "day3_conclusion_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "offer", "adaptive_offer_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
 
-    await answer_with_inline_screen(m, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(u["user_id"]), "offer")
+    text = trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer")
+    if is_preview:
+        text = (
+            "Это можно посмотреть заранее. Автоматически мы предложим полный режим после 3-го дня. "
+            "Сейчас можно изучить варианты или вернуться к тренировке.\n\n"
+            + text
+        )
+    await answer_with_inline_screen(m, u, text, offer_inline_keyboard(u["user_id"]), "offer")
 
 
 def pop_offer_resume_flow(u: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -5930,6 +5981,16 @@ async def resume_after_offer_if_needed(message: Message, u: Dict[str, Any]) -> b
     await render_current_screen(message, u)
     return True
 
+
+async def leave_offer_menu(message: Message, u: Dict[str, Any], source: str) -> None:
+    u["last_offer_action"] = source
+    if await resume_after_offer_if_needed(message, u):
+        return
+    u["stage"] = "training_main" if not day_closed_today(u) else "day_core_stop"
+    set_current_state(u, STATE_PAUSED, close_action=False)
+    await save_user(u, DB_PATH)
+    await message.answer("Ок. Можно вернуться к тренировке.", reply_markup=kb_day_core_stop if day_closed_today(u) else kb_training_main)
+
 def _profile_from_user_for_offer(u: Dict[str, Any]) -> Dict[str, Any]:
     raw = u.get("profile_json") or {}
     if isinstance(raw, dict):
@@ -5953,39 +6014,11 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
 
 
 async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
-    """QA/manual command: enable all offer prerequisites and show the offer now."""
-    u["day"] = max(3, int(u.get("day") or 1))
-    u["is_test_user"] = 1
-    u["fast_forward_enabled"] = 1
-    u["free_mode"] = 0
-    u["last_offer_shown_at"] = None
-    await save_user(u, DB_PATH)
-    await update_user_profile(
-        u["user_id"],
-        {
-            "completed_days": [1, 2, 3],
-            "completed_skill_days": [1, 2, 3],
-            "offer_shown": 0,
-            "offer_seen_at": None,
-            "force_show_offer_enabled": 1,
-        },
-        DB_PATH,
-        source=source,
-    )
-    await log_event(u["user_id"], u.get("stage", ""), "show_offer_forced", {"source": source, "day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await show_day3_offer(m, u, source)
-    await update_user_profile(
-        u["user_id"],
-        {
-            "completed_days": [1, 2, 3],
-            "completed_skill_days": [1, 2, 3],
-            "offer_shown": 1,
-            "offer_seen_at": u.get("last_offer_shown_at"),
-            "force_show_offer_enabled": 1,
-        },
-        DB_PATH,
-        source=f"{source}_post_show",
-    )
+    """QA/manual command: show the offer without changing day/progress prerequisites."""
+    day = int(u.get("day") or u.get("day_number") or 1)
+    mode = "preview" if day < 3 else "manual"
+    await log_event(u["user_id"], u.get("stage", ""), "show_offer_manual", {"source": source, "day": day, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await show_day3_offer(m, u, source, mode=mode)
 
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
@@ -6180,6 +6213,47 @@ def curator_review_notification_text(u: Dict[str, Any], profile: Dict[str, Any],
     )
 
 
+def offer_request_notification_text(u: Dict[str, Any], source: str, form_text: str, m: Optional[Message] = None) -> str:
+    tg_user = getattr(m, "from_user", None) if m is not None else None
+    username = str(getattr(tg_user, "username", "") or u.get("username") or "").strip()
+    first_name = str(getattr(tg_user, "first_name", "") or u.get("name") or "").strip()
+    last_name = str(getattr(tg_user, "last_name", "") or "").strip()
+    lang = str(getattr(tg_user, "language_code", "") or u.get("language_code") or "").strip()
+    email_match = re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", form_text or "")
+    tg_label = f"@{username}" if username else "—"
+    return (
+        "✍️ Заявка из offer\n\n"
+        f"Формат: {u.get('pending_offer_request_format') or source}\n"
+        f"User ID: {u.get('user_id')}\n"
+        f"TG: {tg_label}\n"
+        f"First: {first_name or '—'}\n"
+        f"Last: {last_name or '—'}\n"
+        f"Lang: {lang or '—'}\n"
+        f"Email: {email_match.group(0) if email_match else 'не распознан'}\n\n"
+        f"Сообщение пользователя:\n{(form_text or '').strip()[:2000]}"
+    )
+
+
+async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form_text: str) -> bool:
+    """Send an offer sign-up/request form to Ivan via Telegram DM when possible."""
+    if not CURATOR_TELEGRAM_ID:
+        return False
+    bot_obj = getattr(sender, "bot", None)
+    if bot_obj is None and getattr(sender, "message", None) is not None:
+        bot_obj = getattr(sender.message, "bot", None)
+    if bot_obj is None:
+        await log_event(u["user_id"], "offer", "offer_request_notification_skipped", {"source": source, "reason": "no_bot"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return False
+    try:
+        await bot_obj.send_message(CURATOR_TELEGRAM_ID, offer_request_notification_text(u, source, form_text, sender if isinstance(sender, Message) else getattr(sender, "message", None)))
+    except Exception as e:
+        log.warning("Failed to notify offer request recipient %s: %s", CURATOR_TELEGRAM_ID, e)
+        await log_event(u["user_id"], "offer", "offer_request_notification_failed", {"source": source, "error": str(e)[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return False
+    await log_event(u["user_id"], "offer", "offer_request_notification_sent", {"source": source, "curator_id": CURATOR_TELEGRAM_ID}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return True
+
+
 async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> bool:
     """Send a curator-review request to the configured Telegram account when possible."""
     if not CURATOR_TELEGRAM_ID:
@@ -6208,6 +6282,10 @@ OFFER_CALLBACKS = {
     "stay_free": "offer:stay_free",
     "paid_test": "offer:paid_test",
     "back": "offer:back",
+    "continue_training": "offer:continue_training",
+    "choose_later": "offer:choose_later",
+    "request_live": "offer:request_live",
+    "request_guided": "offer:request_guided",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -6257,6 +6335,47 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="👤 Выбрать живой разбор", callback_data=OFFER_CALLBACKS["live"])],
         [InlineKeyboardButton(text="⭐ Выбрать бот + специалист", callback_data=OFFER_CALLBACKS["guided"])],
         [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
+    ])
+
+
+def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = None) -> InlineKeyboardMarkup:
+    rows = []
+    if request_callback:
+        rows.append([InlineKeyboardButton(text="✍️ Написать / записаться", callback_data=request_callback)])
+    rows.extend([
+        [InlineKeyboardButton(text="← Назад к вариантам", callback_data=OFFER_CALLBACKS["back"])],
+        [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+        [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def offer_request_form_text(format_label: str) -> str:
+    return (
+        f"Ок, соберём заявку на формат: {format_label}.\n\n"
+        "Напиши одним сообщением:\n"
+        "1. Имя\n"
+        "2. Ник в Telegram\n"
+        "3. Почта\n"
+        "4. Что хочешь разобрать / какой запрос\n\n"
+        "Можно коротко. Я добавлю к заявке твой Telegram ID автоматически."
+    )
+
+
+def offer_request_submitted_text(sent: bool) -> str:
+    contact = curator_contact_url() or "@Ivan_Vasiliuk"
+    sent_line = "Я отправил заявку Ивану." if sent else "Я записал заявку, но не смог автоматически отправить её в личку Ивану из этого окружения."
+    return (
+        f"{sent_line}\n\n"
+        f"Если хочешь ускорить контакт, можно написать напрямую: {contact}\n\n"
+        "Можешь вернуться к тренировке или выбрать позже."
+    )
+
+
+def offer_request_done_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+        [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
     ])
 
 
@@ -6310,29 +6429,15 @@ def tariff_specialist_text() -> str:
 
 
 def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить €9.99", callback_data="pay:bot_999")],
-        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    return offer_variant_inline_keyboard(user_id)
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить €59", callback_data="pay:live_59")],
-        [InlineKeyboardButton(text="📅 Выбрать время", callback_data="schedule:live_review")],
-        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    return offer_variant_inline_keyboard(user_id, OFFER_CALLBACKS["request_live"])
 
 
 def tariff_specialist_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить €149", callback_data="pay:guided_149")],
-        [InlineKeyboardButton(text="📅 Выбрать время первого check-in", callback_data="schedule:guided")],
-        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    return offer_variant_inline_keyboard(user_id, OFFER_CALLBACKS["request_guided"])
 
 
 def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -7160,10 +7265,30 @@ DAY_CLOSED_CONTINUE_PROMPT = (
 DAY_CLOSED_ALLOWED_KINDS = {"map", "trainer_switch", "crisis", "tomorrow"}
 DAY_CLOSED_BLOCKED_KINDS = {"other_skill", "change_skill", "stuck", "more", "details", "why", "enough", "close_day"}
 DAY_CLOSED_VOLUNTARY_ACTIONS = {"action", "repeat"}
+DAY_CLOSED_VOLUNTARY_ACTION_TEXTS = {
+    "➕ Ещё один короткий шаг",
+    "➕ Ещё 2 минуты",
+    "💪 Закрепить ещё 2 минуты",
+    "💪 Сделать следующий шаг",
+    "💪 Давай действие",
+    "🧭 Давай действие",
+    "💪 Продолжить тренировку",
+    "🧭 Следующий шаг",
+    "🧭 Следующий шаг по маршруту",
+}
 
 
 def closed_day_extra_used_today(u: Dict[str, Any]) -> bool:
     return is_same_calendar_day(u.get("closed_day_extra_step_date"), u) and int(u.get("closed_day_extra_step_count") or 0) >= 1
+
+
+def is_closed_day_voluntary_action_request(text: str, low: str, u: Dict[str, Any]) -> bool:
+    kind = global_button_kind(text, low) if is_known_reply_button(text) or text else ""
+    return (
+        kind in DAY_CLOSED_VOLUNTARY_ACTIONS
+        or should_route_action_request(text, low, u)
+        or text in DAY_CLOSED_VOLUNTARY_ACTION_TEXTS
+    )
 
 
 def next_step_prefix(u: Dict[str, Any], repeat: bool = False, voluntary: bool = False) -> str:
@@ -7233,23 +7358,48 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
     await answer_with_keyboard(m, u, build_current_skill_text(skill, next_step_prefix(u, repeat=True), u), action_keyboard(), "next_logical_step")
 
 
+CLOSED_DAY_VOLUNTARY_STEP_TEXT = (
+    "День уже закрыт. Это не отменяется.\n\n"
+    "Но если хочешь — можно сделать один добровольный короткий шаг.\n"
+    "Без долга, без оценки, без продолжения марафона.\n\n"
+    "🧩 Мини-навык: Оставить видимый следующий шаг\n\n"
+    "Сделай:\n"
+    "1. Открой задачу.\n"
+    "2. Оставь одну подсказку для завтра: «продолжить с…».\n"
+    "3. Закрой.\n\n"
+    "Минимум:\n"
+    "одна заметка для себя."
+)
+
+CLOSED_DAY_VOLUNTARY_DONE_TEXT = (
+    "Готово. Это дополнительный шаг, не новая обязанность.\n\n"
+    "День остаётся закрытым.\n"
+    "На сегодня достаточно."
+)
+
+CLOSED_DAY_VOLUNTARY_FAILED_TEXT = (
+    "Ок. Не тянем дальше.\n\n"
+    "День уже был закрыт, значит минимум на сегодня сохранён.\n"
+    "Ничего не испорчено."
+)
+
+CLOSED_DAY_VOLUNTARY_TINY_TEXT = (
+    "Совсем простой вариант.\n\n"
+    "Посмотри на задачу 10 секунд и скажи:\n"
+    "«Я продолжу с этого места завтра».\n\n"
+    "Это тоже засчитывается как возвращение."
+)
+
+
 async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
-    if closed_day_extra_used_today(u):
-        await answer_with_keyboard(m, u, "На сегодня достаточно: добровольный дополнительный подход уже был. День остаётся закрытым.", kb_day_core_stop, "day_core_stop")
-        return
-    sid = current_skill_for_action(u) or "visible_next_step"
-    if sid not in SKILLS_DB:
-        sid = next(iter(SKILLS_DB))
-    skill = dict(SKILLS_DB[sid])
-    skill.setdefault("skill_id", sid)
-    u["stage"] = "training"
+    sid = "visible_next_step" if "visible_next_step" in SKILLS_DB else ("one_visible_step" if "one_visible_step" in SKILLS_DB else str(current_skill_for_action(u) or next(iter(SKILLS_DB))))
+    u["stage"] = "closed_day_voluntary_step"
     u["closed_day_extra_step_date"] = local_date_for_user(u)
     u["closed_day_extra_step_count"] = int(u.get("closed_day_extra_step_count") or 0) + 1
     u["daily_skill_status"] = "voluntary_extra"
-    mark_action_card_active(u)
     await save_user(u, DB_PATH)
-    await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": "closed_day_continue", "voluntary": True})
-    await answer_with_keyboard(m, u, build_current_skill_text(skill, next_step_prefix(u, voluntary=True), u), action_keyboard(), "closed_day_voluntary_step")
+    await bot_record_action_event(u, "extra_step_after_day_closed", skill_id=sid, metadata={"source": "closed_day_continue", "day_stays_closed": True})
+    await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_STEP_TEXT, kb_closed_day_extra_step, "closed_day_voluntary_step")
 
 
 async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low: str) -> bool:
@@ -7258,8 +7408,34 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         return False
     if not day_closed_today(u):
         return False
-    if u.get("stage") == "closed_day_voluntary_step" and text in ACTION_OUTCOME_BUTTONS:
-        return False
+    if u.get("stage") in {"closed_day_voluntary_step", "closed_day_voluntary_tiny"}:
+        if text in {"✅ Сделал", "✅ Сделал(а)"} or ("сделал" in low and "не сделал" not in low):
+            u["stage"] = "day_core_stop"
+            set_current_state(u, STATE_PAUSED, close_action=True)
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_DONE_TEXT, kb_closed_day_extra_done, "day_core_stop")
+            return True
+        if text in {"🟡 Не получилось", "🟡 Попробовал, но не вышло", "🟡 Не вышло"}:
+            u["stage"] = "closed_day_voluntary_failed"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_FAILED_TEXT, kb_closed_day_extra_failed, "closed_day_voluntary_failed")
+            return True
+        if text in {"🌙 Точно закрыть день", "🌙 Завершить"}:
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            return True
+    if u.get("stage") == "closed_day_voluntary_failed":
+        if text == "↘️ Дать совсем проще":
+            u["stage"] = "closed_day_voluntary_tiny"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_TINY_TEXT, kb_closed_day_extra_tiny, "closed_day_voluntary_tiny")
+            return True
+        if text == "🌙 Завершить":
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            return True
     kind = global_button_kind(text, low) if is_known_reply_button(text) or text else ""
     if u.get("stage") == "closed_day_continue_confirm":
         if text == "✅ Да, ещё один короткий шаг" or low.startswith("да"):
@@ -7284,15 +7460,8 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
         return True
-    if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё один короткий шаг", "➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "🧭 Давай действие", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
-        if closed_day_extra_used_today(u):
-            u["stage"] = "day_core_stop"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "День уже закрыт, и один добровольный дополнительный подход сегодня уже был. Лучше оставить день закрытым.", kb_day_core_stop, "day_core_stop")
-            return True
-        u["stage"] = "closed_day_continue_confirm"
-        await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+    if is_closed_day_voluntary_action_request(text, low, u):
+        await open_closed_day_voluntary_step(m, u)
         return True
     if kind in DAY_CLOSED_BLOCKED_KINDS:
         u["stage"] = "day_core_stop"
@@ -7407,9 +7576,7 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
         return
     if current_skill_completed_or_closed(user):
         if day_closed_today(user, profile):
-            user["stage"] = "closed_day_continue_confirm"
-            await save_user(user, DB_PATH)
-            await answer_with_keyboard(message, user, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(message, user)
             return
         await open_next_logical_step(message, user, source="send_current_skill_after_completion")
         return
@@ -7458,15 +7625,11 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
     if await maybe_resume_pending_stuck_validation(message, user):
         return
     if day_closed_today(user, profile):
-        user["stage"] = "closed_day_continue_confirm"
-        await save_user(user, DB_PATH)
-        await answer_with_keyboard(message, user, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+        await open_closed_day_voluntary_step(message, user)
         return
     if current_skill_completed_or_closed(user):
         if day_closed_today(user, profile):
-            user["stage"] = "closed_day_continue_confirm"
-            await save_user(user, DB_PATH)
-            await answer_with_keyboard(message, user, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(message, user)
             return
         await open_next_logical_step(message, user, source="action_request_after_completion")
         return
@@ -7728,6 +7891,12 @@ def debug_state_text(u: Dict[str, Any]) -> str:
     return (
         "DEBUG STATE\n"
         f"FSM-state: {u.get('stage') or '-'}\n"
+        f"current_day: {u.get('day') or u.get('day_number') or '-'}\n"
+        f"stage: {u.get('stage') or '-'}\n"
+        f"previous_stage: {u.get('previous_stage') or '-'}\n"
+        f"offer_mode: {u.get('offer_mode') or '-'}\n"
+        f"offer_shown: {int(bool(u.get('offer_shown') or u.get('offer_seen') or u.get('last_offer_shown_at')))}\n"
+        f"last_offer_action: {u.get('last_offer_action') or '-'}\n"
         f"day_id: {u.get('current_day_id') or '-'}\n"
         f"current_task: {current_task_title(u, '-')}\n"
         f"current_skill: {sid or u.get('daily_skill_id') or '-'}\n"
@@ -8708,9 +8877,7 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
     if kind == "action":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         if day_closed_today(u, profile):
-            u["stage"] = "closed_day_continue_confirm"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(m, u)
             return True
         if u.get("current_next_physical_step"):
             await m.answer(returning_to_task_text(u))
@@ -8728,9 +8895,7 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
     if kind == "repeat":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         if day_closed_today(u, profile):
-            u["stage"] = "closed_day_continue_confirm"
-            await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, DAY_CLOSED_CONTINUE_PROMPT, kb_closed_day_continue, "closed_day_continue_confirm")
+            await open_closed_day_voluntary_step(m, u)
             return True
         await handle_action_request(u["user_id"], m, u, repeat=True)
         return True
@@ -8998,6 +9163,14 @@ async def main_flow(m: Message):
         set_current_state(u, STATE_AWAITING_STUCK_REASON)
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, STUCK_REASON_PROMPT, kb_failed, "failed_options")
+        return
+
+    # Closed-day action buttons must stay available even from the final
+    # day-lock screen. Route them before generic command/global handling so
+    # buttons like «➕ Ещё один короткий шаг» cannot be swallowed by stale
+    # post-day state.
+    if day_closed_today(u) and is_closed_day_voluntary_action_request(text, low, u):
+        await open_closed_day_voluntary_step(m, u)
         return
 
     if await handle_admin_command(m, u, text):
@@ -11341,6 +11514,20 @@ async def main_flow(m: Message):
         )
         return
 
+    if u.get("stage") == "offer_request_form":
+        request_text = (text or "").strip()
+        if len(request_text) < 5:
+            await m.answer("Напиши, пожалуйста, одним сообщением: имя, ник в Telegram, почту и коротко запрос.")
+            return
+        source = str(u.get("pending_offer_request_format") or "offer_request")
+        u["last_offer_action"] = "offer_request_submitted"
+        u["stage"] = OFFER_MENU_STAGE
+        await save_user(u, DB_PATH)
+        sent = await notify_offer_request(m, u, source, request_text)
+        await log_event(u["user_id"], "offer", "offer_request_submitted", {"format": source, "sent": sent, "text_len": len(request_text)}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(m, u, offer_request_submitted_text(sent), offer_request_done_keyboard(), "offer")
+        return
+
     # Если дошли до сюда — неизвестный этап. Не сбрасываем пользователя в /start:
     # возвращаем к безопасному меню текущего дня.
     raw_stage = str(u.get("stage") or "")
@@ -11443,7 +11630,7 @@ def current_active_flow(u: Dict[str, Any]) -> Dict[str, Any] | None:
         return raw
     stage = str(u.get("stage") or "")
     flow_type = None
-    if stage == "offer":
+    if stage in (OFFER_STAGES if "OFFER_STAGES" in globals() else {"offer"}):
         flow_type = "offer"
     elif "crisis" in stage or str(u.get("safety_mode") or "") in {"triage", "active", "support"}:
         flow_type = "crisis"
@@ -11731,7 +11918,7 @@ async def answer_with_inline_screen(m: Message, u: Dict[str, Any], text: str, ma
     await set_active_screen(u, screen_id)
     sent = await m.answer(text, reply_markup=bind_inline_screen(markup, screen_id, int(attempt.get("screen_version") or 0)))
     remember_last_safe_screen(u, prefix, {"text": text}, getattr(sent, "message_id", None))
-    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict) and current_active_flow(u).get("previous_flow")):
+    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict)):
         set_active_flow(u, prefix, source="inline_screen")
     await save_user_best_effort(u)
 
@@ -11742,7 +11929,7 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
     await set_active_screen(u, screen_id)
     await message.edit_text(text, reply_markup=bind_inline_screen(markup, screen_id, int(attempt.get("screen_version") or 0)))
     remember_last_safe_screen(u, prefix, {"text": text}, getattr(message, "message_id", None))
-    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict) and current_active_flow(u).get("previous_flow")):
+    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict)):
         set_active_flow(u, prefix, source="inline_edit")
     await save_user_best_effort(u)
 
@@ -11758,12 +11945,29 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if await handle_safety_callback(c, u, data):
         return
-    valid, data = await validate_callback_screen(c, u, "offer")
-    if not valid:
+    data, _, _ = split_versioned_callback(data)
+    u["last_offer_action"] = data
+    if u.get("stage") not in OFFER_STAGES:
+        u["previous_stage"] = u.get("stage")
+        u["stage"] = OFFER_MENU_STAGE
+        u["offer_mode"] = u.get("offer_mode") or "manual"
+        await save_user(u, DB_PATH)
+
+    if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
+        await log_event(uid, "offer", "offer_menu_left", {"source": data}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await leave_offer_menu(c.message, u, data)
+        await c.answer()
         return
 
-    if u.get("stage") != "offer" and data not in {OFFER_CALLBACKS["paid_test"], "confirm_test_payment"}:
-        await reject_lost_callback(c, u, "offer_stage_mismatch")
+    if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"]}:
+        format_label = "Живой разбор" if data == OFFER_CALLBACKS["request_live"] else "Бот + специалист"
+        u["stage"] = "offer_request_form"
+        u["pending_offer_request_format"] = format_label
+        u["last_offer_action"] = data
+        await save_user(u, DB_PATH)
+        await log_event(uid, "offer", "offer_request_form_opened", {"format": format_label}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await c.message.answer(offer_request_form_text(format_label), reply_markup=ReplyKeyboardRemove())
+        await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["bot"], "offer_bot"}:
@@ -11786,7 +11990,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {OFFER_CALLBACKS["compare"], "offer_details"}:
         await log_event(uid, "offer", "profile_map_details_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, offer_details_full_mode_text(), offer_details_inline_keyboard(uid), "offer")
+        await answer_with_inline_screen(c.message, u, offer_details_full_mode_text(), offer_variant_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
@@ -11800,19 +12004,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {OFFER_CALLBACKS["stay_free"], "stay_free"}:
         await log_event(uid, "offer", "payment_declined_soft", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(uid, "offer", "free_mode_started", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        suppressed_until = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7)).isoformat()
-        u["free_mode"] = 1
-        u["payment_status"] = "free_mode"
-        u["offer_suppressed_until"] = suppressed_until
-        u["stage"] = "feedback_offer"
-        await update_user_profile(uid, {"offer_suppressed_until": suppressed_until, "offer_declined_at": dt.datetime.now(dt.timezone.utc).isoformat()}, DB_PATH, source="offer_stay_free")
-        await save_user(u, DB_PATH)
-        await c.message.answer(
-            "Это нормально. Базовый режим остаётся доступным.\n\n"
-            "Автооффер не вернётся минимум 7 дней. Если захочешь посмотреть его сам — команда /show_offer сработает вручную.",
-            reply_markup=kb_short_mode_main,
-        )
+        await leave_offer_menu(c.message, u, "offer_stay_free")
         await c.answer()
         return
 
@@ -11863,10 +12055,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data == "continue_free":
-        if not await resume_after_offer_if_needed(c.message, u):
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
+        await leave_offer_menu(c.message, u, "continue_free")
         await c.answer()
         return
 
