@@ -106,16 +106,18 @@ async def main() -> None:
                 user, close_msg = await send(uid, "🧩 Маленький конкретный шаг")
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
 
-            # 3. Action after close asks for consent, then opens one voluntary short step.
-            user, blocked_msg = await send(uid, "💪 Давай действие")
+            # 3. Action after close opens a voluntary short step without reopening the day.
+            user, voluntary_msg = await send(uid, "💪 Давай действие")
             assert user["current_day_id"] == day_id
-            assert "Хочешь сделать ещё один короткий добровольный подход?" in joined(blocked_msg)
-            assert "🧩 Навык:" not in joined(blocked_msg)
-            user, voluntary_msg = await send(uid, "✅ Да, ещё один короткий шаг")
-            assert "Добровольный короткий подход" in joined(voluntary_msg)
-            assert "🧩 Навык:" in joined(voluntary_msg)
-            user, second_extra_msg = await send(uid, "💪 Давай действие")
-            assert "добровольный дополнительный подход сегодня уже был" in joined(second_extra_msg)
+            assert "День уже закрыт. Это не отменяется." in joined(voluntary_msg)
+            assert "🧩 Мини-навык: Оставить видимый следующий шаг" in joined(voluntary_msg)
+            assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
+            user, done_msg = await send(uid, "✅ Сделал")
+            assert "Готово. Это дополнительный шаг" in joined(done_msg)
+            assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
+            user, second_extra_msg = await send(uid, "➕ Ещё один короткий шаг")
+            assert "День уже закрыт. Это не отменяется." in joined(second_extra_msg)
+            assert "добровольный дополнительный подход сегодня уже был" not in joined(second_extra_msg)
 
             # 4-5. force_next_day closes/opens atomically, preserves total progress, resets daily attempts.
             before_done = int(user.get("done_count") or 0)
