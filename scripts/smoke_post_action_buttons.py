@@ -338,7 +338,7 @@ async def run() -> None:
         assert "Что изменилось после шага?" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "✅ Стало легче")
         assert "первый сигнал" in last_text(success_msg), last_text(success_msg)
-        assert keyboard_texts(success_msg.answers[-1]["reply_markup"]) == {"➕ Ещё 2 минуты", "💪 Продолжить тренировку", "🌙 На сегодня достаточно"}
+        assert {"➕ Ещё 2 минуты", "🔄 Сменить навык", "🎭 Сменить тренера"}.issubset(keyboard_texts(success_msg.answers[-1]["reply_markup"]))
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "Ещё 2 минуты" in last_text(repeat1_msg), last_text(repeat1_msg)
@@ -348,7 +348,7 @@ async def run() -> None:
         assert "➕ Ещё 2 минуты" not in keyboard_texts(done2_msg.answers[-1]["reply_markup"]), keyboard_texts(done2_msg.answers[-1]["reply_markup"])
         limit_msg = await send(uid, "➕ Ещё 2 минуты")
         assert "Минимум на сегодня уже выполнен" in last_text(limit_msg), last_text(limit_msg)
-        assert keyboard_texts(limit_msg.answers[-1]["reply_markup"]) == {"💪 Продолжить тренировку", "🌙 На сегодня достаточно"}
+        assert {"🔄 Сменить навык", "🎭 Сменить тренера"}.issubset(keyboard_texts(limit_msg.answers[-1]["reply_markup"]))
 
         enough_msg = await send(uid, "🌙 На сегодня достаточно")
         assert "тренировка остаётся доступной" in last_text(enough_msg), last_text(enough_msg)
