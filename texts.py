@@ -1362,9 +1362,8 @@ kb_action_outcome = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="🟡 Не вышло")],
-        [KeyboardButton(text="🤷 Не моё"), KeyboardButton(text="🔄 Сменить навык")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🧠 Почему этот навык")],
-        [KeyboardButton(text="🌙 Закрыть подход")],
+        [KeyboardButton(text="↘️ Нужно проще")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
 )
@@ -1384,40 +1383,48 @@ kb_done = kb_action_outcome
 
 kb_success_next = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💪 Закрепить ещё 2 минуты")],
-        [KeyboardButton(text="🧭 Следующий шаг по маршруту")],
-        [KeyboardButton(text="🌙 На сегодня достаточно")],
+        [KeyboardButton(text="➕ Ещё 2 минуты")],
+        [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
 )
 
 kb_success_limit = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🧭 Следующий шаг по маршруту")],
-        [KeyboardButton(text="🌙 На сегодня достаточно")],
+        [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
 )
 
 kb_day_core_stop = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🧭 Моя карта")],
-        [KeyboardButton(text="🎭 Сменить тренера")],
-        [KeyboardButton(text="🌙 До завтра")],
+        [KeyboardButton(text="✅ Завершить")],
+        [KeyboardButton(text="➕ Ещё один короткий шаг")],
+        [KeyboardButton(text="🧭 Посмотреть карту")],
     ],
     resize_keyboard=True
 )
 
 kb_failed = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="😬 Страшно, стыдно, боюсь ошибиться")],
+        [KeyboardButton(text="😬 Страшно ошибиться / стыдно")],
         [KeyboardButton(text="📱 Ушёл в телефон / YouTube")],
-        [KeyboardButton(text="🫨 Тревога и перегруз")],
-        [KeyboardButton(text="🔋 Нет сил")],
-        [KeyboardButton(text="🧠 Слишком много всего")],
-        [KeyboardButton(text="🧨 Самокритика после срыва")],
-        [KeyboardButton(text="🤷 Не понимаю, зачем это делать")],
-        [KeyboardButton(text="🎙️ Опишу голосом или текстом")],
+        [KeyboardButton(text="🧱 Слишком много задач")],
+        [KeyboardButton(text="😰 Тревога или внутреннее напряжение")],
+        [KeyboardButton(text="🗯 Слишком сильно ругаю себя")],
+        [KeyboardButton(text="🫥 Не понимаю, зачем вообще делать")],
+        [KeyboardButton(text="✍️ Опишу сам(а)")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_stuck_aftercare = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ Ещё 2 минуты")],
+        [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
 )
