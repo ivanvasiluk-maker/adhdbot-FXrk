@@ -8545,6 +8545,11 @@ async def handle_full_mode_buttons(m: Message, u: Dict[str, Any], text: str) -> 
     return False
 
 async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool:
+    # During primary diagnostics the user is entering free-form problem text.
+    # Global button routing must not intercept it — the stage-specific handler
+    # at `await_problem_text` / `await_problem_voice` is the only valid consumer.
+    if u.get("stage") in DIAGNOSTIC_INPUT_STAGES:
+        return False
     low = (text or "").lower().strip()
     kind = global_button_kind(text, low)
     if not kind:
@@ -8668,6 +8673,26 @@ RESUME_BLOCKED_ONBOARDING_STAGES = {
     "taking_test",
     "run_analysis",
 }
+
+# Stages where the user is actively entering diagnostic free-text.
+# Global button routing must not intercept these messages — they must be
+# handled exclusively by the stage-specific handlers below.
+DIAGNOSTIC_INPUT_STAGES = {"await_problem_text", "await_problem_voice"}
+
+# Words that are normal in a procrastination description and must NOT trigger
+# the crisis/stuck flow when the user is in a primary diagnostic stage.
+# Only HARD_SAFETY_MARKERS (suicide / self-harm phrases checked by
+# has_red_crisis_phrase / has_crisis_safety_signal) can override diagnostics.
+DIAGNOSTIC_SOFT_CRISIS_WORDS = (
+    "застрял",
+    "застряла",
+    "паниковать",
+    "ступор",
+    "вина",
+    "стыд",
+    "не могу начать",
+    "не получается",
+)
 
 
 def has_completed_profile_state(u: Dict[str, Any]) -> bool:
