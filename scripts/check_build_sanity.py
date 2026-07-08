@@ -53,6 +53,21 @@ CRISIS_ENTRY_MARKERS = (
     "Кризис прокрастинации",
 )
 
+OFFER_REQUIRED_BUTTONS = (
+    "🤖 Бот — €9.99 / мес.",
+    "👤 Живой разбор — €59",
+    "⭐ Бот + специалист — €149 / мес.",
+    "📚 Сравнить форматы",
+    "🤔 Остаться в коротком режиме",
+)
+OFFER_REQUIRED_CALLBACKS = (
+    "offer:bot",
+    "offer:live_review",
+    "offer:guided",
+    "offer:compare",
+    "offer:stay_free",
+)
+
 
 def repo_files() -> list[Path]:
     """Return files that should be safe to ship in the Docker build context."""
@@ -130,6 +145,19 @@ def check_file(path: Path) -> list[str]:
 def has_any_marker(text_blob: str, markers: tuple[str, ...]) -> bool:
     return any(marker in text_blob for marker in markers)
 
+
+
+def check_offer_invariants(all_text_blob: str, errors: list[str]) -> None:
+    for marker in OFFER_REQUIRED_BUTTONS:
+        if marker not in all_text_blob:
+            errors.append(f"offer invariant: missing offer button text: {marker!r}")
+
+    for callback in OFFER_REQUIRED_CALLBACKS:
+        if callback not in all_text_blob:
+            errors.append(f"offer invariant: missing offer callback: {callback!r}")
+
+    if "✅ Я оплатил(а) — тест" in all_text_blob and "offer:paid_test" not in all_text_blob:
+        errors.append("offer invariant: paid test button exists but callback offer:paid_test is missing")
 
 def check_crisis_entrypoint(text_blob: str, errors: list[str]) -> None:
     lowered_text = text_blob.lower()
@@ -211,22 +239,8 @@ def check_launch_week_invariants() -> list[str]:
         if marker in combined_progress_text:
             errors.append(f"adult gamification invariant: forbidden game marker remains in UI text: {marker!r}")
 
-    day3_offer_required = (
-        "Полный режим — это не давление",
-        "За первые попытки уже появились первые сигналы:",
-        "Пока это не окончательные выводы.",
-        "Базовый режим остаётся доступным.",
-        "хранить, какие шаги реально сработали",
-        "собирать твою личную связку навыков",
-        "давать недельный маршрут, а не случайные упражнения",
-        "Показать мою карту",
-        "Остаться в базовом режиме",
-        "Вернуться к текущему шагу",
-        "Полный режим €14.98",
-    )
-    for marker in day3_offer_required:
-        if marker not in bot_text:
-            errors.append(f"day3 offer invariant: missing marker: {marker!r}")
+    offer_text_blob = "\n".join((bot_text, texts_text, engine_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8"), (REPO_ROOT / "skills.py").read_text(encoding="utf-8")))
+    check_offer_invariants(offer_text_blob, errors)
 
     db_text = (REPO_ROOT / "db.py").read_text(encoding="utf-8")
     skills_text = (REPO_ROOT / "skills.py").read_text(encoding="utf-8")

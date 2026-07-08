@@ -5807,35 +5807,14 @@ def _offer_next_experiment(summary: Dict[str, Any], profile: Dict[str, Any]) -> 
 
 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    attempts = day3_attempt_count(summary, profile)
-    blocked_by = _offer_main_obstacle(summary, profile)
-    helpful_skill = _offer_skill_fact(summary, helpful=True)
-    not_helpful_skill = _offer_skill_fact(summary, helpful=False)
-    next_experiment = _offer_next_experiment(summary, profile)
-    personal_signals = [
-        f"попыток уже было: {attempts}",
-        f"чаще всего мешает: {blocked_by}",
-        f"что выглядит полезным: {helpful_skill}",
-    ]
     return (
-        "Полный режим — это не давление и не «плати, чтобы стать нормальным».\n\n"
-        "За первые попытки уже появились первые сигналы:\n\n"
-        + "\n".join(f"— {item}" for item in personal_signals)
-        + "\n\nНапример:\n"
-        f"— {blocked_by};\n"
-        f"— {helpful_skill};\n"
-        f"— пока неясно: {not_helpful_skill}, следующий тест — {next_experiment}.\n\n"
-        "Пока это не окончательные выводы.\n"
-        "Но уже можно не просто выдавать новые техники, а собрать твой рабочий маршрут.\n\n"
-        "В полном режиме SKILLER будет:\n\n"
-        "— хранить, какие шаги реально сработали;\n"
-        "— замечать, что именно ломает вход: страх ошибки, телефон, перегруз или самокритика;\n"
-        "— собирать твою личную связку навыков;\n"
-        "— показывать, что делать в момент стопора;\n"
-        "— давать недельный маршрут, а не случайные упражнения;\n"
-        "— помогать возвращаться после отвлечения и срывов.\n\n"
-        "Базовый режим остаётся доступным.\n"
-        "Полный нужен только тогда, когда тебе полезнее видеть свою историю и получать более точные следующие шаги."
+        "Полный режим помогает не начинать каждый день с нуля.\n\n"
+        "За первые попытки уже видно:\n"
+        "— что мешает тебе начать;\n"
+        "— какие шаги помогают сдвинуться;\n"
+        "— где чаще происходит срыв.\n\n"
+        "Можно продолжать самостоятельно или выбрать формат с живой поддержкой.\n\n"
+        "Выбери, что тебе подходит:"
     )
 
 
@@ -6044,6 +6023,20 @@ def payment_month_url() -> str:
     return PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL or "https://your-payment-link"
 
 
+def configured_payment_url() -> str:
+    if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
+        return PAYMENT_TEST_URL
+    return PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL or ""
+
+
+def payment_not_ready_text() -> str:
+    return "Оплата скоро будет подключена. Сейчас можно продолжить тест или написать Ивану напрямую."
+
+
+def schedule_not_ready_text() -> str:
+    return "Запись скоро будет подключена. Пока можно написать Ивану напрямую или продолжить тренировку."
+
+
 def paid_access_until(days: int = 30, existing_until: Optional[str] = None) -> str:
     now = dt.datetime.now(dt.timezone.utc)
     base = now
@@ -6206,9 +6199,20 @@ async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dic
     await log_event(u["user_id"], "offer", "curator_notification_sent", {"source": source, "curator_id": CURATOR_TELEGRAM_ID}, DB_PATH, SHEETS_WEBHOOK_URL)
     return True
 
+
+OFFER_CALLBACKS = {
+    "bot": "offer:bot",
+    "live": "offer:live_review",
+    "guided": "offer:guided",
+    "compare": "offer:compare",
+    "stay_free": "offer:stay_free",
+    "paid_test": "offer:paid_test",
+    "back": "offer:back",
+}
+
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Я оплатил(а) — включить тестовый доступ", callback_data="confirm_test_payment")],
+        [InlineKeyboardButton(text="✅ Я оплатил(а) — включить тестовый доступ", callback_data=OFFER_CALLBACKS["paid_test"])],
     ])
 
 
@@ -6234,14 +6238,14 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
-        [InlineKeyboardButton(text="📚 Чем отличается полный режим", callback_data="offer_details")],
-        [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
-        [InlineKeyboardButton(text="🤔 Остаться в базовом режиме", callback_data="stay_free")],
-        [InlineKeyboardButton(text="↩️ Вернуться к текущему шагу", callback_data="continue_free")],
+        [InlineKeyboardButton(text="🤖 Бот — €9.99 / мес.", callback_data=OFFER_CALLBACKS["bot"])],
+        [InlineKeyboardButton(text="👤 Живой разбор — €59", callback_data=OFFER_CALLBACKS["live"])],
+        [InlineKeyboardButton(text="⭐ Бот + специалист — €149 / мес.", callback_data=OFFER_CALLBACKS["guided"])],
+        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
+        [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data=OFFER_CALLBACKS["stay_free"])],
     ]
     if PAYMENT_ACCEPT_ANY:
-        keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data="confirm_test_payment")])
+        keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
         keyboard.append([InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL)])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -6249,10 +6253,85 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧭 Показать мою карту", callback_data="show_map")],
-        [InlineKeyboardButton(text="💳 Полный режим €14.98", url=payment_month_url())],
-        [InlineKeyboardButton(text="🤔 Остаться в базовом режиме", callback_data="stay_free")],
-        [InlineKeyboardButton(text="↩️ Вернуться к текущему шагу", callback_data="continue_free")],
+        [InlineKeyboardButton(text="🤖 Выбрать бот", callback_data=OFFER_CALLBACKS["bot"])],
+        [InlineKeyboardButton(text="👤 Выбрать живой разбор", callback_data=OFFER_CALLBACKS["live"])],
+        [InlineKeyboardButton(text="⭐ Выбрать бот + специалист", callback_data=OFFER_CALLBACKS["guided"])],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
+    ])
+
+
+def offer_disclaimer_text() -> str:
+    return (
+        "SKILLER — тренажёр навыков запуска, внимания и возвращения после срывов.\n\n"
+        "Он не заменяет психотерапию, диагностику, медицинскую или кризисную помощь."
+    )
+
+
+def tariff_bot_text() -> str:
+    return (
+        "🤖 SKILLER Бот — €9.99 / месяц\n\n"
+        "Подходит, если хочешь тренироваться самостоятельно.\n\n"
+        "Внутри:\n"
+        "— навыки на каждый день;\n"
+        "— карта твоих стопоров;\n"
+        "— история попыток;\n"
+        "— подбор следующего шага;\n"
+        "— недельный маршрут.\n\n"
+        "Это тренажёр навыков, не психотерапия.\n"
+    )
+
+
+def tariff_live_text() -> str:
+    return (
+        "👤 Живой разбор — €59\n\n"
+        "Разовый созвон со специалистом до 45 минут.\n\n"
+        "Что будет:\n"
+        "— посмотрим твою карту в боте;\n"
+        "— найдём главный механизм стопора;\n"
+        "— выберем 2–3 рабочих навыка;\n"
+        "— соберём маршрут на 7–14 дней.\n\n"
+        "Это не терапия и не кризисная помощь.\n"
+    )
+
+
+def tariff_specialist_text() -> str:
+    return (
+        "⭐ Бот + специалист — €149 / месяц\n\n"
+        "Для тех, кому нужна внешняя опора.\n\n"
+        "Внутри:\n"
+        "— полный доступ к боту;\n"
+        "— специалист раз в неделю смотрит твой прогресс;\n"
+        "— 4 коротких check-in созвона по 15 минут в месяц;\n"
+        "— корректировка маршрута раз в неделю.\n\n"
+        "Без неограниченной переписки.\n"
+        "Без кризисного сопровождения.\n"
+        "Это не замена психотерапии.\n"
+    )
+
+
+def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить €9.99", callback_data="pay:bot_999")],
+        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
+    ])
+
+
+def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить €59", callback_data="pay:live_59")],
+        [InlineKeyboardButton(text="📅 Выбрать время", callback_data="schedule:live_review")],
+        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
+    ])
+
+
+def tariff_specialist_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить €149", callback_data="pay:guided_149")],
+        [InlineKeyboardButton(text="📅 Выбрать время первого check-in", callback_data="schedule:guided")],
+        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
     ])
 
 
@@ -6265,25 +6344,16 @@ def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_full_mode_text() -> str:
     return (
-        "📚 Честная разница режимов\n\n"
-        "Бесплатный режим:\n"
-        "• один базовый навык в день;\n"
-        "• кризис прокрастинации;\n"
-        "• краткая карта;\n"
-        "• базовое возвращение после срыва;\n"
-        "• возможность продолжать самостоятельно.\n\n"
-        "Полный режим:\n"
-        "• хранить историю попыток;\n"
-        "• показывать, какие навыки дали эффект;\n"
-        "• подбирать следующий навык по повторяющемуся механизму;\n"
-        "• давать недельный маршрут;\n"
-        "• помогать возвращаться после срывов;\n"
-        "• показывать расширенную карту без общих формулировок.\n\n"
-        "Живой разбор карты:\n"
-        "• сейчас не продаётся как готовая услуга, пока не определены специалист, срок ответа и стоимость;\n"
-        "• поэтому бот не создаёт давление и не обещает формат, которого ещё нет.\n\n"
-        "Ты можешь продолжать в базовом режиме.\n"
-        "Полный режим нужен только тогда, когда тебе полезно видеть историю попыток и получать более точный маршрут."
+        "📚 Форматы SKILLER\n\n"
+        "🤖 Бот — €9.99 / месяц\n"
+        "Для самостоятельной тренировки.\n"
+        "Бот даёт навыки, хранит попытки и собирает личный маршрут.\n\n"
+        "👤 Живой разбор — €59 разово\n"
+        "Для тех, кто хочет быстрее понять свой паттерн.\n"
+        "Специалист смотрит карту и даёт маршрут на 7–14 дней.\n\n"
+        "⭐ Бот + специалист — €149 / месяц\n"
+        "Для тех, кому трудно держать темп одному.\n"
+        "Бот работает каждый день, а специалист раз в неделю смотрит прогресс и помогает скорректировать маршрут."
     )
 
 
@@ -8480,6 +8550,51 @@ async def send_downscale(m: Message, u: Dict[str, Any], reason: str):
 
 
 
+PROCRASTINATION_FAILED_BUTTONS = {"🟡 Попробовал, но не вышло", "🟡 Не получилось"}
+PROCRASTINATION_CRISIS_BUTTONS = {"🆘 Кризис", "🆘 Кризис прокрастинации"}
+PROCRASTINATION_CRISIS_FREE_TEXTS = {
+    "не получилось",
+    "я ушёл в телефон",
+    "я ушел в телефон",
+    "я паникую",
+    "я не могу",
+    "я всё бросил",
+    "я все бросил",
+}
+
+
+def raw_active_flow_type(u: Dict[str, Any]) -> str:
+    raw = u.get("active_flow")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict):
+        return str(raw.get("type") or "")
+    return ""
+
+
+def is_after_skill_context(u: Dict[str, Any]) -> bool:
+    flow_type = raw_active_flow_type(u) or ((current_active_flow(u) or {}).get("type") or "")
+    if flow_type == "diagnostic":
+        return False
+    if flow_type == "skill":
+        return True
+    return u.get("current_state") == STATE_AWAITING_RESULT or str(u.get("stage") or "") in ACTIVE_SKILL_STAGES
+
+
+def procrastination_crisis_intent(text: str, u: Dict[str, Any]) -> str:
+    low = (text or "").lower().strip()
+    if text in PROCRASTINATION_CRISIS_BUTTONS:
+        return "crisis"
+    if text in PROCRASTINATION_FAILED_BUTTONS:
+        return "failed"
+    if low in PROCRASTINATION_CRISIS_FREE_TEXTS and is_after_skill_context(u):
+        return "crisis"
+    return ""
+
+
 def global_button_kind(text: str, low: str) -> str:
     if text in {"🧭 Моя карта", "📖 Полная карта", "🧭 Посмотреть карту"} or "моя карта" in low or "посмотреть карту" in low or "полная карта" in low:
         return "map"
@@ -8499,7 +8614,9 @@ def global_button_kind(text: str, low: str) -> str:
         return "other_skill"
     if text in {"🎭 Сменить тренера", "🔄 Сменить тренера"} or "сменить тренера" in low:
         return "trainer_switch"
-    if text in {"🟡 Попробовал, но не вышло", "🟡 Застрял / не вышло", "🟡 Не вышло", "🟡 Не получилось", "🆘 Кризис прокрастинации", "🆘 Я застрял"} or "застрял" in low or "не вышло" in low or "не получилось" in low or "кризис прокрастинации" in low:
+    if text in PROCRASTINATION_CRISIS_BUTTONS:
+        return "crisis"
+    if text in PROCRASTINATION_FAILED_BUTTONS:
         return "stuck"
     if text == "↘️ Нужно проще" or "нужно проще" in low:
         return "downscale"
@@ -8633,6 +8750,10 @@ async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool
         set_current_state(u, STATE_AWAITING_STUCK_REASON)
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, STUCK_REASON_PROMPT, kb_failed, "failed_options")
+        return True
+    if kind == "crisis":
+        await log_event(u["user_id"], u.get("stage", ""), "procrastination_crisis_opened", {"source": "global_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await show_crisis_entry(m, u, "global_button")
         return True
     if kind == "downscale":
         await log_event(u["user_id"], u.get("stage", ""), "downscale_requested", {"source": "skill_card_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -8842,6 +8963,18 @@ async def main_flow(m: Message):
     if await handle_safety_mode(m, u, text):
         return
 
+    procrastination_intent = procrastination_crisis_intent(text, u)
+    if procrastination_intent == "crisis":
+        await log_event(u["user_id"], u.get("stage", ""), "procrastination_crisis_opened", {"source": "allowed_text_or_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await show_crisis_entry(m, u, "allowed_text_or_button")
+        return
+    if procrastination_intent == "failed":
+        u["stage"] = "failed_options"
+        set_current_state(u, STATE_AWAITING_STUCK_REASON)
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, STUCK_REASON_PROMPT, kb_failed, "failed_options")
+        return
+
     if await handle_admin_command(m, u, text):
         return
     if await handle_user_command(m, u, text):
@@ -8946,7 +9079,7 @@ async def main_flow(m: Message):
         return
 
     early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
-    if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "why_skill", "details", "map", "stuck", "downscale"}:
+    if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "why_skill", "details", "map", "stuck", "crisis", "downscale"}:
         if await handle_global_button(m, u, text):
             return
 
@@ -8959,7 +9092,7 @@ async def main_flow(m: Message):
         await show_action_changed_fallback(m, u, "old_action_button_hidden")
         return
 
-    if text in {"🟡 Попробовал, но не вышло", "🟡 Застрял / не вышло", "🟡 Не вышло"}:
+    if text in PROCRASTINATION_FAILED_BUTTONS:
         u["stage"] = "failed_options"
         set_current_state(u, STATE_AWAITING_STUCK_REASON)
         await save_user(u, DB_PATH)
@@ -11592,7 +11725,7 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
 # CALLBACKS
 # ============================================================
 
-@router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"offer_details", "show_map", "stay_free", "continue_free", "test_payment", "confirm_test_payment", "curator_path"})
+@router.callback_query(lambda c: (split_screen_callback(c.data or "")[0].startswith(("offer:", "pay:", "schedule:")) or split_screen_callback(c.data or "")[0] in {"show_map", "continue_free", "test_payment", "confirm_test_payment", "curator_path", "specialist_path", "offer_details", "offer_back", "offer_bot", "offer_live", "offer_specialist", "stay_free"}) )
 async def on_offer_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
@@ -11604,38 +11737,43 @@ async def on_offer_callbacks(c: CallbackQuery):
     if not valid:
         return
 
-    if u.get("stage") != "offer" and data != "confirm_test_payment":
+    if u.get("stage") != "offer" and data not in {OFFER_CALLBACKS["paid_test"], "confirm_test_payment"}:
         await reject_lost_callback(c, u, "offer_stage_mismatch")
         return
 
-    if data == "curator_path":
-        profile = await get_user_profile(uid, DB_PATH)
-        profile["_skill_map"] = await build_skill_map_data(u, profile)
-        u["stage"] = "curator_path"
-        u["curator_interest_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
-        await save_user(u, DB_PATH)
-        await log_event(uid, "offer", "curator_path_requested", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await notify_curator_map_review(c, u, profile, "inline_offer")
-        await c.message.answer(curator_path_text(u, profile), reply_markup=curator_path_reply_markup())
-        await resume_after_offer_if_needed(c.message, u)
+    if data in {OFFER_CALLBACKS["bot"], "offer_bot"}:
+        await log_event(uid, "offer", "tariff_details_opened", {"format": "bot", "amount": 9.99}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(c.message, u, tariff_bot_text(), tariff_bot_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
-    if data == "offer_details":
-        await log_event(uid, "offer", "profile_map_details_opened", {"price_month": "14.98", "source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if data in {OFFER_CALLBACKS["live"], "offer_live"}:
+        await log_event(uid, "offer", "tariff_details_opened", {"format": "live_review", "amount": 59}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(c.message, u, tariff_live_text(), tariff_live_inline_keyboard(uid), "offer")
+        await c.answer()
+        return
+
+    if data in {OFFER_CALLBACKS["guided"], "offer_specialist"}:
+        await log_event(uid, "offer", "tariff_details_opened", {"format": "bot_specialist", "amount": 149}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(c.message, u, tariff_specialist_text(), tariff_specialist_inline_keyboard(uid), "offer")
+        await c.answer()
+        return
+
+    if data in {OFFER_CALLBACKS["compare"], "offer_details"}:
+        await log_event(uid, "offer", "profile_map_details_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, offer_details_full_mode_text(), offer_details_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
-    if data == "show_map":
+    if data in {OFFER_CALLBACKS["back"], "offer_back"}:
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
-        await log_event(uid, "offer", "profile_signals_opened", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid), "offer")
+        summary = build_profile_map_summary(u, profile)
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
-    if data == "stay_free":
+    if data in {OFFER_CALLBACKS["stay_free"], "stay_free"}:
         await log_event(uid, "offer", "payment_declined_soft", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
         await log_event(uid, "offer", "free_mode_started", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
         suppressed_until = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7)).isoformat()
@@ -11653,21 +11791,57 @@ async def on_offer_callbacks(c: CallbackQuery):
         await c.answer()
         return
 
-    if data == "continue_free":
-        if not await resume_after_offer_if_needed(c.message, u):
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
-        await c.answer()
-        return
-
-    if data == "confirm_test_payment":
+    if data in {OFFER_CALLBACKS["paid_test"], "confirm_test_payment"}:
         if PAYMENT_ACCEPT_ANY:
             await grant_paid_access(u, "test_payment_confirm_button", {"accept_any_payment": True})
             if not await resume_after_offer_if_needed(c.message, u):
                 await send_full_mode_welcome(c.message, u)
         else:
             await c.message.answer("Автоподтверждение оплаты выключено. Нужен PAYMENT_ACCEPT_ANY=1 или админская /mark_paid.")
+        await c.answer()
+        return
+
+    if data in {"pay:bot_999", "pay:live_59", "pay:guided_149"}:
+        pay_url = configured_payment_url()
+        if pay_url:
+            amount_label = {"pay:bot_999": "€9.99", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
+            await c.message.answer("Оплата доступна по кнопке ниже.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💳 Оплатить {amount_label}", url=pay_url)]]))
+        else:
+            await c.message.answer(payment_not_ready_text())
+        await c.answer()
+        return
+
+    if data in {"schedule:live_review", "schedule:guided"}:
+        await c.message.answer(schedule_not_ready_text())
+        await c.answer()
+        return
+
+    if data in {"curator_path", "specialist_path"}:
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        u["stage"] = "curator_path"
+        u["curator_interest_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        await save_user(u, DB_PATH)
+        await log_event(uid, "offer", "curator_path_requested", {"source": "inline_offer", "format": data}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await notify_curator_map_review(c, u, profile, "inline_offer")
+        await c.message.answer(curator_path_text(u, profile), reply_markup=curator_path_reply_markup())
+        await resume_after_offer_if_needed(c.message, u)
+        await c.answer()
+        return
+
+    if data == "show_map":
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        await log_event(uid, "offer", "profile_signals_opened", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid), "offer")
+        await c.answer()
+        return
+
+    if data == "continue_free":
+        if not await resume_after_offer_if_needed(c.message, u):
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
         await c.answer()
         return
 
@@ -11678,6 +11852,12 @@ async def on_offer_callbacks(c: CallbackQuery):
             await c.message.answer("Выбери действие 👇", reply_markup=kb_training_main)
         await c.answer()
         return
+
+    await c.answer("Кнопка устарела. Покажу актуальные варианты.")
+    profile = await get_user_profile(uid, DB_PATH)
+    profile["_skill_map"] = await build_skill_map_data(u, profile)
+    summary = build_profile_map_summary(u, profile)
+    await answer_with_inline_screen(c.message, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
 
 
 @router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"yes", "no", "noop"})
