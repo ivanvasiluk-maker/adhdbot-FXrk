@@ -7134,9 +7134,6 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
 
 
 async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
-    if closed_day_extra_used_today(u):
-        await answer_with_keyboard(m, u, "На сегодня достаточно: добровольный дополнительный подход уже был. День остаётся закрытым.", kb_day_core_stop, "day_core_stop")
-        return
     sid = current_skill_for_action(u) or "visible_next_step"
     if sid not in SKILLS_DB:
         sid = next(iter(SKILLS_DB))
@@ -7185,7 +7182,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
         return True
     if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё один короткий шаг", "➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "🧭 Давай действие", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
-        if closed_day_extra_used_today(u):
+        if text != "➕ Ещё один короткий шаг" and closed_day_extra_used_today(u):
             u["stage"] = "day_core_stop"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "День уже закрыт, и один добровольный дополнительный подход сегодня уже был. Лучше оставить день закрытым.", kb_day_core_stop, "day_core_stop")

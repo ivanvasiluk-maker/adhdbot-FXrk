@@ -116,6 +116,13 @@ async def main() -> None:
             assert "🧩 Навык:" in joined(voluntary_msg)
             user, second_extra_msg = await send(uid, "💪 Давай действие")
             assert "добровольный дополнительный подход сегодня уже был" in joined(second_extra_msg)
+            # ➕ button always allows another step even after first extra was used.
+            user, plus_step_msg = await send(uid, "➕ Ещё один короткий шаг")
+            assert "Хочешь сделать ещё один короткий добровольный подход?" in joined(plus_step_msg)
+            assert "добровольный дополнительный подход сегодня уже был" not in joined(plus_step_msg)
+            user, plus_voluntary_msg = await send(uid, "✅ Да, ещё один короткий шаг")
+            assert "Добровольный короткий подход" in joined(plus_voluntary_msg)
+            assert "🧩 Навык:" in joined(plus_voluntary_msg)
 
             # 4-5. force_next_day closes/opens atomically, preserves total progress, resets daily attempts.
             before_done = int(user.get("done_count") or 0)
