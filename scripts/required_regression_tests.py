@@ -590,6 +590,44 @@ async def test_stuck_flow_asks_effect_before_aftercare():
         assert "Возвращаемся к основному навыку дня" not in effect_text
 
 
+async def test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow():
+    """Diagnostic free-text containing soft-crisis words must NOT activate the
+    stuck/crisis flow.  The bot must stay in the diagnostic path and must not
+    show STUCK_REASON_PROMPT ('Стопор зафиксирован. Это не провал.').
+    Regression for: diagnostic text sent to 'await_problem_text' stage was
+    intercepted by global_button_kind('застрял') → handle_global_button → stuck
+    flow instead of run_analysis."""
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 93001
+        u = default_user(uid)
+        u["stage"] = "await_problem_text"
+        await save_user(u, bot.DB_PATH)
+
+        diagnostic_text = (
+            "Я застрял на одной задаче и уже начинаю паниковать.\n"
+            "Мне нужно написать короткий отчёт по работе.\n"
+            "Каждый раз, когда открываю файл, у меня пустеет голова.\n"
+            "Я думаю, что напишу ерунду, и ухожу в почту.\n"
+            "Мне нужен маленький первый шаг, чтобы начать."
+        )
+        m = FakeMessage(uid, diagnostic_text)
+        await bot.main_flow(m)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+
+        response_text = "\n".join(m.answers)
+        assert "Стопор зафиксирован. Это не провал." not in response_text, (
+            "Diagnostic text with 'застрял'/'паник' must not trigger the stuck/crisis flow"
+        )
+        assert fresh.get("stage") != "failed_options", (
+            "Stage must not switch to 'failed_options' (stuck flow) during primary diagnostics"
+        )
+
+
 def run():
     for fn in [
         test_rendered_skill_card_has_one_title_and_one_minimum,
@@ -630,6 +668,7 @@ def run():
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,
         test_stuck_flow_asks_effect_before_aftercare,
+        test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow,
     ]: asyncio.run(fn())
     print("[TEST] required regressions OK")
 

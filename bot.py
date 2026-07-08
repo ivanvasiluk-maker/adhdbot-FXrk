@@ -7284,7 +7284,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
         return True
-    if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "🧭 Давай действие", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
+    if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё один короткий шаг", "➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "🧭 Давай действие", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
         if closed_day_extra_used_today(u):
             u["stage"] = "day_core_stop"
             await save_user(u, DB_PATH)
@@ -8692,6 +8692,11 @@ async def handle_full_mode_buttons(m: Message, u: Dict[str, Any], text: str) -> 
     return False
 
 async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool:
+    # During primary diagnostics the user is entering free-form problem text.
+    # Global button routing must not intercept it — the stage-specific handler
+    # at `await_problem_text` / `await_problem_voice` is the only valid consumer.
+    if u.get("stage") in DIAGNOSTIC_INPUT_STAGES:
+        return False
     low = (text or "").lower().strip()
     kind = global_button_kind(text, low)
     if not kind:
@@ -8819,6 +8824,26 @@ RESUME_BLOCKED_ONBOARDING_STAGES = {
     "taking_test",
     "run_analysis",
 }
+
+# Stages where the user is actively entering diagnostic free-text.
+# Global button routing must not intercept these messages — they must be
+# handled exclusively by the stage-specific handlers below.
+DIAGNOSTIC_INPUT_STAGES = {"await_problem_text", "await_problem_voice"}
+
+# Words that are normal in a procrastination description and must NOT trigger
+# the crisis/stuck flow when the user is in a primary diagnostic stage.
+# Only HARD_SAFETY_MARKERS (suicide / self-harm phrases checked by
+# has_red_crisis_phrase / has_crisis_safety_signal) can override diagnostics.
+DIAGNOSTIC_SOFT_CRISIS_WORDS = (
+    "застрял",
+    "застряла",
+    "паниковать",
+    "ступор",
+    "вина",
+    "стыд",
+    "не могу начать",
+    "не получается",
+)
 
 
 def has_completed_profile_state(u: Dict[str, Any]) -> bool:
