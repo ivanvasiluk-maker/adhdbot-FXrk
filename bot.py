@@ -5855,19 +5855,29 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
     return day3_personal_offer_text(summary, profile)
 
 
-async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
+OFFER_MENU_STAGE = "OFFER_MENU"
+OFFER_PREVIEW_STAGE = "OFFER_PREVIEW"
+OFFER_STAGES = {"offer", OFFER_MENU_STAGE, OFFER_PREVIEW_STAGE}
+
+
+async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: str = "auto"):
     """Show the adaptive day-3 map and paid continuation offer."""
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
         previous_flow["resume_after_offer"] = True
         previous_flow.setdefault("source", source)
         u["safety_resume_context"] = json.dumps({"active_flow": previous_flow}, ensure_ascii=False)
-    u["stage"] = "offer"
-    set_active_flow(u, "offer", source=source, resume_after_offer=bool(previous_flow), previous_flow=previous_flow)
+    is_preview = mode == "preview"
+    is_auto = mode == "auto"
+    u["previous_stage"] = previous_flow.get("stage") if previous_flow else u.get("stage")
+    u["stage"] = OFFER_PREVIEW_STAGE if is_preview else OFFER_MENU_STAGE
+    u["offer_mode"] = mode
+    set_active_flow(u, "offer", source=source, resume_after_offer=bool(previous_flow), previous_flow=previous_flow, offer_mode=mode)
     set_current_state(u, STATE_OFFER_SCREEN, close_action=False)
     offer_seen_at = dt.datetime.now(dt.timezone.utc).isoformat()
-    u["last_offer_shown_at"] = offer_seen_at
-    u["offer_shown"] = 1
+    if is_auto:
+        u["last_offer_shown_at"] = offer_seen_at
+        u["offer_shown"] = 1
     set_last_explanation_context(
         u,
         "offer",
@@ -5877,7 +5887,8 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "Реши: продолжать коротко или включить полный режим."
     )
     await save_user(u, DB_PATH)
-    await update_user_profile(u["user_id"], {"offer_shown": 1, "offer_seen_at": offer_seen_at}, DB_PATH, source="offer_shown")
+    if is_auto:
+        await update_user_profile(u["user_id"], {"offer_shown": 1, "offer_seen_at": offer_seen_at}, DB_PATH, source="offer_shown")
 
     profile = await get_user_profile(u["user_id"], DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
@@ -5921,12 +5932,19 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str):
         "price_month": "14.98",
         **profile_patch,
     }
-    await log_event(u["user_id"], "offer", "offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "offer", "offer_shown" if is_auto else "offer_preview_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "offer", "profile_map_updated", {"source": source, **profile_patch}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await log_event(u["user_id"], "offer", "day3_conclusion_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
-    await log_event(u["user_id"], "offer", "adaptive_offer_shown", offer_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "offer", "day3_conclusion_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "offer", "adaptive_offer_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
 
-    await answer_with_inline_screen(m, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(u["user_id"]), "offer")
+    text = trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer")
+    if is_preview:
+        text = (
+            "Это можно посмотреть заранее. Автоматически мы предложим полный режим после 3-го дня. "
+            "Сейчас можно изучить варианты или вернуться к тренировке.\n\n"
+            + text
+        )
+    await answer_with_inline_screen(m, u, text, offer_inline_keyboard(u["user_id"]), "offer")
 
 
 def pop_offer_resume_flow(u: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -5963,6 +5981,16 @@ async def resume_after_offer_if_needed(message: Message, u: Dict[str, Any]) -> b
     await render_current_screen(message, u)
     return True
 
+
+async def leave_offer_menu(message: Message, u: Dict[str, Any], source: str) -> None:
+    u["last_offer_action"] = source
+    if await resume_after_offer_if_needed(message, u):
+        return
+    u["stage"] = "training_main" if not day_closed_today(u) else "day_core_stop"
+    set_current_state(u, STATE_PAUSED, close_action=False)
+    await save_user(u, DB_PATH)
+    await message.answer("Ок. Можно вернуться к тренировке.", reply_markup=kb_day_core_stop if day_closed_today(u) else kb_training_main)
+
 def _profile_from_user_for_offer(u: Dict[str, Any]) -> Dict[str, Any]:
     raw = u.get("profile_json") or {}
     if isinstance(raw, dict):
@@ -5986,39 +6014,11 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
 
 
 async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
-    """QA/manual command: enable all offer prerequisites and show the offer now."""
-    u["day"] = max(3, int(u.get("day") or 1))
-    u["is_test_user"] = 1
-    u["fast_forward_enabled"] = 1
-    u["free_mode"] = 0
-    u["last_offer_shown_at"] = None
-    await save_user(u, DB_PATH)
-    await update_user_profile(
-        u["user_id"],
-        {
-            "completed_days": [1, 2, 3],
-            "completed_skill_days": [1, 2, 3],
-            "offer_shown": 0,
-            "offer_seen_at": None,
-            "force_show_offer_enabled": 1,
-        },
-        DB_PATH,
-        source=source,
-    )
-    await log_event(u["user_id"], u.get("stage", ""), "show_offer_forced", {"source": source, "day": int(u.get("day") or 1)}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await show_day3_offer(m, u, source)
-    await update_user_profile(
-        u["user_id"],
-        {
-            "completed_days": [1, 2, 3],
-            "completed_skill_days": [1, 2, 3],
-            "offer_shown": 1,
-            "offer_seen_at": u.get("last_offer_shown_at"),
-            "force_show_offer_enabled": 1,
-        },
-        DB_PATH,
-        source=f"{source}_post_show",
-    )
+    """QA/manual command: show the offer without changing day/progress prerequisites."""
+    day = int(u.get("day") or u.get("day_number") or 1)
+    mode = "preview" if day < 3 else "manual"
+    await log_event(u["user_id"], u.get("stage", ""), "show_offer_manual", {"source": source, "day": day, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await show_day3_offer(m, u, source, mode=mode)
 
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
@@ -6241,6 +6241,8 @@ OFFER_CALLBACKS = {
     "stay_free": "offer:stay_free",
     "paid_test": "offer:paid_test",
     "back": "offer:back",
+    "continue_training": "offer:continue_training",
+    "choose_later": "offer:choose_later",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -6290,6 +6292,14 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="👤 Выбрать живой разбор", callback_data=OFFER_CALLBACKS["live"])],
         [InlineKeyboardButton(text="⭐ Выбрать бот + специалист", callback_data=OFFER_CALLBACKS["guided"])],
         [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
+    ])
+
+
+def offer_variant_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="← Назад к вариантам", callback_data=OFFER_CALLBACKS["back"])],
+        [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+        [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
     ])
 
 
@@ -6343,29 +6353,15 @@ def tariff_specialist_text() -> str:
 
 
 def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить €9.99", callback_data="pay:bot_999")],
-        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    return offer_variant_inline_keyboard(user_id)
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить €59", callback_data="pay:live_59")],
-        [InlineKeyboardButton(text="📅 Выбрать время", callback_data="schedule:live_review")],
-        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    return offer_variant_inline_keyboard(user_id)
 
 
 def tariff_specialist_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить €149", callback_data="pay:guided_149")],
-        [InlineKeyboardButton(text="📅 Выбрать время первого check-in", callback_data="schedule:guided")],
-        [InlineKeyboardButton(text="📚 Сравнить форматы", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    return offer_variant_inline_keyboard(user_id)
 
 
 def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -7193,10 +7189,30 @@ DAY_CLOSED_CONTINUE_PROMPT = (
 DAY_CLOSED_ALLOWED_KINDS = {"map", "trainer_switch", "crisis", "tomorrow"}
 DAY_CLOSED_BLOCKED_KINDS = {"other_skill", "change_skill", "stuck", "more", "details", "why", "enough", "close_day"}
 DAY_CLOSED_VOLUNTARY_ACTIONS = {"action", "repeat"}
+DAY_CLOSED_VOLUNTARY_ACTION_TEXTS = {
+    "➕ Ещё один короткий шаг",
+    "➕ Ещё 2 минуты",
+    "💪 Закрепить ещё 2 минуты",
+    "💪 Сделать следующий шаг",
+    "💪 Давай действие",
+    "🧭 Давай действие",
+    "💪 Продолжить тренировку",
+    "🧭 Следующий шаг",
+    "🧭 Следующий шаг по маршруту",
+}
 
 
 def closed_day_extra_used_today(u: Dict[str, Any]) -> bool:
     return is_same_calendar_day(u.get("closed_day_extra_step_date"), u) and int(u.get("closed_day_extra_step_count") or 0) >= 1
+
+
+def is_closed_day_voluntary_action_request(text: str, low: str, u: Dict[str, Any]) -> bool:
+    kind = global_button_kind(text, low) if is_known_reply_button(text) or text else ""
+    return (
+        kind in DAY_CLOSED_VOLUNTARY_ACTIONS
+        or should_route_action_request(text, low, u)
+        or text in DAY_CLOSED_VOLUNTARY_ACTION_TEXTS
+    )
 
 
 def next_step_prefix(u: Dict[str, Any], repeat: bool = False, voluntary: bool = False) -> str:
@@ -7368,7 +7384,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
         return True
-    if kind in DAY_CLOSED_VOLUNTARY_ACTIONS or should_route_action_request(text, low, u) or text in {"➕ Ещё один короткий шаг", "➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты", "💪 Сделать следующий шаг", "💪 Давай действие", "🧭 Давай действие", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
+    if is_closed_day_voluntary_action_request(text, low, u):
         await open_closed_day_voluntary_step(m, u)
         return True
     if kind in DAY_CLOSED_BLOCKED_KINDS:
@@ -7799,6 +7815,12 @@ def debug_state_text(u: Dict[str, Any]) -> str:
     return (
         "DEBUG STATE\n"
         f"FSM-state: {u.get('stage') or '-'}\n"
+        f"current_day: {u.get('day') or u.get('day_number') or '-'}\n"
+        f"stage: {u.get('stage') or '-'}\n"
+        f"previous_stage: {u.get('previous_stage') or '-'}\n"
+        f"offer_mode: {u.get('offer_mode') or '-'}\n"
+        f"offer_shown: {int(bool(u.get('offer_shown') or u.get('offer_seen') or u.get('last_offer_shown_at')))}\n"
+        f"last_offer_action: {u.get('last_offer_action') or '-'}\n"
         f"day_id: {u.get('current_day_id') or '-'}\n"
         f"current_task: {current_task_title(u, '-')}\n"
         f"current_skill: {sid or u.get('daily_skill_id') or '-'}\n"
@@ -9065,6 +9087,14 @@ async def main_flow(m: Message):
         set_current_state(u, STATE_AWAITING_STUCK_REASON)
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, STUCK_REASON_PROMPT, kb_failed, "failed_options")
+        return
+
+    # Closed-day action buttons must stay available even from the final
+    # day-lock screen. Route them before generic command/global handling so
+    # buttons like «➕ Ещё один короткий шаг» cannot be swallowed by stale
+    # post-day state.
+    if day_closed_today(u) and is_closed_day_voluntary_action_request(text, low, u):
+        await open_closed_day_voluntary_step(m, u)
         return
 
     if await handle_admin_command(m, u, text):
@@ -11510,7 +11540,7 @@ def current_active_flow(u: Dict[str, Any]) -> Dict[str, Any] | None:
         return raw
     stage = str(u.get("stage") or "")
     flow_type = None
-    if stage == "offer":
+    if stage in (OFFER_STAGES if "OFFER_STAGES" in globals() else {"offer"}):
         flow_type = "offer"
     elif "crisis" in stage or str(u.get("safety_mode") or "") in {"triage", "active", "support"}:
         flow_type = "crisis"
@@ -11798,7 +11828,7 @@ async def answer_with_inline_screen(m: Message, u: Dict[str, Any], text: str, ma
     await set_active_screen(u, screen_id)
     sent = await m.answer(text, reply_markup=bind_inline_screen(markup, screen_id, int(attempt.get("screen_version") or 0)))
     remember_last_safe_screen(u, prefix, {"text": text}, getattr(sent, "message_id", None))
-    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict) and current_active_flow(u).get("previous_flow")):
+    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict)):
         set_active_flow(u, prefix, source="inline_screen")
     await save_user_best_effort(u)
 
@@ -11809,7 +11839,7 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
     await set_active_screen(u, screen_id)
     await message.edit_text(text, reply_markup=bind_inline_screen(markup, screen_id, int(attempt.get("screen_version") or 0)))
     remember_last_safe_screen(u, prefix, {"text": text}, getattr(message, "message_id", None))
-    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict) and current_active_flow(u).get("previous_flow")):
+    if prefix in ACTIVE_FLOW_TYPES and not (prefix == "offer" and isinstance(current_active_flow(u), dict)):
         set_active_flow(u, prefix, source="inline_edit")
     await save_user_best_effort(u)
 
@@ -11825,12 +11855,18 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if await handle_safety_callback(c, u, data):
         return
-    valid, data = await validate_callback_screen(c, u, "offer")
-    if not valid:
-        return
+    data, _, _ = split_versioned_callback(data)
+    u["last_offer_action"] = data
+    if u.get("stage") not in OFFER_STAGES:
+        u["previous_stage"] = u.get("stage")
+        u["stage"] = OFFER_MENU_STAGE
+        u["offer_mode"] = u.get("offer_mode") or "manual"
+        await save_user(u, DB_PATH)
 
-    if u.get("stage") != "offer" and data not in {OFFER_CALLBACKS["paid_test"], "confirm_test_payment"}:
-        await reject_lost_callback(c, u, "offer_stage_mismatch")
+    if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
+        await log_event(uid, "offer", "offer_menu_left", {"source": data}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await leave_offer_menu(c.message, u, data)
+        await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["bot"], "offer_bot"}:
@@ -11853,7 +11889,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {OFFER_CALLBACKS["compare"], "offer_details"}:
         await log_event(uid, "offer", "profile_map_details_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, offer_details_full_mode_text(), offer_details_inline_keyboard(uid), "offer")
+        await answer_with_inline_screen(c.message, u, offer_details_full_mode_text(), offer_variant_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
@@ -11867,19 +11903,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {OFFER_CALLBACKS["stay_free"], "stay_free"}:
         await log_event(uid, "offer", "payment_declined_soft", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(uid, "offer", "free_mode_started", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        suppressed_until = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7)).isoformat()
-        u["free_mode"] = 1
-        u["payment_status"] = "free_mode"
-        u["offer_suppressed_until"] = suppressed_until
-        u["stage"] = "feedback_offer"
-        await update_user_profile(uid, {"offer_suppressed_until": suppressed_until, "offer_declined_at": dt.datetime.now(dt.timezone.utc).isoformat()}, DB_PATH, source="offer_stay_free")
-        await save_user(u, DB_PATH)
-        await c.message.answer(
-            "Это нормально. Базовый режим остаётся доступным.\n\n"
-            "Автооффер не вернётся минимум 7 дней. Если захочешь посмотреть его сам — команда /show_offer сработает вручную.",
-            reply_markup=kb_short_mode_main,
-        )
+        await leave_offer_menu(c.message, u, "offer_stay_free")
         await c.answer()
         return
 
@@ -11930,10 +11954,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data == "continue_free":
-        if not await resume_after_offer_if_needed(c.message, u):
-            u["stage"] = "waiting_next_day"
-            await save_user(u, DB_PATH)
-            await c.message.answer(stay_free_text(), reply_markup=kb_short_mode_main)
+        await leave_offer_menu(c.message, u, "continue_free")
         await c.answer()
         return
 
