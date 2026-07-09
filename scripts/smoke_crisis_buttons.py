@@ -118,10 +118,14 @@ async def main() -> None:
     assert "⬜ Боюсь ошибки" in selected_texts
 
     combo = bot.combined_crisis_tool_text(["attention_escape", "anxiety_loop", "perfectionism"])
-    assert "тревога → страх ошибки → уход в залипание" in combo
-    assert "Значит, сначала не давим на продуктивность" in combo
-    assert "Стек на 3–5 минут" in combo
-    assert "Плохой черновик" in combo
+    assert "Похоже, сейчас одновременно:" in combo
+    assert "Значит, сейчас не решаем задачу" in combo
+    assert "Тревогу сейчас не спорим" in combo
+    assert "назвать 3 предмета вокруг" in combo
+    assert "1. Тело:" in combo
+    assert "2. Фраза против критика:" in combo
+    assert "3. Один микрошаг:" in combo
+    assert "4." not in combo
 
     expected_stack_markers = {
         "attention_escape": ["Это не лень. Это захват внимания", "Минимум: один клик"],

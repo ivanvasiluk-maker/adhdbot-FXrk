@@ -112,6 +112,7 @@ PAYMENT_URL = os.getenv("PAYMENT_URL", "https://your-payment-link").strip()
 PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
+PAYMENT_BOT_999_URL = os.getenv("PAYMENT_BOT_999_URL", "").strip()
 PAYMENT_MONTH_URL = os.getenv("PAYMENT_MONTH_URL", "").strip()
 PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
 PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
@@ -558,9 +559,19 @@ kb_success_no_extra = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_simplified_skill_after_effect = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🌙 Закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
 kb_extra_microstep_done = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Сделал(а)")],
+        [KeyboardButton(text="✅ Сделал")],
+        [KeyboardButton(text="🟡 Не вышло")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -2289,8 +2300,53 @@ def trainer_style_line(trainer_key: str, scenario: str = "general") -> str:
     return style.get(scenario) or style["general"]
 
 
+MARSHA_GENERAL_FIRST_LINE = "Мягко: это не про оценку, а про следующий маленький шаг."
+MARSHA_GENERAL_FOLLOWUP_LINES = [
+    "Берём следующий маленький эксперимент.",
+    "Сейчас проверим другой вход.",
+    "Не усиливаем давление. Меняем механизм.",
+    "Задача не сделать идеально, а остаться рядом.",
+    "Ок, двигаемся маленько.",
+]
+
+
+def _json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def trainer_general_line_for_user(u: Optional[Dict[str, Any]]) -> str:
+    if not u:
+        return MARSHA_GENERAL_FIRST_LINE
+    trainer_key = (u or {}).get("trainer_key") or "marsha"
+    if trainer_key != "marsha":
+        return trainer_style_line(trainer_key, "general")
+    today = local_date_for_user(u) if callable(globals().get("local_date_for_user")) else dt.date.today().isoformat()
+    context = _json_dict(u.get("last_explanation_context"))
+    line_state = _json_dict(context.get("marsha_general_line"))
+    if line_state.get("date") != today:
+        line_state = {"date": today, "count": 0}
+    count = int(line_state.get("count") or 0)
+    if count <= 0:
+        line = MARSHA_GENERAL_FIRST_LINE
+    else:
+        line = MARSHA_GENERAL_FOLLOWUP_LINES[(count - 1) % len(MARSHA_GENERAL_FOLLOWUP_LINES)]
+    line_state["count"] = count + 1
+    context["marsha_general_line"] = line_state
+    u["last_explanation_context"] = json.dumps(context, ensure_ascii=False)
+    return line
+
+
 def trainer_wrap(u: Dict[str, Any], text: str, scenario: str = "general") -> str:
-    return f"{trainer_style_line((u or {}).get('trainer_key') or 'marsha', scenario)}\n\n{text}"
+    line = trainer_general_line_for_user(u) if scenario == "general" else trainer_style_line((u or {}).get('trainer_key') or 'marsha', scenario)
+    return f"{line}\n\n{text}"
 
 
 def is_skinny(u: Optional[Dict[str, Any]]) -> bool:
@@ -2792,22 +2848,44 @@ def combined_crisis_tool_text(patterns: List[str]) -> str:
     patterns = list(dict.fromkeys(patterns or []))
     if "high_risk" in patterns:
         return crisis_tool_text("high_risk")
-    if {"attention_escape", "anxiety_loop", "perfectionism"}.issubset(set(patterns)):
-        return (
-            "Вижу связку: тревога → страх ошибки → уход в залипание.\n\n"
-            "Значит, сначала не давим на продуктивность.\n\n"
-            "Порядок такой:\n"
-            "1. Снизить тревогу телом.\n"
-            "2. Убрать источник залипания.\n"
-            "3. Сделать безопасный черновой шаг.\n\n"
-            "Стек на 3–5 минут:\n"
-            "1. Поставь ноги на пол и сделай 3 длинных выдоха.\n"
-            "2. Закрой/сверни источник залипания или положи телефон дальше руки.\n"
-            "3. Открой документ/задачу и напиши заголовок: “Плохой черновик”.\n"
-            "4. Напиши одно плохое предложение или 3 сырых слова без редактуры.\n\n"
-            "Минимум: один длинный выдох + закрыть источник залипания + открыть черновик."
+    if len([p for p in patterns if p != "unknown"]) >= 3:
+        labels = {
+            "task_entry_block": "сломан вход в задачу",
+            "attention_escape": "тянет в быстрый стимул",
+            "perfectionism": "страшно ошибиться",
+            "overwhelm": "задача слишком большая",
+            "low_energy": "мало сил",
+            "self_attack": "включился внутренний критик",
+            "anxiety_loop": "есть тревога",
+            "social_pain": "нужна опора и контакт",
+        }
+        selected_lines = [f"— {labels[p]};" for p in patterns if p in labels]
+        summary = "\n".join(selected_lines[:6])
+        anxiety_block = (
+            "Тревогу сейчас не спорим и не доказываем ей, что всё нормально. "
+            "Сначала снижаем уровень возбуждения тела.\n\n"
+        ) if "anxiety_loop" in patterns else ""
+        body_action = (
+            "Длинный выдох; почувствовать опору ног; назвать 3 предмета вокруг; потом только один микрошаг."
+            if "anxiety_loop" in patterns
+            else "Сесть, сделать длинный выдох, выпить воды."
         )
-    parts = [crisis_tool_text(p) for p in patterns[:3] if p != "unknown"]
+        return (
+            "Похоже, сейчас одновременно:\n"
+            f"{summary}\n\n"
+            "Значит, сейчас не решаем задачу. Сначала возвращаем опору, потом выбираем один микрошаг.\n\n"
+            f"{anxiety_block}"
+            "1. Тело:\n"
+            f"{body_action}\n\n"
+            "2. Фраза против критика:\n"
+            "“Я застрял, но я не обязан себя добивать.”\n\n"
+            "3. Один микрошаг:\n"
+            "Открыть задачу / назвать первый шаг / написать одно слово — только после телесного сброса.\n\n"
+            "Минимум:\n"
+            "сесть + один длинный выдох.\n\n"
+            "Сделай минимум и отметь результат."
+        )
+    parts = [crisis_tool_text(p) for p in patterns[:2] if p != "unknown"]
     return "\n\n———\n\n".join(parts) if parts else crisis_tool_text("unknown")
 
 
@@ -3078,7 +3156,7 @@ async def send_crisis_tool(m: Message, u: Dict[str, Any], reason_text: str):
         await m.answer(crisis_tool_text(crisis_stack))
     u["stage"] = "crisis_action_await"
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, "Сделай минимум из блока и отметь, что получилось.", kb_crisis_action, "crisis_action")
+    await answer_with_keyboard(m, u, "Сделай минимум и отметь результат.", kb_crisis_action, "crisis_action")
 
 async def send_crisis_stabilize(m: Message, u: Dict[str, Any], source: str):
     u["stage"] = "crisis_stabilize"
@@ -3603,26 +3681,19 @@ SUCCESS_SECOND_STEP_DONE_TEXT = (
 
 
 def extra_microstep_prompt(u: Dict[str, Any]) -> str:
-    sid = str(current_skill_id(u) or u.get("daily_skill_id") or u.get("current_skill_variant_id") or "")
-    task = current_task_title(u, "важное дело, которое ты сейчас откладываешь")
-    if sid in {"open_only", "open_without_timer", "visible_next_step", "one_visible_step"}:
-        return (
-            "Отлично. Ещё 2 минуты — только если хочешь.\n"
-            f"Напиши одно слово, с которого начнёшь {task}."
-        )
-    if sid in {"phone_far_3min", "phone_away_3_min"}:
-        return (
-            "Отлично. Ещё 2 минуты — открой задачу и просто посмотри на неё 30 секунд."
-        )
-    if sid in {"bad_first_step", "bad_draft_entry"}:
-        return (
-            "Отлично. Ещё 2 минуты — напиши одну плохую строку без редактирования."
-        )
-    if sid in {"task_naming", "name_task", "visible_next_step"}:
-        return (
-            "Отлично. Ещё 2 минуты — назови следующий физический шаг одним словом."
-        )
-    return ""
+    return (
+        "Ок. Две минуты без героизма.\n\n"
+        "Сделай:\n"
+        "1. Открой задачу.\n"
+        "2. Поставь рядом точку входа: одно слово / один файл / один абзац.\n"
+        "3. Побудь рядом 2 минуты.\n\n"
+        "Минимум:\n"
+        "открыть задачу на 10 секунд.\n\n"
+        "После этого нажми:\n"
+        "— ✅ Сделал\n"
+        "— 🟡 Не вышло\n"
+        "— 🌙 Закрыть день"
+    )
 
 
 def has_extra_microstep(u: Dict[str, Any]) -> bool:
@@ -4032,6 +4103,7 @@ async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: st
     if source not in {"action_done", "downscale_done", "downscale_name_done", "return"}:
         return False
     u["stage"] = "skill_done_effect"
+    u["skill_done_effect_source"] = source
     set_current_state(u, STATE_PAUSED, close_action=True)
     sync_active_attempt(u, bump=True, attempt_status="completed", effect_status="unknown", is_closed=True)
     await save_user(u, DB_PATH)
@@ -4084,7 +4156,10 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
         await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
         msg = "Записал: этот вход сейчас не подошёл. Не буду считать его помогающим."
     if send_menu:
-        await answer_with_keyboard(m, u, msg, success_menu_keyboard(u), "success_menu")
+        source = str(u.pop("skill_done_effect_source", "") or "")
+        keyboard = kb_simplified_skill_after_effect if source in {"downscale_done", "downscale_name_done"} else success_menu_keyboard(u)
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, msg, keyboard, "success_menu")
     return True
 
 
@@ -4095,6 +4170,7 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
     if stage == "skill_result_feedback":
         if text == "✅ Сделал":
             u["stage"] = "skill_done_effect"
+            u["skill_done_effect_source"] = "skill_result_feedback"
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Что изменилось после шага?", kb_skill_done_effect, "skill_done_effect")
             return True
@@ -6064,6 +6140,12 @@ def configured_payment_url() -> str:
     return PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL or ""
 
 
+def payment_bot_999_url() -> str:
+    if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
+        return PAYMENT_TEST_URL
+    return PAYMENT_BOT_999_URL or configured_payment_url()
+
+
 def payment_not_ready_text() -> str:
     return "Оплата скоро будет подключена. Сейчас можно продолжить тест или написать Ивану напрямую."
 
@@ -6431,7 +6513,14 @@ def tariff_specialist_text() -> str:
 
 
 def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return offer_variant_inline_keyboard(user_id)
+    rows = []
+    pay_url = payment_bot_999_url()
+    if pay_url:
+        rows.append([InlineKeyboardButton(text="💳 Оплатить €9.99", url=pay_url)])
+    else:
+        rows.append([InlineKeyboardButton(text="💳 Оплатить €9.99", callback_data="pay:bot_999")])
+    rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -6895,7 +6984,7 @@ def _skill_card_parts(skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None)
 
 def new_day_skill_card_text(skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
-    trainer_line = trainer_style_line((u or {}).get("trainer_key") or "marsha", "general") if u else "Давай бережно: только маленький вход, без давления на результат."
+    trainer_line = trainer_general_line_for_user(u) if u else "Давай бережно: только маленький вход, без давления на результат."
     return (
         f"{trainer_line}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
@@ -7110,7 +7199,7 @@ def should_send_day_intro(u: Dict[str, Any]) -> bool:
 
 def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optional[Dict[str, Any]] = None) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
-    trainer_line = trainer_style_line((u or {}).get("trainer_key") or "marsha", "general")
+    trainer_line = trainer_general_line_for_user(u)
     return (
         f"{trainer_line}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
@@ -9111,6 +9200,30 @@ async def cmd_start(m: Message):
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
     )
 
+@router.message(lambda m: getattr(m, "successful_payment", None) is not None)
+async def handle_successful_payment(m: Message):
+    uid = m.from_user.id
+    u = await get_user(uid, DB_PATH)
+    u["chat_id"] = m.chat.id
+    payment = getattr(m, "successful_payment", None)
+    amount_total = getattr(payment, "total_amount", None)
+    currency = getattr(payment, "currency", "EUR")
+    payload = getattr(payment, "invoice_payload", "")
+    await grant_paid_access(
+        u,
+        "telegram_successful_payment",
+        {
+            "amount": 9.99 if amount_total in {None, 999} else amount_total,
+            "currency": currency,
+            "payload": payload,
+            "days": 30,
+        },
+    )
+    await m.answer("✅ Оплата прошла. Полный режим включён автоматически.")
+    if not await resume_after_offer_if_needed(m, u):
+        await send_full_mode_welcome(m, u)
+
+
 @router.message()
 async def main_flow(m: Message):
     uid = m.from_user.id
@@ -9233,12 +9346,19 @@ async def main_flow(m: Message):
     if await handle_closed_day_input(m, u, text, low):
         return
 
-    if u.get("stage") == "extra_microstep" and (text == "✅ Сделал(а)" or text == "✅ Сделал" or ("сделал" in low and "не сделал" not in low)):
-        u["stage"] = "success_limit"
-        set_current_state(u, STATE_PAUSED, close_action=True)
-        await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, trainer_wrap(u, trainer_repeat_limit_text(u), "continue"), kb_success_limit, "success_limit")
-        return
+    if u.get("stage") == "extra_microstep":
+        if text in {"✅ Сделал", "✅ Сделал(а)"} or ("сделал" in low and "не сделал" not in low):
+            u["stage"] = "success_limit"
+            set_current_state(u, STATE_PAUSED, close_action=True)
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, trainer_wrap(u, trainer_repeat_limit_text(u), "continue"), kb_success_limit, "success_limit")
+            return
+        if text in {"🟡 Не вышло", "🟡 Не получилось", "🟡 Попробовал, но не вышло"}:
+            u["stage"] = "success_menu"
+            set_current_state(u, STATE_PAUSED, close_action=True)
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Ок. Не дожимаем. Первый минимум уже засчитан — можно закрыть день или сменить навык.", kb_success_no_extra, "success_menu")
+            return
 
     if u.get("stage") == "stuck_reason_text":
         if not text:
@@ -9282,6 +9402,26 @@ async def main_flow(m: Message):
     if early_global_kind in {"action", "repeat", "enough", "close_day", "tomorrow", "other_skill", "change_skill", "trainer_switch", "skip", "why", "why_skill", "details", "map", "stuck", "crisis", "downscale"}:
         if await handle_global_button(m, u, text):
             return
+
+    if (text in {"✅ Сделал", "✅ Сделал(а)"} or ("сделал" in low and "не сделал" not in low)) and (
+        str(u.get("stage") or "") in {"downscale_action", "unclear_skill_simplified", "microstep", "downscale", "training"}
+        or str(u.get("daily_skill_status") or "") in {"in_progress", "stuck"}
+    ):
+        raw_stage = str(u.get("stage") or "")
+        previous_done = int(u.get("done_count") or 0)
+        u["done_count"] = previous_done + 1
+        mark_day_core_round_done(u)
+        mark_current_skill_status(u, "completed")
+        gamify_apply(u, 2, "simplified_skill_done")
+        sid = current_skill_id(u) or current_skill_for_action(u) or u.get("daily_skill_id") or DOWNSCALE_PRIMARY_SKILL
+        await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "simplified_skill_done_recovery", "stage": raw_stage})
+        await record_profile_signal(u["user_id"], "training", {
+            "last_completed_skill": sid,
+            "last_skill_effect": "unknown",
+        }, source="simplified_skill_done_recovery")
+        await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
+        await ask_skill_result_feedback(m, u, source="downscale_done")
+        return
 
     if should_reject_action_button(text, u):
         await show_action_changed_fallback(m, u, "action_button_context_mismatch")
@@ -11133,7 +11273,7 @@ async def main_flow(m: Message):
             u["stage"] = "crisis_action_await"
             await save_user(u, DB_PATH)
             await m.answer(combined_crisis_tool_text(selected))
-            await answer_with_keyboard(m, u, "Сделай минимум из блока и отметь, что получилось.", kb_crisis_action, "crisis_action")
+            await answer_with_keyboard(m, u, "Сделай минимум и отметь результат.", kb_crisis_action, "crisis_action")
             return
         button_pattern = _crisis_pattern_from_button(text)
         if button_pattern:
@@ -11530,9 +11670,30 @@ async def main_flow(m: Message):
         await answer_with_inline_screen(m, u, offer_request_submitted_text(sent), offer_request_done_keyboard(), "offer")
         return
 
-    # Если дошли до сюда — неизвестный этап. Не сбрасываем пользователя в /start:
-    # возвращаем к безопасному меню текущего дня.
+    # Если пользователь отмечает выполнение после упрощённого шага, не показываем
+    # техническое восстановление маршрута: засчитываем микрошаг и сразу спрашиваем эффект.
     raw_stage = str(u.get("stage") or "")
+    if (text in {"✅ Сделал", "✅ Сделал(а)"} or ("сделал" in low and "не сделал" not in low)) and (
+        raw_stage in {"downscale_action", "unclear_skill_simplified", "microstep", "downscale", "training"}
+        or str(u.get("daily_skill_status") or "") in {"in_progress", "stuck"}
+    ):
+        previous_done = int(u.get("done_count") or 0)
+        u["done_count"] = previous_done + 1
+        mark_day_core_round_done(u)
+        mark_current_skill_status(u, "completed")
+        gamify_apply(u, 2, "simplified_skill_done")
+        sid = current_skill_id(u) or current_skill_for_action(u) or u.get("daily_skill_id") or DOWNSCALE_PRIMARY_SKILL
+        await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "simplified_skill_done_recovery", "stage": raw_stage})
+        await record_profile_signal(u["user_id"], "training", {
+            "last_completed_skill": sid,
+            "last_skill_effect": "unknown",
+        }, source="simplified_skill_done_recovery")
+        await record_working_map_skill_result(u["user_id"], "completed_skills_effect_unknown", sid)
+        await ask_skill_result_feedback(m, u, source="downscale_done")
+        return
+
+    # Если дошли до сюда — неизвестный этап. Не сбрасываем пользователя в /start:
+    # возвращаем к безопасному меню текущего дня без технических формулировок.
     if raw_stage != "post_done_reflection":
         await log_event(
             u["user_id"],
@@ -11547,7 +11708,7 @@ async def main_flow(m: Message):
         await answer_with_keyboard(
             m,
             u,
-            "Кажется, я потерял место в маршруте. Возвращаю тебя к текущему дню.\n\nЧто сейчас сделать?",
+            "Что сейчас сделать?",
             kb_day_menu,
             "day_menu",
         )
@@ -12021,10 +12182,14 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {"pay:bot_999", "pay:live_59", "pay:guided_149"}:
-        pay_url = configured_payment_url()
+        pay_url = payment_bot_999_url() if data == "pay:bot_999" else configured_payment_url()
+        amount_label = {"pay:bot_999": "€9.99", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
         if pay_url:
-            amount_label = {"pay:bot_999": "€9.99", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
-            await c.message.answer("Оплата доступна по кнопке ниже.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💳 Оплатить {amount_label}", url=pay_url)]]))
+            u["payment_status"] = "pending_bot_999" if data == "pay:bot_999" else "pending_payment"
+            u["last_payment_click"] = data
+            await save_user(u, DB_PATH)
+            await log_event(uid, "offer", "payment_link_opened", {"source": data, "amount": amount_label}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await c.message.answer("Оплата доступна по кнопке ниже. После успешной оплаты полный режим включится автоматически.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💳 Оплатить {amount_label}", url=pay_url)]]))
         else:
             await c.message.answer(payment_not_ready_text())
         await c.answer()
