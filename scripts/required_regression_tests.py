@@ -43,6 +43,12 @@ class FakeMessage:
         self.answers.append(str(text)); return None
 
 
+class FakeSuccessfulPayment:
+    currency = "EUR"
+    total_amount = 999
+    invoice_payload = "skiller_bot_999"
+
+
 class FakeTelegramBot:
     def __init__(self):
         self.sent: list[tuple[int, str]] = []
@@ -762,6 +768,10 @@ def run():
         test_skinny_uses_direct_respectful_phrases,
         test_offer_gate_requires_attempts_and_respects_cooldown,
         test_offer_text_and_map_are_specific_without_curator_button,
+        test_bot_tariff_has_payment_link_button,
+        test_extra_two_minutes_prompt_is_action_not_stop_copy,
+        test_combined_crisis_three_plus_states_uses_short_synthesis,
+        test_marsha_general_line_shows_assessment_phrase_once_per_day,
     ]: fn()
     for fn in [
         test_old_callback_after_skill_change_does_not_modify_state,
@@ -780,8 +790,135 @@ def run():
         test_force_next_day_and_set_day_keep_saved_profile_state,
         test_stuck_flow_asks_effect_before_aftercare,
         test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow,
+        test_simplified_done_recovery_asks_effect_without_technical_route_message,
+        test_successful_payment_grants_paid_access_automatically,
     ]: asyncio.run(fn())
     print("[TEST] required regressions OK")
+
+
+
+
+
+def test_bot_tariff_has_payment_link_button():
+    kb = bot.tariff_bot_inline_keyboard(94023)
+    buttons = [button for row in kb.inline_keyboard for button in row]
+    pay_buttons = [button for button in buttons if getattr(button, "text", "") == "💳 Оплатить €9.99"]
+    assert pay_buttons
+    assert getattr(pay_buttons[0], "url", None) or getattr(pay_buttons[0], "callback_data", None) == "pay:bot_999"
+
+
+async def test_successful_payment_grants_paid_access_automatically():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 94024
+        u = default_user(uid)
+        u["stage"] = "offer"
+        await save_user(u, bot.DB_PATH)
+        msg = FakeMessage(uid, "")
+        msg.successful_payment = FakeSuccessfulPayment()
+        await bot.handle_successful_payment(msg)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh["payment_status"] == "paid"
+        assert fresh["trial_phase"] == "paid"
+        assert int(fresh.get("full_mode") or 0) == 1
+        assert any("Полный режим включ" in answer for answer in msg.answers)
+
+
+def test_extra_two_minutes_prompt_is_action_not_stop_copy():
+    prompt = bot.extra_microstep_prompt(default_user(94022))
+    assert prompt.startswith("Ок. Две минуты без героизма.")
+    assert "Сделай:" in prompt
+    assert "1. Открой задачу." in prompt
+    assert "Поставь рядом точку входа" in prompt
+    assert "Побудь рядом 2 минуты." in prompt
+    assert "открыть задачу на 10 секунд." in prompt
+    assert "— ✅ Сделал" in prompt
+    assert "— 🟡 Не вышло" in prompt
+    assert "— 🌙 Закрыть день" in prompt
+    assert "можно остановиться" not in prompt.lower()
+
+
+def test_combined_crisis_three_plus_states_uses_short_synthesis():
+    text = bot.combined_crisis_tool_text(["overwhelm", "low_energy", "self_attack", "anxiety_loop"])
+    assert "Похоже, сейчас одновременно:" in text
+    assert "— задача слишком большая;" in text
+    assert "— мало сил;" in text
+    assert "— включился внутренний критик;" in text
+    assert "— есть тревога;" in text
+    assert "Значит, сейчас не решаем задачу" in text
+    assert "Тревогу сейчас не спорим и не доказываем ей, что всё нормально." in text
+    assert "Сначала снижаем уровень возбуждения тела." in text
+    assert "Длинный выдох; почувствовать опору ног; назвать 3 предмета вокруг; потом только один микрошаг." in text
+    assert "только после телесного сброса" in text
+    assert text.count("1. Тело:") == 1
+    assert text.count("2. Фраза против критика:") == 1
+    assert text.count("3. Один микрошаг:") == 1
+    assert "4." not in text
+    assert "———" not in text
+    assert "Сделай минимум и отметь результат." in text
+
+
+def test_marsha_general_line_shows_assessment_phrase_once_per_day():
+    u = default_user(94021)
+    u["trainer_key"] = "marsha"
+    lines = [bot.trainer_general_line_for_user(u) for _ in range(7)]
+    assert lines.count("Мягко: это не про оценку, а про следующий маленький шаг.") == 1
+    assert lines[1:6] == [
+        "Берём следующий маленький эксперимент.",
+        "Сейчас проверим другой вход.",
+        "Не усиливаем давление. Меняем механизм.",
+        "Задача не сделать идеально, а остаться рядом.",
+        "Ок, двигаемся маленько.",
+    ]
+
+
+async def test_simplified_done_recovery_asks_effect_without_technical_route_message():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 93111
+        u = default_user(uid)
+        u.update({
+            "stage": "unclear_skill_simplified",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "stuck",
+            "done_count": 0,
+        })
+        await save_user(u, bot.DB_PATH)
+
+        done_msg = FakeMessage(uid, "✅ Сделал")
+        await bot.main_flow(done_msg)
+        fresh = await get_user(uid, bot.DB_PATH)
+        first_response = "\n".join(done_msg.answers)
+        assert "Что изменилось после этого шага?" in first_response
+        assert "потерял место" not in first_response.lower()
+        assert "старый экран" not in first_response.lower()
+        assert "возвращаю" not in first_response.lower()
+        assert int(fresh.get("done_count") or 0) == 1
+        assert fresh.get("stage") == "skill_done_effect"
+
+        effect_msg = FakeMessage(uid, "✅ Стало легче")
+        await bot.main_flow(effect_msg)
+        effect_response = "\n".join(effect_msg.answers)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh.get("stage") == "success_menu"
+        assert "Записал" in effect_response
+        assert "потерял место" not in effect_response.lower()
+        assert "старый экран" not in effect_response.lower()
+        assert "возвращаю" not in effect_response.lower()
 
 
 if __name__ == "__main__":

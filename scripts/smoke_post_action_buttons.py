@@ -341,8 +341,8 @@ async def run() -> None:
         assert {"➕ Ещё 2 минуты", "🔄 Сменить навык", "🎭 Сменить тренера"}.issubset(keyboard_texts(success_msg.answers[-1]["reply_markup"]))
 
         repeat1_msg = await send(uid, "➕ Ещё 2 минуты")
-        assert "Ещё 2 минуты" in last_text(repeat1_msg), last_text(repeat1_msg)
-        assert "Напиши одно слово" in last_text(repeat1_msg), last_text(repeat1_msg)
+        assert "Ок. Две минуты без героизма." in last_text(repeat1_msg), last_text(repeat1_msg)
+        assert "Поставь рядом точку входа" in last_text(repeat1_msg), last_text(repeat1_msg)
         done2_msg = await send(uid, "✅ Сделал")
         assert "Ещё один короткий шаг засчитан" in last_text(done2_msg), last_text(done2_msg)
         assert "➕ Ещё 2 минуты" not in keyboard_texts(done2_msg.answers[-1]["reply_markup"]), keyboard_texts(done2_msg.answers[-1]["reply_markup"])
