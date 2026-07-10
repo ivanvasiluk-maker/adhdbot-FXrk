@@ -1211,6 +1211,12 @@ USER_FIELDS = [
     "notification_time",
     "timezone",
     "reactivation_count",
+    "last_user_activity_at",
+    "last_bot_reactivation_at",
+    "reactivation_count_today",
+    "reactivation_date",
+    "last_reactivation_variant",
+    "last_bot_message_at",
     "pending_plan_change",
     "crisis_count",
     "test_answers",
@@ -1422,6 +1428,12 @@ def default_user(uid: int) -> Dict[str, Any]:
         "notification_time": None,
         "timezone": "Europe/Vilnius",
         "reactivation_count": 0,
+        "last_user_activity_at": None,
+        "last_bot_reactivation_at": None,
+        "reactivation_count_today": 0,
+        "reactivation_date": None,
+        "last_reactivation_variant": None,
+        "last_bot_message_at": None,
         "pending_plan_change": None,
         "crisis_count": 0,
         "created_at": time.time(),
@@ -1472,7 +1484,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "today_closed": 0,
         "today_started": 0,
         "last_day_closed_at": None,
-        "day_status": "open",
+        "day_status": "not_started",
         "current_day_id": None,
         "current_session_id": None,
         "daily_skill_id": None,
@@ -1612,7 +1624,13 @@ async def init_db(db_path: str):
                 today_closed INTEGER DEFAULT 0,
                 today_started INTEGER DEFAULT 0,
                 last_day_closed_at TEXT,
-                day_status TEXT DEFAULT 'open',
+                day_status TEXT DEFAULT 'not_started',
+                last_user_activity_at TEXT,
+                last_bot_reactivation_at TEXT,
+                reactivation_count_today INTEGER DEFAULT 0,
+                reactivation_date TEXT,
+                last_reactivation_variant TEXT,
+                last_bot_message_at TEXT,
                 current_day_id TEXT,
                 current_session_id TEXT,
                 daily_skill_id TEXT,
@@ -1817,6 +1835,8 @@ def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
     u["attempts_count"] = attempts_count
     u["offer_seen"] = 1 if u.get("last_offer_shown_at") or int(u.get("offer_seen") or 0) == 1 else 0
     u["crisis_mode"] = 1 if str(u.get("safety_mode") or "none") != "none" or int(u.get("crisis_redirected") or 0) == 1 else 0
+    if not u.get("day_status") or str(u.get("day_status")).lower() == "open":
+        u["day_status"] = "active" if (int(u.get("today_started") or 0) == 1 or int(u.get("has_started_training") or 0) == 1) else "not_started"
     u["day_skill_progress"] = (
         u.get("day_skill_progress")
         or u.get("daily_skill_status")
@@ -1960,6 +1980,12 @@ EXTRA_USER_COLS = {
     "notification_time": "TEXT",
     "timezone": "TEXT DEFAULT 'Europe/Vilnius'",
     "reactivation_count": "INTEGER DEFAULT 0",
+    "last_user_activity_at": "TEXT",
+    "last_bot_reactivation_at": "TEXT",
+    "reactivation_count_today": "INTEGER DEFAULT 0",
+    "reactivation_date": "TEXT",
+    "last_reactivation_variant": "TEXT",
+    "last_bot_message_at": "TEXT",
     "pending_plan_change": "TEXT",   # отложенная правка плана после кризиса
     "crisis_count": "INTEGER",       # лимит в trial
     "test_answers": "TEXT",
@@ -2012,7 +2038,7 @@ EXTRA_USER_COLS = {
     "today_closed": "INTEGER DEFAULT 0",
     "today_started": "INTEGER DEFAULT 0",
     "last_day_closed_at": "TEXT",
-    "day_status": "TEXT DEFAULT 'open'",
+    "day_status": "TEXT DEFAULT 'not_started'",
     "current_day_id": "TEXT",
     "current_session_id": "TEXT",
     "daily_skill_id": "TEXT",

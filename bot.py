@@ -83,6 +83,11 @@ from core.engine import (
     core_round_count_today as engine_core_round_count_today,
 )
 import sheets_sync as sheets_sync_module
+from reactivation_service import (
+    DAY_ACTIVE, DAY_CLOSED, mark_user_activity, mark_bot_auto_message,
+    can_send_reactivation, choose_variant, mark_reactivation_sent,
+    hours_since_last_activity, parse_dt, utc_iso,
+)
 
 SHEETS_SYNC_ENABLED = getattr(sheets_sync_module, "SHEETS_SYNC_ENABLED", False)
 SHEETS_SYNC_INTERVAL_SECONDS = getattr(sheets_sync_module, "SHEETS_SYNC_INTERVAL_SECONDS", 60)
@@ -7228,7 +7233,7 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     u["today_started"] = 1
     u["day_closed"] = 0
     u["today_closed"] = 0
-    u["day_status"] = "open"
+    u["day_status"] = "active"
     u.setdefault("day_intro_sent", 0)
     u["daily_session_id"] = f"day_{uuid.uuid4().hex[:12]}"
     u["current_action_id"] = None
@@ -8033,6 +8038,63 @@ def normalize_slash_command(text: str) -> str:
     return token
 
 
+async def handle_reactivation_reply(m: Message, u: Dict[str, Any], text: str, low: str) -> bool:
+    reactivation_buttons = {
+        "▶️ Продолжить", "Продолжить с места остановки", "Вернуться к моей ситуации",
+        "⚡ Навык на 2 минуты", "Дать действие попроще", "Начать короткую тренировку",
+        "💤 Не сейчас", "Напомнить позже", "Сегодня не буду", "🔕 Не напоминать",
+    }
+    if text not in reactivation_buttons:
+        return False
+    variant = u.get("last_reactivation_variant") or ""
+    base_meta = {
+        "day_status": u.get("day_status"),
+        "reactivation_count_today": int(u.get("reactivation_count_today") or 0),
+        "hours_since_last_activity": hours_since_last_activity(u),
+        "message_variant": variant,
+        "button_clicked": text,
+    }
+    if text == "🔕 Не напоминать":
+        u["notifications_enabled"] = 0
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "reactivation", "notifications_disabled", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Я не буду писать первым. Ты сможешь вернуться в любой момент.")
+        return True
+    if text in {"💤 Не сейчас", "Напомнить позже"}:
+        u["last_bot_reactivation_at"] = utc_iso()
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "reactivation", "reactivation_snoozed", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Без давления. Вернёмся позже.")
+        return True
+    if text == "Сегодня не буду":
+        u["day_status"] = DAY_CLOSED
+        u["day_closed"] = 1
+        u["today_closed"] = 1
+        u["last_day_closed_at"] = local_date_for_user(u)
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "reactivation", "reactivation_declined", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(u["user_id"], "reactivation", "day_closed", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Понял. На сегодня не дёргаю. Завтра можно будет начать без необходимости наверстывать.")
+        return True
+    if text in {"⚡ Навык на 2 минуты", "Дать действие попроще", "Начать короткую тренировку"}:
+        await log_event(u["user_id"], "reactivation", "reactivation_short_skill_clicked", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+        await handle_action_request(u["user_id"], m, u, repeat=True)
+        return True
+    await log_event(u["user_id"], "reactivation", "reactivation_continue_clicked", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "reactivation", "reactivation_opened", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    stage = str(u.get("stage") or "")
+    if stage in {"training", "await_training_target", "waiting_next_day", "confirm_analysis", "analysis_next_step"}:
+        await handle_action_request(u["user_id"], m, u, repeat=True)
+        return True
+    await m.answer(
+        "Я не смог точно восстановить последний шаг. Давай быстро выберем, с чем продолжить.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Моя задача")], [KeyboardButton(text="Моё состояние")], [KeyboardButton(text="Дай короткий навык")], [KeyboardButton(text="🔕 Не напоминать")]],
+            resize_keyboard=True,
+        ),
+    )
+    return True
+
 async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     """Handle simple user commands; does not require admin access."""
     if not text or not text.startswith("/"):
@@ -8146,6 +8208,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         "/debug_state", "/debug_events", "/show_offer", "/simulate_payment", "/reset_test_user",
         "/testmode_on", "/testmode_off", "/set_day", "/force_next_day", "/debug_map", "/debug_user",
         "/debug_feedback", "/whoami", "/health", "/payment_status",
+        "/force_reactivation", "/set_inactive_hours", "/reset_reactivation_limit",
+        "/show_reactivation_state", "/force_morning", "/force_evening",
     }
     admin_only_commands = {
         "/reset", "/test_payment", "/mark_paid", "/mark_free", "/grant_full", "/revoke_full",
@@ -8165,6 +8229,73 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
 
     if command == "/debug_state":
         await m.answer(debug_state_text(u))
+        return True
+
+    if command == "/show_reactivation_state":
+        ok, reason, meta = can_send_reactivation(u)
+        last = parse_dt(u.get("last_user_activity_at"))
+        last_re = parse_dt(u.get("last_bot_reactivation_at"))
+        next_possible = "—"
+        if last:
+            next_possible = (last + dt.timedelta(hours=4)).isoformat()
+        if last_re:
+            candidate = (last_re + dt.timedelta(hours=4)).isoformat()
+            next_possible = max(next_possible, candidate) if next_possible != "—" else candidate
+        await m.answer(
+            "REACTIVATION STATE\n"
+            f"day_status: {u.get('day_status')}\n"
+            f"last_user_activity_at: {u.get('last_user_activity_at')}\n"
+            f"last_bot_reactivation_at: {u.get('last_bot_reactivation_at')}\n"
+            f"reactivation_count_today: {int(u.get('reactivation_count_today') or 0)}\n"
+            f"notifications_enabled: {int(u.get('notifications_enabled') if u.get('notifications_enabled') is not None else 1)}\n"
+            f"next_possible_reactivation: {next_possible}\n"
+            f"can_send_now: {ok} ({reason})\n"
+            f"hours_since_last_activity: {meta.get('hours_since_last_activity')}"
+        )
+        return True
+
+    if command == "/reset_reactivation_limit":
+        u["reactivation_count_today"] = 0
+        u["reactivation_date"] = local_date_for_user(u)
+        u["last_bot_reactivation_at"] = None
+        await save_user(u, DB_PATH)
+        await m.answer("Лимит реактиваций сброшен.")
+        return True
+
+    if command == "/set_inactive_hours":
+        parts = text.split()
+        hours = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 5
+        u["last_user_activity_at"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)).isoformat()
+        u["day_status"] = DAY_ACTIVE
+        u["day_closed"] = 0
+        u["today_closed"] = 0
+        await save_user(u, DB_PATH)
+        await m.answer(f"Неактивность установлена: {hours} ч.")
+        return True
+
+    if command == "/force_reactivation":
+        u["day_status"] = DAY_ACTIVE
+        variant_id, msg_text, kb = choose_variant(u)
+        mark_reactivation_sent(u, variant_id)
+        await save_user(u, DB_PATH)
+        await log_event(uid, "reactivation", "reactivation_sent", {"day_status": u.get("day_status"), "reactivation_count_today": int(u.get("reactivation_count_today") or 0), "hours_since_last_activity": hours_since_last_activity(u), "message_variant": variant_id, "button_clicked": "force"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(msg_text, reply_markup=kb)
+        return True
+
+    if command == "/force_morning":
+        u["last_morning_checkin_date"] = local_date_for_user(u)
+        mark_bot_auto_message(u)
+        await save_user(u, DB_PATH)
+        await log_event(uid, "morning_checkin", "morning_reminder_sent", {"day_status": u.get("day_status"), "reactivation_count_today": int(u.get("reactivation_count_today") or 0), "hours_since_last_activity": hours_since_last_activity(u), "message_variant": "force_morning", "button_clicked": "force"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(morning_checkin_text(), reply_markup=kb_morning_checkin)
+        return True
+
+    if command == "/force_evening":
+        u["last_evening_checkin_date"] = local_date_for_user(u)
+        mark_bot_auto_message(u)
+        await save_user(u, DB_PATH)
+        await log_event(uid, "evening_checkin", "evening_reminder_sent", {"day_status": u.get("day_status"), "reactivation_count_today": int(u.get("reactivation_count_today") or 0), "hours_since_last_activity": hours_since_last_activity(u), "message_variant": "force_evening", "button_clicked": "force"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(evening_checkin_text(), reply_markup=kb_evening_checkin)
         return True
 
     if command == "/debug_events":
@@ -8270,10 +8401,10 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["day_closed"] = 0
         u["today_closed"] = 0
         u["last_day_closed_at"] = None
-        u["day_status"] = "open"
+        u["day_status"] = "active"
         u["day_intro_sent"] = 0
         u["stage"] = "waiting_next_day"
-        await update_user_profile(uid, {"day_closed": 0, "today_closed": 0, "last_day_closed_at": None, "day_status": "open"}, DB_PATH, source="admin_set_day")
+        await update_user_profile(uid, {"day_closed": 0, "today_closed": 0, "last_day_closed_at": None, "day_status": "active"}, DB_PATH, source="admin_set_day")
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_set_day", {"day": day}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(f"День установлен: {day}. Открываю новый навык дня.")
@@ -8298,7 +8429,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["day_closed"] = 0
         u["today_closed"] = 0
         u["last_day_closed_at"] = None
-        u["day_status"] = "open"
+        u["day_status"] = "active"
         u["day_intro_sent"] = 0
         u["today_started"] = 1
         u["daily_replacement_count"] = 0
@@ -8309,7 +8440,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["today_target"] = u.get("current_task_title") or None
         u["current_task"] = None
         u["stage"] = "waiting_next_day"
-        await update_user_profile(uid, {"day_closed": 0, "today_closed": 0, "last_day_closed_at": None, "day_status": "open"}, DB_PATH, source="admin_force_next_day")
+        await update_user_profile(uid, {"day_closed": 0, "today_closed": 0, "last_day_closed_at": None, "day_status": "active"}, DB_PATH, source="admin_force_next_day")
         await save_user(u, DB_PATH)
         await log_event(uid, "training", "admin_force_next_day", {"from_day": current_day, "day": next_day, "old_day_id": old_day_id}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(f"Тестовый переход выполнен. Открыт День {next_day}.")
@@ -9251,6 +9382,10 @@ async def main_flow(m: Message):
         low = text.lower()
         await log_event(u.get("user_id"), u.get("stage", ""), "global_voice_transcribed", {"len": len(text)}, DB_PATH, SHEETS_WEBHOOK_URL)
 
+    if text or m.voice:
+        mark_user_activity(u, active=not day_closed_today(u))
+        await save_user(u, DB_PATH)
+
     if text and has_red_crisis_phrase(text):
         await crisis_redirect(m, u)
         return
@@ -9291,6 +9426,9 @@ async def main_flow(m: Message):
     if await handle_admin_command(m, u, text):
         return
     if await handle_user_command(m, u, text):
+        return
+
+    if await handle_reactivation_reply(m, u, text, low):
         return
     if text == "↩️ Вернуться к текущему шагу":
         await render_current_screen(m, u)
@@ -12104,6 +12242,8 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
 async def on_offer_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
+    mark_user_activity(u, active=not day_closed_today(u))
+    await save_user(u, DB_PATH)
     data = c.data or ""
 
     if await handle_safety_callback(c, u, data):
@@ -12245,6 +12385,8 @@ async def on_offer_callbacks(c: CallbackQuery):
 async def on_callbacks(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
+    mark_user_activity(u, active=not day_closed_today(u))
+    await save_user(u, DB_PATH)
     if await handle_safety_callback(c, u, c.data or ""):
         return
     valid, data = await validate_callback_screen(c, u, "yes_no")
@@ -12300,6 +12442,8 @@ async def on_callbacks(c: CallbackQuery):
 async def on_test_answer(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
+    mark_user_activity(u, active=not day_closed_today(u))
+    await save_user(u, DB_PATH)
     if await handle_safety_callback(c, u, c.data or ""):
         return
     valid, data = await validate_callback_screen(c, u, "test")
@@ -12341,6 +12485,8 @@ async def on_test_answer(c: CallbackQuery):
 async def on_unknown_callback(c: CallbackQuery):
     uid = c.from_user.id
     u = await get_user(uid, DB_PATH)
+    mark_user_activity(u, active=not day_closed_today(u))
+    await save_user(u, DB_PATH)
     if await handle_safety_callback(c, u, c.data or ""):
         return
     await reject_lost_callback(c, u, "unknown")
@@ -12522,132 +12668,80 @@ def _user_last_activity_ts(u: Dict[str, Any]) -> float:
 
 
 async def background_checkins(bot: Bot):
-    """Proactive morning/evening check-ins and 6h inactivity reminder with per-day anti-spam guards.
-
-    Windows per spec:
-    - Morning: 08:15–09:00 (spec §4.1)
-    - Inactivity (6h silence): 12:00–20:30 (spec §4.2)
-    - Evening: 19:30–21:30 (spec §4.3)
-    Limits per spec §4.4: MAX 3 proactive/day, MAX 1 inactivity, MAX 1 evening.
-    """
+    """Background reminders plus soft reactivation layer; runs every 15 minutes."""
     while True:
         try:
             async with aiosqlite.connect(DB_PATH) as db:
                 db.row_factory = aiosqlite.Row
-                cur = await db.execute("SELECT * FROM users")
-                rows = await cur.fetchall()
+                rows = await (await db.execute("SELECT * FROM users")).fetchall()
 
-            now_ts = time.time()
             for row in rows:
                 u = dict(row)
                 if int(u.get("notifications_enabled") if u.get("notifications_enabled") is not None else 1) != 1:
                     continue
                 if not u.get("chat_id"):
                     continue
-                if u.get("stage") not in {"training", "await_training_target", "waiting_next_day"}:
-                    continue
-                # Skip if user is in safety mode
-                if safety_mode(u) not in {"none", "inactive"}:
-                    continue
-
                 now_local = local_now_for_user(u)
                 today = now_local.date().isoformat()
-
-                # Do not send if user opted out today
                 if _user_no_reminders_today(u, today):
                     continue
 
-                # Global daily proactive limit
-                proactive_today = _proactive_count_today(u, today)
-                if proactive_today >= MAX_PROACTIVE_PER_DAY:
-                    continue
-
-                # ---- Morning check-in: 08:15–09:00 (spec §4.1) ----
-                if (
-                    in_time_window(now_local, 8, 15, 9, 0)
-                    and u.get("last_morning_checkin_date") != today
-                ):
-                    if user_inactive_over_24h(u, now_ts):
-                        count = int(u.get("reactivation_count") or 0)
-                        if count >= 3:
-                            continue
-                        count += 1
-                        u["reactivation_count"] = count
-                        u["last_morning_checkin_date"] = today
-                        if count < 3:
-                            u["stage"] = "morning_checkin"
-                        _increment_proactive_count(u, today)
-                        await save_user(u, DB_PATH)
-                        await log_event(u["user_id"], u.get("stage", ""), "reactivation_sent", {"count": count}, DB_PATH, SHEETS_WEBHOOK_URL)
-                        if count < 3:
-                            await send_background_keyboard(bot, u, reactivation_text(count), kb_morning_checkin, "morning_checkin")
-                        else:
-                            await bot.send_message(u["chat_id"], reactivation_text(count))
-                        continue
-
-                    # Build morning text: include day skill name if days 1-3
+                if in_time_window(now_local, 8, 0, 10, 0) and u.get("last_morning_checkin_date") != today:
+                    u["last_morning_checkin_date"] = today
+                    u["stage"] = "morning_checkin"
+                    mark_bot_auto_message(u)
+                    _increment_proactive_count(u, today)
+                    await save_user(u, DB_PATH)
+                    await log_event(u["user_id"], "morning_checkin", "morning_reminder_sent", {
+                        "day_status": u.get("day_status"),
+                        "reactivation_count_today": int(u.get("reactivation_count_today") or 0),
+                        "hours_since_last_activity": hours_since_last_activity(u),
+                        "message_variant": "morning_existing",
+                        "button_clicked": "",
+                    }, DB_PATH, SHEETS_WEBHOOK_URL)
                     day_num = int(u.get("day") or 1)
                     day_skill_id = get_day_skill_id(day_num)
                     day_skill_name = (SKILLS_DB.get(day_skill_id) or {}).get("name", "") if day_skill_id else ""
-
-                    u["last_morning_checkin_date"] = today
-                    u["stage"] = "morning_checkin"
-                    _increment_proactive_count(u, today)
-                    await save_user(u, DB_PATH)
-                    await log_event(u["user_id"], "morning_checkin", "morning_checkin_sent", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-                    await send_background_keyboard(
-                        bot,
-                        u,
-                        morning_checkin_text(day_skill_name=day_skill_name),
-                        kb_morning_checkin,
-                        "morning_checkin",
-                    )
+                    await send_background_keyboard(bot, u, morning_checkin_text(day_skill_name=day_skill_name), kb_morning_checkin, "morning_checkin")
                     continue
 
-                # ---- 6-hour inactivity reminder: 12:00–20:30 (spec §4.2) ----
-                if (
-                    in_time_window(now_local, 12, 0, 20, 30)
-                    and u.get("last_inactivity_reminder_date") != today
-                    and not day_closed_today(u)
-                    and safety_mode(u) == "none"
-                ):
-                    last_active = _user_last_activity_ts(u)
-                    if last_active > 0 and (now_ts - last_active) >= _INACTIVITY_HOURS * 3600:
-                        bucket = str(u.get("bucket") or "mixed")
-                        anxious = bucket in ("anxiety",)
-                        variant = 2 if proactive_today == 1 else 1
-                        msg_text = soft_checkin_text(variant=variant, anxious=anxious)
-                        kb = kb_soft_checkin_anxious if anxious else (kb_soft_checkin_v2 if variant == 2 else kb_soft_checkin)
-                        u["last_inactivity_reminder_date"] = today
-                        _increment_proactive_count(u, today)
-                        await save_user(u, DB_PATH)
-                        await log_event(u["user_id"], "inactivity", "soft_checkin_sent", {"variant": variant, "anxious": anxious}, DB_PATH, SHEETS_WEBHOOK_URL)
-                        await send_background_keyboard(bot, u, msg_text, kb, "soft_checkin")
-                    continue
-
-                # ---- Evening check-in: 19:30–21:30 (spec §4.3) ----
-                if (
-                    in_time_window(now_local, 19, 30, 21, 30)
-                    and u.get("last_evening_checkin_date") != today
-                    and not day_closed_today(u)
-                ):
+                if in_time_window(now_local, 18, 0, 20, 30) and u.get("last_evening_checkin_date") != today:
                     u["last_evening_checkin_date"] = today
                     u["stage"] = "evening_checkin"
+                    mark_bot_auto_message(u)
                     _increment_proactive_count(u, today)
                     await save_user(u, DB_PATH)
-                    await log_event(u["user_id"], "evening_checkin", "evening_checkin_sent", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+                    await log_event(u["user_id"], "evening_checkin", "evening_reminder_sent", {
+                        "day_status": u.get("day_status"),
+                        "reactivation_count_today": int(u.get("reactivation_count_today") or 0),
+                        "hours_since_last_activity": hours_since_last_activity(u),
+                        "message_variant": "evening_existing",
+                        "button_clicked": "",
+                    }, DB_PATH, SHEETS_WEBHOOK_URL)
                     await send_background_keyboard(bot, u, evening_checkin_text(), kb_evening_checkin, "evening_checkin")
+                    continue
+
+                ok, reason, meta = can_send_reactivation(u)
+                if not ok:
+                    continue
+                variant_id, text, keyboard = choose_variant(u)
+                mark_reactivation_sent(u, variant_id)
+                await save_user(u, DB_PATH)
+                await log_event(u["user_id"], "reactivation", "reactivation_sent", {
+                    "user_id": u.get("user_id"),
+                    "day_status": u.get("day_status"),
+                    "reactivation_count_today": int(u.get("reactivation_count_today") or 0),
+                    "hours_since_last_activity": meta.get("hours_since_last_activity"),
+                    "message_variant": variant_id,
+                    "button_clicked": "",
+                }, DB_PATH, SHEETS_WEBHOOK_URL)
+                await send_background_keyboard(bot, u, text, keyboard, f"reactivation_{variant_id}")
 
         except Exception as e:
             log.warning("background_checkins failed: %s", e)
             await log_event(0, "background", "db_error", {"error_type": type(e).__name__, "error_source": "background_checkins"}, DB_PATH, SHEETS_WEBHOOK_URL)
 
         await asyncio.sleep(900)
-
-# ============================================================
-# MAIN
-# ============================================================
-
 
 
 def start_sheets_sync_background_task(db_path: str):
