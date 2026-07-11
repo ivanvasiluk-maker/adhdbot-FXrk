@@ -1068,6 +1068,19 @@ def evening_checkin_text() -> str:
     )
 
 
+def closed_day_morning_text() -> str:
+    return (
+        "Новый день — новая попытка. Ничего наверстывать не нужно.\n"
+        "С чем сегодня поработаем?"
+    )
+
+
+def closed_day_evening_not_started_text() -> str:
+    return (
+        "Как прошёл день? Можно коротко разобрать один момент или просто закрыть день без анализа."
+    )
+
+
 def soft_checkin_text(variant: int = 1, anxious: bool = False) -> str:
     """Soft 6-hour inactivity check-in. Three variants per spec section 4.2."""
     if anxious:
@@ -1117,6 +1130,24 @@ kb_evening_checkin = ReplyKeyboardMarkup(
         [KeyboardButton(text="📱 Почти весь день уносило")],
         [KeyboardButton(text="🫠 Не было сил")],
         [KeyboardButton(text="🌙 Не хочу разбирать, просто закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_morning = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Есть задача, которую откладываю")],
+        [KeyboardButton(text="Хочу короткий навык")],
+        [KeyboardButton(text="Пока ничего")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_closed_day_evening_not_started = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Разобрать один стопор")],
+        [KeyboardButton(text="Закрыть день")],
+        [KeyboardButton(text="Не сегодня")],
     ],
     resize_keyboard=True,
 )
@@ -1861,6 +1892,19 @@ kb_analysis_after_clarify = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Начать тренировку"), KeyboardButton(text="🔄 Выбрать другой навык")],
         [KeyboardButton(text="🧭 Показать карту"), KeyboardButton(text="🌙 Пока остановиться")],
+    ],
+    resize_keyboard=True,
+)
+
+ANALYSIS_ACTION_TRANSITION_TEXT = (
+    "Кажется, основную гипотезу мы собрали.\n"
+    "Теперь лучше не оставлять её только объяснением — давай проверим одним коротким действием."
+)
+
+kb_analysis_action_transition = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="▶️ Дать первый навык")],
+        [KeyboardButton(text="✏️ Уточнить ситуацию"), KeyboardButton(text="Не сейчас")],
     ],
     resize_keyboard=True,
 )

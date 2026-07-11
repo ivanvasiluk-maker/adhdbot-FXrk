@@ -2180,6 +2180,7 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
             comp = {}
         msg = format_comprehensive_analysis(comp if isinstance(comp, dict) else {}, trainer_key=trainer_key)
         await answer_with_keyboard(m, u, msg + "\n\nЭто похоже на тебя?", kb_analysis_confirm, "analysis")
+        await maybe_show_analysis_action_transition(m, u, "trainer_switch_return")
         return
     if return_stage == "analysis_details":
         try:
@@ -2187,6 +2188,7 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
         except Exception:
             comp = {}
         await answer_with_keyboard(m, u, render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, trainer_key), kb_analysis_confirm, "analysis_details")
+        await maybe_show_analysis_action_transition(m, u, "trainer_switch_return")
         return
     if return_stage == "working_map":
         try:
@@ -3763,6 +3765,8 @@ FEEDBACK_SENSITIVE_MARKERS = (
 def feedback_blocked_now(u: Dict[str, Any], text: str = "") -> bool:
     if safety_mode(u) != "none":
         return True
+    if closed_day_status(u):
+        return True
     low = (text or "").lower()
     return any(marker in low for marker in FEEDBACK_SENSITIVE_MARKERS)
 
@@ -4900,6 +4904,30 @@ async def handle_analysis_clarification_answer(m: Message, u: Dict[str, Any], te
         u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, _analysis_clarify_summary(kind, answers), kb_analysis_after_clarify, "analysis_clarify_done")
+    await maybe_show_analysis_action_transition(m, u, "analysis_clarify_done")
+    return True
+
+
+def analysis_action_transition_blocked(u: Dict[str, Any]) -> bool:
+    return any([
+        int(u.get("analysis_action_transition_shown") or 0),
+        int(u.get("has_started_training") or 0),
+        bool(current_skill_for_action(u)),
+        bool(u.get("current_action_id")),
+        str(u.get("daily_skill_status") or "") == "in_progress",
+        day_closed_today(u),
+        str(u.get("safety_mode") or "none") != "none",
+        int(u.get("crisis_mode") or u.get("crisis_redirected") or 0),
+    ])
+
+
+async def maybe_show_analysis_action_transition(m: Message, u: Dict[str, Any], source: str) -> bool:
+    if not u.get("analysis_json") or analysis_action_transition_blocked(u):
+        return False
+    u["analysis_action_transition_shown"] = 1
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "analysis", "analysis_action_transition_shown", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await answer_with_keyboard(m, u, ANALYSIS_ACTION_TRANSITION_TEXT, kb_analysis_action_transition, "analysis_action_transition")
     return True
 
 
@@ -5184,6 +5212,7 @@ async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text
         msg += f"\n\nНовый навык на сейчас: {SKILLS_DB[new_sid]['name']}"
     markup = kb_analysis_confirm if u["stage"] == "confirm_analysis" else kb_training_main
     await answer_with_keyboard(m, u, msg, markup, "analysis_rebuilt")
+    await maybe_show_analysis_action_transition(m, u, "analysis_rebuilt")
 
 
 def apply_skill_rebuild(u: Dict[str, Any], new_sid: str):
@@ -7219,6 +7248,8 @@ def action_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: str):
+    if closed_day_status(u):
+        u["current_day_id"] = None
     plan = get_current_plan(u) or build_28_day_plan(u.get("bucket") or "mixed")
     if not plan:
         plan = ["phone_far_3min"] if "phone_far_3min" in SKILLS_DB else list(SKILLS_DB.keys())[:1]
@@ -7299,6 +7330,7 @@ async def start_new_day(user_id: int, message: Message, user: Optional[Dict[str,
     """Start the new-day scenario directly after admin/test day changes."""
     if user is None:
         user = await get_user(user_id, DB_PATH)
+    user["analysis_action_transition_shown"] = 0
     if source == "admin_force_next_day":
         profile = await get_user_profile(user_id, DB_PATH)
         if should_send_day_intro(user):
@@ -7339,6 +7371,41 @@ def day_closed_today(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None
     if is_same_calendar_day(closed_at, u):
         return True
     return (str(u.get("day_status") or "").lower() == "closed" or bool(int(u.get("day_closed") or u.get("today_closed") or 0))) and not has_stale_day_core_lock(u)
+
+
+def closed_day_status(u: Dict[str, Any]) -> bool:
+    return str(u.get("day_status") or "").lower() == "closed" or bool(int(u.get("day_closed") or u.get("today_closed") or 0))
+
+
+def closed_on_local_date(u: Dict[str, Any], date_value: str) -> bool:
+    closed_at = str(u.get("last_day_closed_at") or "")
+    return bool(closed_at and closed_at[:10] == str(date_value)[:10])
+
+
+async def log_closed_day_auto_block(u: Dict[str, Any], source: str, meta: Optional[Dict[str, Any]] = None) -> None:
+    await log_event(
+        u.get("user_id"),
+        "day_closed",
+        "closed_day_automatic_message_blocked",
+        {"source": source, "day_status": u.get("day_status"), "last_day_closed_at": u.get("last_day_closed_at"), **(meta or {})},
+        DB_PATH,
+        SHEETS_WEBHOOK_URL,
+    )
+
+
+async def activate_new_calendar_day(u: Dict[str, Any], source: str, *, skill_id: str = "", skill_name: str = "") -> str:
+    was_closed = closed_day_status(u)
+    u["day_status"] = "active"
+    u["today_closed"] = 0
+    u["day_closed"] = 0
+    u["today_started"] = 1
+    u["has_started_training"] = 1
+    u["day_intro_sent"] = 0
+    if was_closed:
+        u["current_day_id"] = None
+    day_id = await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=skill_id, skill_name=skill_name)
+    await log_event(u["user_id"], "morning_checkin", "new_day_started_from_morning", {"source": source, "day_id": day_id}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return day_id
 
 
 DAY_CLOSED_ACTION_TEXT = (
@@ -7620,6 +7687,7 @@ def enough_for_today_text() -> str:
 
 async def mark_day_closed(u: Dict[str, Any], source: str):
     today = local_date_for_user(u)
+    closed_at = f"{today}T{dt.datetime.now(dt.timezone.utc).time().isoformat()}"
     if not u.get("current_day_id"):
         sid = current_skill_for_action(u)
         await ensure_user_day(u, DB_PATH, calendar_date=today, skill_id=sid, skill_name=(SKILLS_DB.get(sid) or {}).get("name") or sid)
@@ -7627,8 +7695,10 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
     await bot_record_action_event(u, "day_closed", metadata={"source": source})
     u["day_closed"] = 1
     u["today_closed"] = 1
-    u["last_day_closed_at"] = today
+    u["last_day_closed_at"] = closed_at
     u["day_status"] = "closed"
+    u["pending_feedback_json"] = None
+    u["active_flow"] = None
     mark_current_skill_status(u, "closed")
     sync_active_attempt(u, bump=True, is_closed=True, day_closed=True)
     completed_actions_today = 0
@@ -7653,7 +7723,7 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
         {
             "day_closed": 1,
             "today_closed": 1,
-            "last_day_closed_at": today,
+            "last_day_closed_at": closed_at,
             "day_status": "closed",
             "completed_days": completed_days,
             "completed_skill_days": completed_skill_days,
@@ -7751,13 +7821,14 @@ async def handle_action_request(user_id: int, message: Message, user: Optional[D
     await send_current_skill(user_id, message, user)
 
 
-ACTION_REQUEST_LABELS = {"💪 Давай действие", "🧭 Давай действие", "💪 Дать сегодняшний навык", "💪 Сделать следующий шаг", "💪 Дать следующий шаг", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту", "🔁 Ещё круг"}
+ACTION_REQUEST_LABELS = {"💪 Давай действие", "🧭 Давай действие", "▶️ Дать первый навык", "💪 Дать сегодняшний навык", "💪 Сделать следующий шаг", "💪 Дать следующий шаг", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту", "🔁 Ещё круг"}
 
 
 def is_action_request(text: str, low: str) -> bool:
     return (
         text in ACTION_REQUEST_LABELS
         or "давай действие" in low
+        or "дать первый навык" in low
         or "сделать следующий шаг" in low
         or "продолжить тренировку" in low
         or "дать следующий шаг" in low
@@ -8067,13 +8138,9 @@ async def handle_reactivation_reply(m: Message, u: Dict[str, Any], text: str, lo
         await m.answer("Хорошо. Без давления. Вернёмся позже.")
         return True
     if text == "Сегодня не буду":
-        u["day_status"] = DAY_CLOSED
-        u["day_closed"] = 1
-        u["today_closed"] = 1
-        u["last_day_closed_at"] = local_date_for_user(u)
+        await mark_day_closed(u, "reactivation_declined")
         await save_user(u, DB_PATH)
         await log_event(u["user_id"], "reactivation", "reactivation_declined", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(u["user_id"], "reactivation", "day_closed", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("Понял. На сегодня не дёргаю. Завтра можно будет начать без необходимости наверстывать.")
         return True
     if text in {"⚡ Навык на 2 минуты", "Дать действие попроще", "Начать короткую тренировку"}:
@@ -9454,6 +9521,36 @@ async def main_flow(m: Message):
         await handle_trainer_switch_choice(m, u, text)
         return
 
+    if text == "▶️ Дать первый навык":
+        await log_event(u["user_id"], "analysis", "first_skill_requested_from_analysis", {
+            "bucket": u.get("bucket"),
+            "trainer_key": u.get("trainer_key"),
+            "has_misunderstood_reason": bool(misunderstood_context(u).get("reason")),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
+        await handle_action_request(u["user_id"], m, u)
+        return
+    if text == "✏️ Уточнить ситуацию":
+        u["stage"] = "analysis_action_extra_clarification"
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "analysis", "analysis_extra_clarification_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Что сейчас важнее всего учесть, чтобы навык попал точнее?")
+        return
+    if u.get("stage") == "analysis_action_extra_clarification":
+        await update_user_profile(u["user_id"], {
+            "analysis_action_clarification": clamp_str(text, 240),
+            "user_model_events": [user_model_event(u["user_id"], "analysis_action_clarification", clamp_str(text, 240), confidence=0.7)],
+        }, DB_PATH, source="analysis_action_clarification")
+        u["stage"] = "analysis_action_transition"
+        await save_user(u, DB_PATH)
+        await handle_action_request(u["user_id"], m, u)
+        return
+    if text == "Не сейчас":
+        u["stage"] = "analysis_action_postponed"
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "analysis", "analysis_action_postponed", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Хорошо. Анализ сохранён. Когда вернёшься, начнём с короткого действия, а не сначала.")
+        return
+
     if u.get("stage") in {"analysis_details", "confirm_analysis", "working_map", "analysis_rebuilt"} and _is_analysis_clarify_yes(text, low):
         await start_analysis_clarification(m, u)
         return
@@ -9534,6 +9631,7 @@ async def main_flow(m: Message):
             kb_analysis_detail_next,
             "analysis_details",
         )
+        await maybe_show_analysis_action_transition(m, u, "analysis_details")
         return
 
     early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
@@ -9890,6 +9988,43 @@ async def main_flow(m: Message):
             ),
         )
         return
+
+    if u.get("stage") == "morning_new_day":
+        if text == "Есть задача, которую откладываю":
+            await activate_new_calendar_day(u, "morning_task")
+            u["stage"] = "await_problem_text"
+            await save_user(u, DB_PATH)
+            await m.answer("Ок. Напиши 2–5 предложений или пришли голосовое: что сейчас мешает делать важное?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
+            return
+        if text == "Хочу короткий навык":
+            await activate_new_calendar_day(u, "morning_short_skill")
+            await save_user(u, DB_PATH)
+            await start_new_day(u["user_id"], m, u, "morning_short_skill")
+            return
+        if text == "Пока ничего":
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await m.answer("Ок. Ничего наверстывать не нужно. Если захочешь — начнём с короткого действия.")
+            return
+
+    if u.get("stage") == "evening_not_started":
+        if text == "Разобрать один стопор":
+            await activate_new_calendar_day(u, "evening_one_blocker")
+            u["stage"] = "await_problem_text"
+            await save_user(u, DB_PATH)
+            await m.answer("Ок. Опиши один стопор 1–3 предложениями — разберём коротко.")
+            return
+        if text == "Закрыть день":
+            await mark_day_closed(u, "evening_not_started_close")
+            u["stage"] = "day_core_stop"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Хорошо. День закрыт без разбора. Завтра начнём заново, без долга.", kb_day_core_stop, "day_core_stop")
+            return
+        if text == "Не сегодня":
+            u["stage"] = "waiting_next_day"
+            await save_user(u, DB_PATH)
+            await m.answer("Ок. Не трогаем день. Завтра можно начать с чистого листа.")
+            return
 
     morning_answers = set(MORNING_STATE_SKILL_MAP) | set(LEGACY_MORNING_STATE_ALIASES)
     if u.get("stage") == "morning_checkin" and text not in morning_answers:
@@ -12685,42 +12820,59 @@ async def background_checkins(bot: Bot):
                 today = now_local.date().isoformat()
                 if _user_no_reminders_today(u, today):
                     continue
+                is_closed = closed_day_status(u)
+                closed_today = is_closed and closed_on_local_date(u, today)
 
                 if in_time_window(now_local, 8, 0, 10, 0) and u.get("last_morning_checkin_date") != today:
+                    if closed_today:
+                        u["last_morning_checkin_date"] = today
+                        await save_user(u, DB_PATH)
+                        await log_closed_day_auto_block(u, "morning_same_calendar_day", {"today": today})
+                        continue
                     u["last_morning_checkin_date"] = today
-                    u["stage"] = "morning_checkin"
+                    u["stage"] = "morning_new_day" if is_closed else "morning_checkin"
                     mark_bot_auto_message(u)
                     _increment_proactive_count(u, today)
                     await save_user(u, DB_PATH)
-                    await log_event(u["user_id"], "morning_checkin", "morning_reminder_sent", {
+                    await log_event(u["user_id"], "morning_checkin", "new_day_morning_sent" if is_closed else "morning_reminder_sent", {
                         "day_status": u.get("day_status"),
                         "reactivation_count_today": int(u.get("reactivation_count_today") or 0),
                         "hours_since_last_activity": hours_since_last_activity(u),
-                        "message_variant": "morning_existing",
+                        "message_variant": "closed_day_new_morning" if is_closed else "morning_existing",
                         "button_clicked": "",
                     }, DB_PATH, SHEETS_WEBHOOK_URL)
-                    day_num = int(u.get("day") or 1)
-                    day_skill_id = get_day_skill_id(day_num)
-                    day_skill_name = (SKILLS_DB.get(day_skill_id) or {}).get("name", "") if day_skill_id else ""
-                    await send_background_keyboard(bot, u, morning_checkin_text(day_skill_name=day_skill_name), kb_morning_checkin, "morning_checkin")
+                    if is_closed:
+                        await send_background_keyboard(bot, u, closed_day_morning_text(), kb_closed_day_morning, "closed_day_morning")
+                    else:
+                        day_num = int(u.get("day") or 1)
+                        day_skill_id = get_day_skill_id(day_num)
+                        day_skill_name = (SKILLS_DB.get(day_skill_id) or {}).get("name", "") if day_skill_id else ""
+                        await send_background_keyboard(bot, u, morning_checkin_text(day_skill_name=day_skill_name), kb_morning_checkin, "morning_checkin")
                     continue
 
                 if in_time_window(now_local, 18, 0, 20, 30) and u.get("last_evening_checkin_date") != today:
                     u["last_evening_checkin_date"] = today
-                    u["stage"] = "evening_checkin"
+                    day_active = str(u.get("day_status") or "").lower() == "active" and not int(u.get("today_closed") or 0)
+                    u["stage"] = "evening_checkin" if day_active else "evening_not_started"
                     mark_bot_auto_message(u)
                     _increment_proactive_count(u, today)
                     await save_user(u, DB_PATH)
-                    await log_event(u["user_id"], "evening_checkin", "evening_reminder_sent", {
+                    await log_event(u["user_id"], "evening_checkin", "evening_checkin_sent", {
                         "day_status": u.get("day_status"),
                         "reactivation_count_today": int(u.get("reactivation_count_today") or 0),
                         "hours_since_last_activity": hours_since_last_activity(u),
-                        "message_variant": "evening_existing",
+                        "message_variant": "evening_existing" if day_active else "evening_not_started",
                         "button_clicked": "",
                     }, DB_PATH, SHEETS_WEBHOOK_URL)
-                    await send_background_keyboard(bot, u, evening_checkin_text(), kb_evening_checkin, "evening_checkin")
+                    if day_active:
+                        await send_background_keyboard(bot, u, evening_checkin_text(), kb_evening_checkin, "evening_checkin")
+                    else:
+                        await send_background_keyboard(bot, u, closed_day_evening_not_started_text(), kb_closed_day_evening_not_started, "evening_not_started")
                     continue
 
+                if is_closed:
+                    await log_closed_day_auto_block(u, "reactivation", {"today": today})
+                    continue
                 ok, reason, meta = can_send_reactivation(u)
                 if not ok:
                     continue
