@@ -1223,6 +1223,7 @@ USER_FIELDS = [
     "done_count",
     "return_count",
     "analysis_retry_count",
+    "analysis_action_transition_shown",
     "has_started_training",
     "last_offer_shown_at",
     "offer_seen",
@@ -1442,6 +1443,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "done_count": 0,
         "return_count": 0,
         "analysis_retry_count": 0,
+        "analysis_action_transition_shown": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
         "last_offer_shown_at": None,
         "offer_seen": 0,
@@ -1992,6 +1994,7 @@ EXTRA_USER_COLS = {
     "done_count": "INTEGER",
     "return_count": "INTEGER",
     "analysis_retry_count": "INTEGER",  # сколько раз пользователь сказал "ты меня не понял"
+    "analysis_action_transition_shown": "INTEGER DEFAULT 0",
     "has_started_training": "INTEGER",  # 1 если юзер начал день 1
     "pending_skill_id": "TEXT",
     "pending_skill_day": "INTEGER",
@@ -2305,13 +2308,20 @@ async def ensure_user_day(u: Dict[str, Any], db_path: str, *, calendar_date: str
     """Ensure the user has one active product day; do not create a new day for more attempts."""
     day_number = int(u.get("day") or u.get("day_number") or 1)
     existing = u.get("current_day_id")
+    existing_status = ""
     async with aiosqlite.connect(db_path) as db:
         if existing:
             cur = await db.execute("SELECT status FROM user_days WHERE day_id=? AND user_id=?", (existing, u["user_id"]))
             row = await cur.fetchone()
             if row and row[0] == "active":
                 return str(existing)
-        day_id = f"{u['user_id']}:{day_number}"
+            if row:
+                existing_status = str(row[0] or "")
+        base_day_id = f"{u['user_id']}:{day_number}"
+        day_id = base_day_id
+        if existing_status and existing_status != "active":
+            safe_date = str(calendar_date or _utc_iso()[:10])[:10]
+            day_id = f"{base_day_id}:{safe_date}"
         now = _utc_iso()
         await db.execute(
             """
