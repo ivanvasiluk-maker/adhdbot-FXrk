@@ -1304,6 +1304,7 @@ USER_FIELDS = [
     "active_attempt",
     "active_flow",
     "last_safe_screen",
+    "last_notification_context",
     "day_intro_sent",
     "crisis_redirected",
     "crisis_mode",
@@ -1318,6 +1319,8 @@ USER_FIELDS = [
     "proactive_count_date",
     "no_reminders_today",
     "no_reminders_date",
+    "reminder_mode",
+    "unanswered_proactive_count",
 ]
 
 EVENT_NAME_ALIASES = {
@@ -1334,6 +1337,16 @@ EVENT_NAME_ALIASES = {
 }
 
 
+INTERNAL_TEST_USER_IDS = {312112015}
+PRODUCT_ONCE_EVENTS = {
+    "start",
+    "diagnosis_completed",
+    "recommended_track_shown",
+    "day1_started",
+    "analysis_action_started",
+    "day_closed",
+}
+
 EVENT_EXTRA_COLS = {
     "event_name": "TEXT",
     "event_data": "TEXT",
@@ -1346,7 +1359,11 @@ EVENT_EXTRA_COLS = {
     "event": "TEXT",
     "meta": "TEXT",
     "stage": "TEXT",
+    "is_internal_test": "INTEGER DEFAULT 0",
+    "analytics_event": "INTEGER DEFAULT 1",
+    "dedupe_key": "TEXT",
 }
+
 
 
 async def ensure_events_schema(db: aiosqlite.Connection):
@@ -1495,6 +1512,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "day_skill_progress": None,
         "active_flow": None,
         "last_safe_screen": None,
+        "last_notification_context": None,
+        "reminder_mode": "normal",
+        "unanswered_proactive_count": 0,
         "daily_check_in_status": "pending",
         "daily_reminder_status": "enabled",
         "skill_attempts_today": 0,
@@ -1911,7 +1931,7 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
                 u['skill_attempts'] = []
         else:
             u['skill_attempts'] = []
-        for json_field in ("active_flow", "last_safe_screen"):
+        for json_field in ("active_flow", "last_safe_screen", "last_notification_context"):
             if json_field in u and u.get(json_field):
                 try:
                     parsed = json.loads(u[json_field]) if isinstance(u[json_field], str) else u[json_field]
@@ -2079,6 +2099,7 @@ EXTRA_USER_COLS = {
     "active_attempt": "TEXT",
     "active_flow": "TEXT",
     "last_safe_screen": "TEXT",
+    "last_notification_context": "TEXT",
     "day_intro_sent": "INTEGER DEFAULT 0",
     "crisis_redirected": "INTEGER DEFAULT 0",
     "crisis_mode": "INTEGER DEFAULT 0",
@@ -2093,6 +2114,8 @@ EXTRA_USER_COLS = {
     "proactive_count_date": "TEXT",
     "no_reminders_today": "INTEGER DEFAULT 0",
     "no_reminders_date": "TEXT",
+    "reminder_mode": "TEXT DEFAULT 'normal'",
+    "unanswered_proactive_count": "INTEGER DEFAULT 0",
 }
 
 async def migrate_db(db_path: str):
@@ -2257,6 +2280,15 @@ async def log_event(
         event_name = EVENT_NAME_ALIASES.get(event_name, event_name)
         if stage and "stage" not in clean_data:
             clean_data["stage"] = stage
+        is_internal_test = int(user_id in INTERNAL_TEST_USER_IDS)
+        if is_internal_test:
+            clean_data["is_internal_test"] = True
+        dedupe_key = str(clean_data.get("dedupe_key") or clean_data.get("analytics_key") or "")
+        analytics_event = 0 if is_internal_test else int(clean_data.get("analytics_event", True) is not False)
+        if event_name in PRODUCT_ONCE_EVENTS:
+            if not dedupe_key:
+                dedupe_key = f"product_once:{user_id}:{event_name}"
+            clean_data["product_metric_once"] = True
 
         event_data_s = json.dumps(clean_data, ensure_ascii=False)
         ts = time.time()
@@ -2264,12 +2296,22 @@ async def log_event(
 
         async with aiosqlite.connect(db_path) as db:
             await ensure_events_schema(db)
+            if dedupe_key:
+                cur = await db.execute(
+                    "SELECT 1 FROM events WHERE user_id=? AND dedupe_key=? LIMIT 1",
+                    (user_id, dedupe_key),
+                )
+                if await cur.fetchone():
+                    analytics_event = 0
+                    clean_data["duplicate_product_metric"] = True
+                    event_data_s = json.dumps(clean_data, ensure_ascii=False)
             await db.execute(
                 """
                 INSERT INTO events(
                     user_id, event_name, event_data, stage, created_at,
-                    synced, sync_attempts, last_sync_error, ts, event, meta
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    synced, sync_attempts, last_sync_error, ts, event, meta,
+                    is_internal_test, analytics_event, dedupe_key
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id,
@@ -2283,6 +2325,9 @@ async def log_event(
                     ts,
                     event_name,
                     event_data_s,
+                    is_internal_test,
+                    analytics_event,
+                    dedupe_key or None,
                 ),
             )
             await db.commit()
@@ -2372,9 +2417,13 @@ async def create_skill_attempt(u: Dict[str, Any], db_path: str, *, skill_id: str
             (day_id, u["user_id"], skill_id, task_id, result, barrier, _utc_iso()),
         )
         attempt_id = int(cur.lastrowid)
+        attempt_metadata = {"result": result, "barrier": barrier, "dedupe_key": f"product_once:{u['user_id']}:attempt_started"}
+        if u["user_id"] in INTERNAL_TEST_USER_IDS:
+            attempt_metadata["is_internal_test"] = True
+            attempt_metadata["analytics_event"] = False
         await db.execute(
             "INSERT INTO action_events (user_id, day_id, attempt_id, event_type, skill_id, task_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (u["user_id"], day_id, attempt_id, "attempt_started", skill_id, task_id, json.dumps({"result": result, "barrier": barrier}, ensure_ascii=False), _utc_iso()),
+            (u["user_id"], day_id, attempt_id, "attempt_started", skill_id, task_id, json.dumps(attempt_metadata, ensure_ascii=False), _utc_iso()),
         )
         await db.commit()
         return attempt_id
@@ -2488,7 +2537,21 @@ async def record_action_event(
 ) -> None:
     if event_type not in ACTION_EVENT_TYPES:
         raise ValueError(f"unknown action event type: {event_type}")
+    metadata = dict(metadata or {})
+    if user_id in INTERNAL_TEST_USER_IDS:
+        metadata["is_internal_test"] = True
+        metadata["analytics_event"] = False
+    dedupe_key = metadata.get("dedupe_key") or metadata.get("analytics_key")
     async with aiosqlite.connect(db_path) as db:
+        if dedupe_key:
+            pattern = f'%"dedupe_key": "{dedupe_key}"%'
+            cur = await db.execute(
+                "SELECT 1 FROM action_events WHERE user_id=? AND event_type=? AND metadata LIKE ? LIMIT 1",
+                (user_id, event_type, pattern),
+            )
+            if await cur.fetchone():
+                metadata["duplicate_product_metric"] = True
+                metadata["analytics_event"] = False
         await db.execute(
             "INSERT INTO action_events (user_id, day_id, attempt_id, event_type, skill_id, task_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, day_id or None, attempt_id, event_type, skill_id or None, task_id or None, json.dumps(metadata or {}, ensure_ascii=False), _utc_iso()),

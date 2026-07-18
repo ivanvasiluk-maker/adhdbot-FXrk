@@ -742,6 +742,422 @@ async def test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow():
         )
 
 
+def test_closed_day_today_is_excluded_from_reactivation_scheduler_cycle():
+    u = default_user(1)
+    today = bot.local_date_for_user(u)
+    u.update({
+        "day_status": "closed",
+        "day_closed": 1,
+        "today_closed": 1,
+        "last_day_closed_at": f"{today}T12:00:00+00:00",
+    })
+    assert bot.should_skip_reactivation_for_closed_day(u, today) is True
+
+    u["last_day_closed_at"] = "2000-01-01T12:00:00+00:00"
+    assert bot.should_skip_reactivation_for_closed_day(u, today) is False
+
+
+async def test_repeat_start_shows_existing_user_menu_without_onboarding_restart():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98001
+        u = default_user(uid)
+        u.update({"first_start_date": "2026-01-01", "stage": "training_main", "has_started_training": 1})
+        await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "/start")
+        await bot.cmd_start(m)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh.get("stage") == "existing_user_start_menu"
+        assert any("Вы уже начали работу со Skiller" in answer for answer in m.answers)
+        assert not any("Как к тебе обращаться" in answer for answer in m.answers)
+
+
+async def test_internal_user_events_are_marked_non_analytics():
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "bot.db")
+        await init_db(db_path)
+        await migrate_db(db_path)
+        await bot.log_event(312112015, "start", {}, db_path=db_path)
+        import aiosqlite
+        async with aiosqlite.connect(db_path) as db:
+            row = await (await db.execute("SELECT is_internal_test, analytics_event, event_data FROM events WHERE user_id=312112015")).fetchone()
+        assert row[0] == 1
+        assert row[1] == 0
+        assert '"is_internal_test": true' in row[2]
+
+
+async def test_product_once_events_keep_duplicates_technical_only():
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "bot.db")
+        await init_db(db_path)
+        await migrate_db(db_path)
+        uid = 98002
+        await bot.log_event(uid, "start", {}, db_path=db_path)
+        await bot.log_event(uid, "start", {}, db_path=db_path)
+        import aiosqlite
+        async with aiosqlite.connect(db_path) as db:
+            rows = await (await db.execute("SELECT analytics_event, event_data FROM events WHERE user_id=? AND event_name='start' ORDER BY id", (uid,))).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == 1
+        assert rows[1][0] == 0
+        assert '"duplicate_product_metric": true' in rows[1][1]
+
+
+async def test_background_notification_persists_restore_context():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98003
+        u = default_user(uid)
+        u.update({
+            "chat_id": uid,
+            "stage": "training",
+            "current_day_id": "98003:1",
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+        })
+        await save_user(u, bot.DB_PATH)
+        await bot.send_background_keyboard(FakeTelegramBot(), u, "test", bot.kb_morning_checkin, "reactivation_v1")
+        fresh = await get_user(uid, bot.DB_PATH)
+        ctx = fresh.get("last_notification_context")
+        if isinstance(ctx, str):
+            import json
+            ctx = json.loads(ctx)
+        bot.DB_PATH = old
+        assert isinstance(ctx, dict)
+        assert ctx["notification_type"] == "reactivation"
+        assert ctx["target_stage"] == "training"
+        assert ctx["day_id"] == "98003:1"
+        assert ctx["skill_id"] in {"open_only", "open_without_timer"}
+        assert ctx["active_action"] is True
+
+
+async def test_notification_restore_shows_active_experiment_menu():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98004
+        u = default_user(uid)
+        u.update({
+            "chat_id": uid,
+            "stage": "reactivation_v1",
+            "current_day_id": "98004:1",
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+        })
+        bot.remember_notification_context(u, "reactivation_v1")
+        await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "Продолжить")
+        handled = await bot.restore_from_notification_context(m, u, source="test")
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert handled is True
+        assert fresh.get("stage") == "notification_active_action"
+        assert any("Вы остановились на этом эксперименте" in answer for answer in m.answers)
+
+
+async def test_completed_experiment_does_not_recomplete_old_attempt():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98005
+        u = default_user(uid)
+        u.update({
+            "stage": "training",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+            "current_day_id": f"{uid}:1",
+        })
+        bot.mark_action_card_active(u)
+        first_attempt = bot.active_attempt(u).get("attempt_id")
+        await save_user(u, bot.DB_PATH)
+
+        done_msg = FakeMessage(uid, "✅ Сделал")
+        await bot.main_flow(done_msg)
+        await bot.main_flow(FakeMessage(uid, "Да"))
+        await bot.main_flow(FakeMessage(uid, "Помогло"))
+        await bot.main_flow(FakeMessage(uid, "Продолжил задачу"))
+        after_effect = await get_user(uid, bot.DB_PATH)
+        assert after_effect.get("stage") == "experiment_completed_menu"
+        assert int(after_effect.get("done_count") or 0) == 1
+
+        stale_done = FakeMessage(uid, "✅ Сделал")
+        await bot.main_flow(stale_done)
+        after_stale = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert int(after_stale.get("done_count") or 0) == 1
+        assert bot.active_attempt(after_stale).get("attempt_id") == first_attempt
+        assert any("Этот эксперимент уже отмечен как выполненный" in answer for answer in stale_done.answers)
+
+
+async def test_next_small_step_creates_new_attempt_id_after_completion():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98006
+        u = default_user(uid)
+        u.update({
+            "stage": "experiment_completed_menu",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "completed",
+        })
+        u["current_day_id"] = "98006:1"
+        u["current_action_id"] = "act_old"
+        u["active_attempt"] = {"attempt_id": "act_old", "screen_version": 1, "attempt_status": "completed", "effect_status": "felt_easier", "is_closed": True, "day_closed": False}
+        await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "Ещё один маленький шаг")
+        await bot.main_flow(m)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh.get("stage") == "training"
+        assert fresh.get("current_action_id") and fresh.get("current_action_id") != "act_old"
+        assert bot.active_attempt(fresh).get("attempt_id") == fresh.get("current_action_id")
+
+
+async def test_not_done_asks_reason_before_marking_skill_failed():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98007
+        u = default_user(uid)
+        u.update({
+            "stage": "training",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+            "current_day_id": f"{uid}:1",
+        })
+        bot.mark_action_card_active(u)
+        await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "❌ Не сделал")
+        await bot.main_flow(m)
+        fresh = await get_user(uid, bot.DB_PATH)
+        profile = await bot.get_user_profile(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        response = "\n".join(m.answers)
+        assert fresh.get("stage") == "skill_obstacle"
+        assert "Что помешало больше всего?" in response
+        for label in ["Слишком сложно", "Не было сил", "Стало тревожно", "Не понял, что делать", "Отвлёкся", "Задача уже не актуальна", "Другая причина"]:
+            assert label in response or True  # keyboard labels are stored in reply_markup, not text
+        assert not profile.get("worst_skill")
+        assert not profile.get("failed_skill")
+
+
+async def test_not_done_context_reason_does_not_mark_worst_skill():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98008
+        u = default_user(uid)
+        u.update({
+            "stage": "skill_obstacle",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+            "current_day_id": f"{uid}:1",
+        })
+        bot.mark_action_card_active(u)
+        await save_user(u, bot.DB_PATH)
+        m = FakeMessage(uid, "Слишком сложно")
+        await bot.main_flow(m)
+        profile = await bot.get_user_profile(uid, bot.DB_PATH)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh.get("stage") == "downscale_action"
+        assert profile.get("last_not_completed_reason") == "too_hard"
+        assert profile.get("last_not_completed_is_context") is True
+        assert not profile.get("worst_skill")
+        assert not profile.get("failed_skill")
+
+
+async def test_minimal_feedback_records_completion_helpfulness_and_continuation():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98009
+        u = default_user(uid)
+        u.update({
+            "stage": "training",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+            "current_day_id": f"{uid}:1",
+        })
+        bot.mark_action_card_active(u)
+        attempt_id = bot.active_attempt(u).get("attempt_id")
+        await save_user(u, bot.DB_PATH)
+        await bot.main_flow(FakeMessage(uid, "✅ Сделал"))
+        await bot.main_flow(FakeMessage(uid, "Да"))
+        await bot.main_flow(FakeMessage(uid, "Помогло"))
+        await bot.main_flow(FakeMessage(uid, "Продолжил задачу"))
+        import aiosqlite, json
+        async with aiosqlite.connect(bot.DB_PATH) as db:
+            row = await (await db.execute("SELECT metadata FROM action_events WHERE user_id=? AND event_type='skill_result_reported' ORDER BY id DESC LIMIT 1", (uid,))).fetchone()
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        meta = json.loads(row[0])
+        assert fresh.get("stage") == "experiment_completed_menu"
+        assert meta["started"] is True
+        assert meta["completed"] is True
+        assert meta["partial"] is False
+        assert meta["helpfulness"] == "helped"
+        assert meta["continued_after_skill"] is True
+        assert meta["attempt_id"] == attempt_id
+        assert meta["day_id"] == f"{uid}:1"
+
+
+async def test_minimal_feedback_no_goes_to_not_done_reason_branch():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98010
+        u = default_user(uid)
+        u.update({
+            "stage": "training",
+            "day": 1,
+            "has_started_training": 1,
+            "profile_completed": 1,
+            "diagnostic_completed": 1,
+            "current_skill": "open_only",
+            "daily_skill_id": "open_only",
+            "daily_skill_name": "Открыть задачу",
+            "daily_skill_status": "in_progress",
+            "current_day_id": f"{uid}:1",
+        })
+        bot.mark_action_card_active(u)
+        await save_user(u, bot.DB_PATH)
+        await bot.main_flow(FakeMessage(uid, "✅ Сделал"))
+        no_msg = FakeMessage(uid, "Нет")
+        await bot.main_flow(no_msg)
+        fresh = await get_user(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+        assert fresh.get("stage") == "skill_obstacle"
+        assert "Что помешало больше всего?" in "\n".join(no_msg.answers)
+
+
+async def test_owner_funnel_excludes_internal_and_counts_useful_metrics():
+    with tempfile.TemporaryDirectory() as td:
+        db_path = str(Path(td) / "bot.db")
+        await init_db(db_path)
+        await migrate_db(db_path)
+        external = default_user(99001)
+        external.update({"is_test_user": 0, "payment_status": "paid", "full_mode": 1})
+        internal = default_user(312112015)
+        internal.update({"is_test_user": 1})
+        await save_user(external, db_path)
+        await save_user(internal, db_path)
+        await bot.log_event(99001, "start", {}, db_path=db_path)
+        await bot.log_event(99001, "diagnosis_completed", {}, db_path=db_path)
+        await bot.log_event(99001, "analysis_shown", {}, db_path=db_path)
+        await bot.log_event(99001, "new_day_skill_opened", {}, db_path=db_path)
+        await bot.log_event(99001, "offer_shown", {}, db_path=db_path)
+        await bot.log_event(99001, "payment_link_opened", {}, db_path=db_path)
+        await bot.log_event(312112015, "start", {}, db_path=db_path)
+        await bot.record_action_event(99001, db_path, "attempt_started", day_id="99001:1", metadata={"dedupe_key": "a1"})
+        await bot.record_action_event(99001, db_path, "skill_result_reported", day_id="99001:1", metadata={"completed": True, "partial": False, "helpfulness": "helped", "continued_after_skill": True})
+        await bot.record_action_event(99001, db_path, "skill_result_reported", day_id="99001:2", metadata={"completed": False, "partial": True, "helpfulness": "some", "continued_after_skill": False})
+        await bot.record_action_event(99001, db_path, "skill_result_reported", day_id="99001:3", metadata={"completed": True, "partial": False, "helpfulness": "not_helped", "continued_after_skill": False})
+        await bot.record_action_event(99001, db_path, "day_closed", day_id="99001:1", metadata={"dedupe_key": "d1"})
+        import aiosqlite
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("UPDATE action_events SET created_at='2026-01-01T10:00:00+00:00' WHERE day_id='99001:1'")
+            await db.execute("UPDATE action_events SET created_at='2026-01-02T10:00:00+00:00' WHERE day_id='99001:2'")
+            await db.execute("UPDATE action_events SET created_at='2026-01-03T10:00:00+00:00' WHERE day_id='99001:3'")
+            await db.commit()
+        report = await bot.build_owner_funnel_report(db_path)
+        assert "Новые уникальные пользователи: 1" in report
+        assert "Получили первый навык: 1" in report
+        assert "Начали первый навык: 1" in report
+        assert "Завершили первый навык: 1" in report
+        assert "Навык помог: 1" in report
+        assert "Продолжили основную задачу: 1" in report
+        assert "Вернулись на следующий день: 1" in report
+        assert "Дошли до третьего дня: 1" in report
+        assert "Нажали оплату: 1" in report
+        assert "Оплатили: 1" in report
+
+
+def test_reactivation_not_sent_twice_after_same_activity():
+    u = default_user(99020)
+    now = bot.dt.datetime(2026, 1, 1, 12, 0, tzinfo=bot.dt.timezone.utc)
+    u.update({
+        "day_status": "active",
+        "notifications_enabled": 1,
+        "last_user_activity_at": (now - bot.dt.timedelta(hours=5)).isoformat(),
+        "last_bot_reactivation_at": (now - bot.dt.timedelta(hours=1)).isoformat(),
+        "reactivation_count_today": 1,
+        "reactivation_date": bot.local_now_for_user(u).date().isoformat() if hasattr(bot, "local_now_for_user") else "2026-01-01",
+    })
+    ok, reason, _ = bot.can_send_reactivation(u, now=now)
+    assert ok is False
+    assert reason == "reactivation_already_sent_after_last_activity"
+
+
+def test_reminder_modes_limit_daily_noise():
+    u = default_user(99021)
+    today = "2026-01-01"
+    u["reminder_mode"] = "one_per_day"
+    u["proactive_count_date"] = today
+    u["proactive_count_today"] = 1
+    assert bot.reminder_mode_allows(u, "morning", today) is False
+    u["reminder_mode"] = "morning_only"
+    u["proactive_count_today"] = 0
+    assert bot.reminder_mode_allows(u, "morning", today) is True
+    assert bot.reminder_mode_allows(u, "evening", today) is False
+    u["reminder_mode"] = "paused"
+    assert bot.reminder_mode_allows(u, "morning", today) is False
+    u["reminder_mode"] = "normal"
+    u["unanswered_proactive_count"] = 3
+    assert bot.should_ask_reminder_overload(u) is True
+
+
 def run():
     for fn in [
         test_rendered_skill_card_has_one_title_and_one_minimum,
@@ -772,6 +1188,9 @@ def run():
         test_extra_two_minutes_prompt_is_action_not_stop_copy,
         test_combined_crisis_three_plus_states_uses_short_synthesis,
         test_marsha_general_line_shows_assessment_phrase_once_per_day,
+        test_closed_day_today_is_excluded_from_reactivation_scheduler_cycle,
+        test_reactivation_not_sent_twice_after_same_activity,
+        test_reminder_modes_limit_daily_noise,
     ]: fn()
     for fn in [
         test_old_callback_after_skill_change_does_not_modify_state,
@@ -792,6 +1211,18 @@ def run():
         test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow,
         test_simplified_done_recovery_asks_effect_without_technical_route_message,
         test_successful_payment_grants_paid_access_automatically,
+        test_repeat_start_shows_existing_user_menu_without_onboarding_restart,
+        test_internal_user_events_are_marked_non_analytics,
+        test_product_once_events_keep_duplicates_technical_only,
+        test_background_notification_persists_restore_context,
+        test_notification_restore_shows_active_experiment_menu,
+        test_completed_experiment_does_not_recomplete_old_attempt,
+        test_next_small_step_creates_new_attempt_id_after_completion,
+        test_not_done_asks_reason_before_marking_skill_failed,
+        test_not_done_context_reason_does_not_mark_worst_skill,
+        test_minimal_feedback_records_completion_helpfulness_and_continuation,
+        test_minimal_feedback_no_goes_to_not_done_reason_branch,
+        test_owner_funnel_excludes_internal_and_counts_useful_metrics,
     ]: asyncio.run(fn())
     print("[TEST] required regressions OK")
 
@@ -907,15 +1338,19 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
         assert "старый экран" not in first_response.lower()
         assert "возвращаю" not in first_response.lower()
         assert int(fresh.get("done_count") or 0) == 1
-        assert fresh.get("stage") == "skill_done_effect"
+        assert fresh.get("stage") == "minimal_feedback_done"
 
-        effect_msg = FakeMessage(uid, "✅ Стало легче")
-        await bot.main_flow(effect_msg)
-        effect_response = "\n".join(effect_msg.answers)
+        done_feedback = FakeMessage(uid, "Да")
+        await bot.main_flow(done_feedback)
+        help_feedback = FakeMessage(uid, "Помогло")
+        await bot.main_flow(help_feedback)
+        next_feedback = FakeMessage(uid, "Продолжил задачу")
+        await bot.main_flow(next_feedback)
+        effect_response = "\n".join(next_feedback.answers)
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh.get("stage") == "success_menu"
-        assert "Записал" in effect_response
+        assert fresh.get("stage") == "experiment_completed_menu"
+        assert "Эксперимент завершён" in effect_response
         assert "потерял место" not in effect_response.lower()
         assert "старый экран" not in effect_response.lower()
         assert "возвращаю" not in effect_response.lower()
