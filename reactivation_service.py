@@ -96,6 +96,7 @@ def mark_user_activity(u: Dict[str, Any], *, active: bool = True, now: Optional[
     ts = utc_iso(now)
     u["last_user_activity_at"] = ts
     u["last_active"] = time.time()
+    u["unanswered_proactive_count"] = 0
     if active and normalize_day_status(u) != DAY_CLOSED:
         u["day_status"] = DAY_ACTIVE
 
@@ -162,6 +163,10 @@ def can_send_reactivation(u: Dict[str, Any], *, now: Optional[dt.datetime] = Non
     inactive_hours = meta["hours_since_last_activity"]
     if inactive_hours is None or inactive_hours < REACTIVATION_MIN_HOURS:
         return False, "too_early", meta
+    last_activity = parse_dt(u.get("last_user_activity_at"))
+    last_reactivation = parse_dt(u.get("last_bot_reactivation_at"))
+    if last_reactivation and (not last_activity or last_reactivation >= last_activity):
+        return False, "reactivation_already_sent_after_last_activity", meta
     last_reactivation_hours = _hours_since(u.get("last_bot_reactivation_at"), current)
     if last_reactivation_hours is not None and last_reactivation_hours < REACTIVATION_MIN_HOURS:
         return False, "reactivation_cooldown", meta

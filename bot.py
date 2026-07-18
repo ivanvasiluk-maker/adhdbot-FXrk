@@ -118,6 +118,7 @@ PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
 PAYMENT_BOT_999_URL = os.getenv("PAYMENT_BOT_999_URL", "").strip()
+INTERNAL_TEST_USER_IDS = {312112015}
 PAYMENT_MONTH_URL = os.getenv("PAYMENT_MONTH_URL", "").strip()
 PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
 PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
@@ -497,6 +498,21 @@ kb_skill_done_effect = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+kb_minimal_feedback_done = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="Да")], [KeyboardButton(text="Частично")], [KeyboardButton(text="Нет")]],
+    resize_keyboard=True,
+)
+
+kb_minimal_feedback_help = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="Помогло")], [KeyboardButton(text="Немного")], [KeyboardButton(text="Не помогло")], [KeyboardButton(text="Стало хуже")]],
+    resize_keyboard=True,
+)
+
+kb_minimal_feedback_next = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="Продолжил задачу")], [KeyboardButton(text="Остановился после шага")], [KeyboardButton(text="Сделал что-то другое")], [KeyboardButton(text="Пока не знаю")]],
+    resize_keyboard=True,
+)
+
 kb_consolidation_hold = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="▶️ Начать 3 минуты")],
@@ -517,9 +533,13 @@ kb_consolidation_action = ReplyKeyboardMarkup(
 
 kb_skill_obstacle = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="😣 Слишком сложно")],
-        [KeyboardButton(text="📱 Унесло в телефон")],
-        [KeyboardButton(text="🧠 Застрял / не понял, что делать")],
+        [KeyboardButton(text="Слишком сложно")],
+        [KeyboardButton(text="Не было сил")],
+        [KeyboardButton(text="Стало тревожно")],
+        [KeyboardButton(text="Не понял, что делать")],
+        [KeyboardButton(text="Отвлёкся")],
+        [KeyboardButton(text="Задача уже не актуальна")],
+        [KeyboardButton(text="Другая причина")],
     ],
     resize_keyboard=True,
 )
@@ -560,6 +580,15 @@ kb_success_no_extra = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔄 Сменить навык")],
         [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_experiment_completed = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Продолжить задачу самому")],
+        [KeyboardButton(text="Ещё один маленький шаг")],
+        [KeyboardButton(text="Закрыть день")],
     ],
     resize_keyboard=True,
 )
@@ -3343,16 +3372,24 @@ def button_fits_current_state(text: str, u: Dict[str, Any]) -> bool:
         "crisis_mode": _reply_keyboard_texts(globals().get("kb_crisis_mode")),
         "crisis_action": _reply_keyboard_texts(globals().get("kb_crisis_action")),
         "success_menu": _reply_keyboard_texts(globals().get("kb_success_next")) | _reply_keyboard_texts(globals().get("kb_success_no_extra")) | _reply_keyboard_texts(globals().get("kb_success_limit")),
+        "experiment_completed_menu": _reply_keyboard_texts(globals().get("kb_experiment_completed")),
         "success_help_note": _reply_keyboard_texts(globals().get("kb_success_next")) | _reply_keyboard_texts(globals().get("kb_success_no_extra")) | _reply_keyboard_texts(globals().get("kb_success_limit")),
         "consolidation": _reply_keyboard_texts(globals().get("kb_consolidation_hold")) | _reply_keyboard_texts(globals().get("kb_consolidation_action")),
         "consolidation_running": {"✅ Сделал", "🌙 Закрыть день", "🌙 На сегодня достаточно"},
+        "training": _reply_keyboard_texts(globals().get("kb_active_skill")) | ACTION_OUTCOME_BUTTONS,
+        "new_day_skill": _reply_keyboard_texts(globals().get("kb_active_skill")) | ACTION_OUTCOME_BUTTONS,
+        "current_skill": _reply_keyboard_texts(globals().get("kb_active_skill")) | ACTION_OUTCOME_BUTTONS,
         "downscale_action": _reply_keyboard_texts(globals().get("kb_active_skill")) | _reply_keyboard_texts(globals().get("kb_crisis_action")) | {"✅ Сделал", "🟡 Не вышло", "🟡 Попробовал, но не вышло", "↘️ Нужно проще", "🌙 Закрыть день"},
         "stuck_micro_action": _reply_keyboard_texts(globals().get("kb_crisis_action")),
         "stuck_effect_await": _reply_keyboard_texts(globals().get("kb_crisis_effect")),
         "stuck_aftercare": _reply_keyboard_texts(globals().get("kb_stuck_aftercare")),
+        "minimal_feedback_done": _reply_keyboard_texts(globals().get("kb_minimal_feedback_done")),
+        "minimal_feedback_help": _reply_keyboard_texts(globals().get("kb_minimal_feedback_help")),
+        "minimal_feedback_next": _reply_keyboard_texts(globals().get("kb_minimal_feedback_next")),
         "skill_result_feedback": _reply_keyboard_texts(globals().get("kb_skill_result_feedback")),
         "skill_done_effect": _reply_keyboard_texts(globals().get("kb_skill_done_effect")),
         "skill_done_effect_text": set(),
+        "skill_obstacle": _reply_keyboard_texts(globals().get("kb_skill_obstacle")),
         "skill_not_tried": _reply_keyboard_texts(globals().get("kb_skill_not_tried")),
         "extra_microstep": _reply_keyboard_texts(globals().get("kb_extra_microstep_done")),
         "failed_options": _reply_keyboard_texts(globals().get("kb_failed")) | {"📱 Залип", "😣 Слишком сложно", "😵 Нет сил"},
@@ -3622,6 +3659,15 @@ def mark_action_card_active(u: Dict[str, Any]) -> str:
     raw_current = str(u.get("current_skill") or u.get("daily_skill_id") or "")
     sid = raw_current if raw_current.startswith("consolidation_") else (current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or u.get("pending_skill_id") or "")
     record_skill_attempt_start(u, sid)
+    u["active_attempt"] = {
+        **default_active_attempt(u),
+        "attempt_id": action_id,
+        "screen_version": int(active_attempt(u).get("screen_version") or 0) + 1,
+        "attempt_status": "not_tried",
+        "effect_status": "unknown",
+        "is_closed": False,
+        "day_closed": False,
+    }
     return action_id
 
 
@@ -3660,10 +3706,11 @@ def should_reject_action_button(text: str, u: Dict[str, Any]) -> bool:
 
 async def show_action_changed_fallback(m: Message, u: Dict[str, Any], source: str = "action_context_mismatch"):
     # No metrics/profile updates here: stale buttons must not mutate an old scenario.
-    u["stage"] = "waiting_next_day"
+    u["stage"] = "experiment_completed_menu"
     set_current_state(u, STATE_PAUSED, close_action=True)
     await save_user(u, DB_PATH)
-    await m.answer(trainer_post_minimum_text(u), reply_markup=kb_success_next)
+    await log_event(u.get("user_id"), u.get("stage", ""), "completed_attempt_button_ignored", {"source": source, "analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer("Этот эксперимент уже отмечен как выполненный.", reply_markup=kb_experiment_completed)
 
 SUCCESS_APPROACH_TEXT = POST_MINIMUM_CONTINUE_TEXT
 
@@ -4065,10 +4112,78 @@ SKILL_DONE_EFFECT_BY_BUTTON = {
 }
 
 SKILL_OBSTACLE_BY_BUTTON = {
+    "Слишком сложно": "too_hard",
     "😣 Слишком сложно": "too_hard",
-    "📱 Унесло в телефон": "phone_distracted",
-    "🧠 Застрял / не понял, что делать": "stuck_unclear",
+    "Не было сил": "no_energy",
+    "Стало тревожно": "anxiety",
+    "Не понял, что делать": "unclear_instruction",
+    "🧠 Застрял / не понял, что делать": "unclear_instruction",
+    "Отвлёкся": "distracted",
+    "📱 Унесло в телефон": "distracted",
+    "Задача уже не актуальна": "task_irrelevant",
+    "Другая причина": "other_context",
 }
+
+
+CONTEXT_NOT_COMPLETED_REASONS = {"too_hard", "no_energy", "anxiety", "unclear_instruction", "distracted", "task_irrelevant", "other_context"}
+
+def not_done_reason_text(code: str, u: Dict[str, Any]) -> str:
+    if code == "too_hard":
+        return f"Понял. Это не плохой навык — версия была слишком крупной. Уменьшаем тот же механизм:\n{truly_smaller_step(u)}"
+    if code == "no_energy":
+        return "Понял. Это плохой момент, а не провал. Сделай 30–60 секунд поддержки: сядь удобнее, выдохни и только назови задачу одним словом."
+    if code == "anxiety":
+        return "Понял. Сначала снижаем тревогу и требования: один медленный выдох, расслабь плечи, затем открой задачу без обязательства продолжать."
+    if code == "unclear_instruction":
+        return "Понял. Не меняю навык. Переформулирую: сделай только первый физический жест рядом с задачей — открыть файл, поставить курсор или положить руку на предмет задачи."
+    if code == "distracted":
+        return "Понял. Работаем со средой: положи телефон вне руки экраном вниз на 2 минуты и оставь открытой только вкладку задачи."
+    if code == "task_irrelevant":
+        return "Понял. Закрываю этот эксперимент без пометки навыка как плохого. Можно выбрать новую задачу или закрыть день."
+    return "Понял. Записываю это как контекст, а не как плохой навык. Давай выберем более подходящий следующий шаг."
+
+async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: str) -> bool:
+    code = SKILL_OBSTACLE_BY_BUTTON.get(text)
+    if not code:
+        await answer_with_keyboard(m, u, "Что помешало больше всего?", kb_skill_obstacle, "skill_obstacle")
+        return True
+    sid = current_skill_id(u)
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    failed_count = int(profile.get("action_failed_count") or 0) + 1
+    patch = {
+        "last_not_completed_reason": code,
+        "last_not_completed_skill": sid,
+        "last_not_completed_is_context": True,
+        "action_failed_count": failed_count,
+        **_today_profile_counter_patch(profile, "failed_reason_count_today", "failed_reason_count_date"),
+    }
+    if code == "too_hard":
+        patch.update({"needs_downscale": True, "last_too_hard_skill": sid})
+        await bot_record_action_event(u, "step_reduced", skill_id=sid, metadata={"reason": "not_done_too_hard", "context_not_failure": True})
+    elif code == "no_energy":
+        patch.update({"energy_pattern": "low_start_energy", "needs_support_mode": True})
+        await bot_record_action_event(u, "no_energy_reported", skill_id=sid, metadata={"source": "not_done_reason", "context_not_failure": True})
+    elif code == "anxiety":
+        patch.update({"emotional_trigger": "anxiety", "needs_regulation_first": True})
+    elif code == "unclear_instruction":
+        patch.update({"instruction_unclear_count": int(profile.get("instruction_unclear_count") or 0) + 1})
+    elif code == "distracted":
+        patch.update({"attention_pattern": "environment_distraction", "needs_environment_change": True})
+        await bot_record_action_event(u, "slip_reported", skill_id=sid, metadata={"source": "not_done_reason", "context_not_failure": True})
+    elif code == "task_irrelevant":
+        patch.update({"task_irrelevant_count": int(profile.get("task_irrelevant_count") or 0) + 1})
+    await record_profile_signal(u["user_id"], "training", patch, source=f"not_done_context_{code}")
+    feedback = get_minimal_feedback(u) or minimal_feedback_base(u, source="not_done")
+    feedback.update({"completed": False, "partial": False, "helpfulness": "not_helped", "continued_after_skill": False, "difficulty": code, "barrier": code})
+    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "result_status": "not_completed_context", "reason": code, "context_not_failure": True, "do_not_mark_skill_as_failed": True, "minimal_feedback": True})
+    sync_active_attempt(u, bump=True, attempt_status="failed", effect_status="unknown", is_closed=True)
+    u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
+    u["pending_feedback_json"] = None
+    u["stage"] = "experiment_completed_menu" if code == "task_irrelevant" else "downscale_action"
+    await save_user(u, DB_PATH)
+    reply_markup = kb_experiment_completed if code == "task_irrelevant" else action_keyboard()
+    await answer_with_keyboard(m, u, not_done_reason_text(code, u), reply_markup, u["stage"])
+    return True
 
 
 def skill_result_feedback_text(source: str = "done") -> str:
@@ -4108,16 +4223,87 @@ async def other_entry_options_for_user_async(u: Dict[str, Any]) -> List[str]:
     return options
 
 
-async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: str = "done") -> bool:
+def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+    attempt = active_attempt(u)
+    return {
+        "started": True,
+        "completed": None,
+        "partial": False,
+        "helpfulness": None,
+        "continued_after_skill": None,
+        "difficulty": None,
+        "attempt_id": str(attempt.get("attempt_id") or u.get("current_action_id") or ""),
+        "skill_id": str(current_skill_for_action(u) or current_skill_id(u) or ""),
+        "mechanism": str(attempt.get("current_mechanism") or u.get("current_mechanism") or ""),
+        "barrier": str(u.get("pending_stuck_reason") or u.get("last_not_completed_reason") or ""),
+        "day_id": str(u.get("current_day_id") or ""),
+        "source": source,
+    }
+
+def get_minimal_feedback(u: Dict[str, Any]) -> Dict[str, Any]:
+    raw = u.get("pending_feedback_json")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    return raw if isinstance(raw, dict) else {}
+
+def set_minimal_feedback(u: Dict[str, Any], feedback: Dict[str, Any]) -> None:
+    u["pending_feedback_json"] = dict(feedback or {})
+
+async def ask_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, source: str) -> bool:
     if source not in {"action_done", "downscale_done", "downscale_name_done", "return"}:
         return False
-    u["stage"] = "skill_done_effect"
+    feedback = minimal_feedback_base(u, source=source)
+    set_minimal_feedback(u, feedback)
+    u["stage"] = "minimal_feedback_done"
     u["skill_done_effect_source"] = source
     set_current_state(u, STATE_PAUSED, close_action=True)
     sync_active_attempt(u, bump=True, attempt_status="completed", effect_status="unknown", is_closed=True)
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, "Что изменилось после этого шага?", kb_skill_done_effect, "skill_done_effect")
+    await answer_with_keyboard(m, u, "Получилось сделать?", kb_minimal_feedback_done, "minimal_feedback_done")
     return True
+
+async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
+    feedback = get_minimal_feedback(u)
+    if not feedback:
+        return False
+    sid = str(feedback.get("skill_id") or current_skill_id(u) or "")
+    completed = bool(feedback.get("completed"))
+    partial = bool(feedback.get("partial"))
+    helpfulness = str(feedback.get("helpfulness") or "unknown")
+    continued = feedback.get("continued_after_skill")
+    effect_status = "helped_start" if continued is True else "felt_easier" if helpfulness in {"helped", "some"} else "neutral" if helpfulness == "not_helped" else "unknown"
+    if helpfulness == "worse":
+        effect_status = "unknown"
+    sync_active_attempt(u, bump=True, attempt_status="completed" if completed else "failed", effect_status=effect_status, is_closed=True)
+    update_latest_skill_attempt_result(u, result="completed" if completed else "partial" if partial else "not_completed", effect=helpfulness)
+    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "minimal_feedback": True})
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    patch = {
+        "last_skill_feedback": feedback,
+        "last_skill_completed": completed,
+        "last_skill_effect": helpfulness,
+        "last_continued_after_skill": continued,
+    }
+    if completed and helpfulness in {"helped", "some"}:
+        patch.update({"last_successful_skill": sid, "best_skill": sid})
+    if helpfulness == "worse":
+        patch.update({"skill_unhelpful_count": int(profile.get("skill_unhelpful_count") or 0) + 1, "last_unhelpful_skill": sid})
+    if continued is True:
+        patch.update({"continued_after_skill_count": int(profile.get("continued_after_skill_count") or 0) + 1})
+    await record_profile_signal(u["user_id"], "training", patch, source="minimal_skill_feedback")
+    u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
+    u["pending_feedback_json"] = None
+    u["stage"] = "experiment_completed_menu"
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, "Эксперимент завершён. Что вам сейчас подходит?", kb_experiment_completed, "experiment_completed_menu")
+    return True
+
+
+async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: str = "done") -> bool:
+    return await ask_minimal_skill_feedback(m, u, source=source)
 
 
 async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: str, result_status: str, effect: str, effect_rating: int, *, completed: bool, send_menu: bool = True) -> bool:
@@ -4152,6 +4338,7 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
             f"Это {skill_confidence_text(success_count)}."
         )
     elif effect == "harder":
+        await update_user_profile(u["user_id"], {"skill_unhelpful_count": int(profile.get("skill_unhelpful_count") or 0) + 1, "last_unhelpful_skill": sid}, DB_PATH, source="skill_attempted_unhelpful")
         msg = "Записал: после шага стало тяжелее. Не усиливаем давление — в следующий раз уменьшим вход."
     elif effect == "custom":
         msg = f"Записал: {clamp_str(text, 180)}"
@@ -4165,17 +4352,56 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
         await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
         msg = "Записал: этот вход сейчас не подошёл. Не буду считать его помогающим."
     if send_menu:
-        source = str(u.pop("skill_done_effect_source", "") or "")
-        keyboard = kb_simplified_skill_after_effect if source in {"downscale_done", "downscale_name_done"} else success_menu_keyboard(u)
+        u.pop("skill_done_effect_source", "")
+        u["stage"] = "experiment_completed_menu"
         await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, msg, keyboard, "success_menu")
+        await answer_with_keyboard(m, u, f"{msg}\n\nЭксперимент завершён. Что вам сейчас подходит?", kb_experiment_completed, "experiment_completed_menu")
     return True
 
 
 async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str) -> bool:
     stage = u.get("stage")
-    if stage not in {"skill_result_feedback", "skill_done_effect", "skill_done_effect_text", "skill_obstacle", "skill_other_entry", "skill_not_tried"}:
+    if stage not in {"minimal_feedback_done", "minimal_feedback_help", "minimal_feedback_next", "skill_result_feedback", "skill_done_effect", "skill_done_effect_text", "skill_obstacle", "skill_other_entry", "skill_not_tried"}:
         return False
+    if stage == "minimal_feedback_done":
+        if text not in {"Да", "Частично", "Нет"}:
+            await answer_with_keyboard(m, u, "Получилось сделать?", kb_minimal_feedback_done, "minimal_feedback_done")
+            return True
+        feedback = get_minimal_feedback(u) or minimal_feedback_base(u, source=str(u.get("skill_done_effect_source") or "done"))
+        feedback["completed"] = text == "Да"
+        feedback["partial"] = text == "Частично"
+        set_minimal_feedback(u, feedback)
+        if text == "Нет":
+            u["stage"] = "skill_obstacle"
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Что помешало больше всего?", kb_skill_obstacle, "skill_obstacle")
+            return True
+        u["stage"] = "minimal_feedback_help"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+        return True
+    if stage == "minimal_feedback_help":
+        help_map = {"Помогло": "helped", "Немного": "some", "Не помогло": "not_helped", "Стало хуже": "worse"}
+        if text not in help_map:
+            await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+            return True
+        feedback = get_minimal_feedback(u)
+        feedback["helpfulness"] = help_map[text]
+        set_minimal_feedback(u, feedback)
+        u["stage"] = "minimal_feedback_next"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Что произошло дальше?", kb_minimal_feedback_next, "minimal_feedback_next")
+        return True
+    if stage == "minimal_feedback_next":
+        next_map = {"Продолжил задачу": True, "Остановился после шага": False, "Сделал что-то другое": False, "Пока не знаю": None}
+        if text not in next_map:
+            await answer_with_keyboard(m, u, "Что произошло дальше?", kb_minimal_feedback_next, "minimal_feedback_next")
+            return True
+        feedback = get_minimal_feedback(u)
+        feedback["continued_after_skill"] = next_map[text]
+        feedback["next_after_skill"] = text
+        set_minimal_feedback(u, feedback)
+        return await persist_minimal_skill_feedback(m, u)
     if stage == "skill_result_feedback":
         if text == "✅ Сделал":
             u["stage"] = "skill_done_effect"
@@ -4185,13 +4411,10 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
             return True
         if text == "🟡 Попробовал, но не вышло":
             sid = current_skill_id(u)
-            profile = await get_user_profile(u["user_id"], DB_PATH)
-            u["daily_skill_status"] = "not_fit_today"
-            await update_user_profile(u["user_id"], {"failed_skill": sid, "worst_skill": sid, "skill_status": "not_fit_today", **_not_fit_today_patch(u, profile, sid)}, DB_PATH, source="skill_result_step1_not_fit")
-            await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": "not_completed", "effect": "not_completed", "button": text, "completed": False, "status": "not_fit_today", "daily_session_id": u.get("daily_session_id"), "local_date": local_date_for_user(u), "action_id": u.get("current_action_id")})
+            await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": "not_completed_pending_reason", "button": text, "completed": False, "context_reason_required": True, "daily_session_id": u.get("daily_session_id"), "local_date": local_date_for_user(u), "action_id": u.get("current_action_id")})
             u["stage"] = "skill_obstacle"
             await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Что было главной помехой?", kb_skill_obstacle, "skill_obstacle")
+            await answer_with_keyboard(m, u, "Что помешало больше всего?", kb_skill_obstacle, "skill_obstacle")
             return True
         if text == "🔄 Нужен другой вход":
             u["stage"] = "skill_other_entry"
@@ -4206,6 +4429,12 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
         await answer_with_keyboard(m, u, "Выбери, что ближе:", kb_skill_result_feedback, "skill_result_feedback")
         return True
     if stage == "skill_done_effect":
+        attempt = active_attempt(u)
+        if attempt.get("is_closed") and attempt.get("effect_status") != "unknown":
+            u["stage"] = "experiment_completed_menu"
+            await save_user(u, DB_PATH)
+            await m.answer("Этот эксперимент уже отмечен как выполненный.", reply_markup=kb_experiment_completed)
+            return True
         if text in {"✍️ Свой вариант", "✍️ Написать свой вариант"}:
             u["stage"] = "skill_done_effect_text"
             await save_user(u, DB_PATH)
@@ -4223,22 +4452,7 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
             return True
         return await finalize_skill_result_feedback(m, u, cleaned, "done_custom_effect", "custom", 0, completed=True)
     if stage == "skill_obstacle":
-        if text not in SKILL_OBSTACLE_BY_BUTTON:
-            await answer_with_keyboard(m, u, "Что было главной помехой?", kb_skill_obstacle, "skill_obstacle")
-            return True
-        code = SKILL_OBSTACLE_BY_BUTTON[text]
-        await finalize_skill_result_feedback(m, u, text, code, code, 0, completed=False, send_menu=False)
-        u["stage"] = "downscale_action"
-        await save_user(u, DB_PATH)
-        if code == "too_hard":
-            msg = f"Уменьшаем реально на один уровень. Сейчас только это:\n{truly_smaller_step(u)}"
-            await save_user(u, DB_PATH)
-        elif code == "phone_distracted":
-            msg = "Ставим короткий барьер перед телефоном: положи телефон экраном вниз вне руки на 2 минуты. Потом только открой файл на 10 секунд."
-        else:
-            msg = "Берём один физический следующий шаг: поставь курсор в файл / открой вкладку / положи руку на первый предмет задачи. Без решения всей задачи."
-        await answer_with_keyboard(m, u, msg, action_keyboard(), "downscale")
-        return True
+        return await handle_not_done_context_reason(m, u, text)
     if stage == "skill_other_entry":
         options = await other_entry_options_for_user_async(u)
         if text not in options:
@@ -5362,6 +5576,12 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
 
 
 async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt_id: Optional[int] = None, skill_id: str = "", metadata: Optional[Dict[str, Any]] = None):
+    metadata = dict(metadata or {})
+    if event_type in {"attempt_started", "attempt_completed_self_reported", "day_closed"}:
+        metadata.setdefault("dedupe_key", f"product_once:{u.get('user_id')}:{event_type}")
+    metadata.setdefault("day_id", str(u.get("current_day_id") or ""))
+    metadata.setdefault("attempt_id", str(attempt_id or active_attempt(u).get("attempt_id") or ""))
+    metadata.setdefault("state_version", int(u.get("state_version") or 0))
     await record_action_event(
         u["user_id"],
         DB_PATH,
@@ -5370,7 +5590,7 @@ async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt
         attempt_id=attempt_id,
         skill_id=skill_id or current_skill_for_action(u),
         task_id=str(u.get("current_task_id") or u.get("today_target") or ""),
-        metadata=metadata or {},
+        metadata=metadata,
     )
 
 
@@ -7382,6 +7602,11 @@ def closed_on_local_date(u: Dict[str, Any], date_value: str) -> bool:
     return bool(closed_at and closed_at[:10] == str(date_value)[:10])
 
 
+def should_skip_reactivation_for_closed_day(u: Dict[str, Any], today: str) -> bool:
+    """Return True when today's closed day must be excluded from reactivation scheduling."""
+    return closed_day_status(u) and closed_on_local_date(u, today)
+
+
 async def log_closed_day_auto_block(u: Dict[str, Any], source: str, meta: Optional[Dict[str, Any]] = None) -> None:
     await log_event(
         u.get("user_id"),
@@ -8145,22 +8370,137 @@ async def handle_reactivation_reply(m: Message, u: Dict[str, Any], text: str, lo
         return True
     if text in {"⚡ Навык на 2 минуты", "Дать действие попроще", "Начать короткую тренировку"}:
         await log_event(u["user_id"], "reactivation", "reactivation_short_skill_clicked", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
-        await handle_action_request(u["user_id"], m, u, repeat=True)
+        if not await restore_from_notification_context(m, u, source="reactivation_short_skill"):
+            await handle_action_request(u["user_id"], m, u, repeat=True)
         return True
     await log_event(u["user_id"], "reactivation", "reactivation_continue_clicked", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "reactivation", "reactivation_opened", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+    if await restore_from_notification_context(m, u, source="reactivation_continue"):
+        return True
     stage = str(u.get("stage") or "")
     if stage in {"training", "await_training_target", "waiting_next_day", "confirm_analysis", "analysis_next_step"}:
         await handle_action_request(u["user_id"], m, u, repeat=True)
         return True
-    await m.answer(
-        "Я не смог точно восстановить последний шаг. Давай быстро выберем, с чем продолжить.",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Моя задача")], [KeyboardButton(text="Моё состояние")], [KeyboardButton(text="Дай короткий навык")], [KeyboardButton(text="🔕 Не напоминать")]],
-            resize_keyboard=True,
-        ),
-    )
+    await open_safe_day_menu_from_notification(m, u, "missing_reactivation_context")
     return True
+
+
+def _event_meta(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = row.get("event_data") or row.get("meta") or "{}"
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+def _action_meta(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = row.get("metadata") or "{}"
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+def _local_day_from_iso(value: Any) -> str:
+    return str(value or "")[:10]
+
+async def build_owner_funnel_report(db_path: str, *, report_date: str = "") -> str:
+    """Build a clean owner funnel from external, analytics-eligible product signals only."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        user_rows = [dict(r) for r in await (await db.execute("SELECT * FROM users")).fetchall()]
+        event_rows = [dict(r) for r in await (await db.execute("SELECT * FROM events WHERE COALESCE(is_internal_test, 0)=0 AND COALESCE(analytics_event, 1)=1")).fetchall()]
+        action_rows = [dict(r) for r in await (await db.execute("SELECT * FROM action_events")).fetchall()]
+
+    internal_ids = set(INTERNAL_TEST_USER_IDS)
+    external_users = {int(u.get("user_id") or 0): u for u in user_rows if int(u.get("is_test_user") or 0) != 1 and int(u.get("user_id") or 0) not in internal_ids}
+    external_ids = set(external_users)
+
+    if report_date:
+        event_rows = [r for r in event_rows if _local_day_from_iso(r.get("created_at")) == report_date]
+        action_rows = [r for r in action_rows if _local_day_from_iso(r.get("created_at")) == report_date]
+
+    def clean_event(r: Dict[str, Any]) -> bool:
+        name = str(r.get("event_name") or r.get("event") or "")
+        if name in {"closed_day_automatic_message_blocked", "duplicate_callback_ignored", "stale_callback_ignored", "keyboard_shown", "keyboard_warning"}:
+            return False
+        meta = _event_meta(r)
+        if meta.get("analytics_event") is False or meta.get("duplicate_product_metric") is True:
+            return False
+        return int(r.get("user_id") or 0) in external_ids
+
+    def clean_action(r: Dict[str, Any]) -> bool:
+        meta = _action_meta(r)
+        if meta.get("analytics_event") is False or meta.get("duplicate_product_metric") is True or meta.get("is_internal_test") is True:
+            return False
+        return int(r.get("user_id") or 0) in external_ids
+
+    events = [r for r in event_rows if clean_event(r)]
+    actions = [r for r in action_rows if clean_action(r)]
+
+    by_event: Dict[str, set[int]] = {}
+    for r in events:
+        by_event.setdefault(str(r.get("event_name") or r.get("event") or ""), set()).add(int(r.get("user_id") or 0))
+
+    action_by_type: Dict[str, set[int]] = {}
+    useful_days: Dict[int, set[str]] = {}
+    helped_users: set[int] = set()
+    continued_users: set[int] = set()
+    completed_skill_users: set[int] = set()
+    for r in actions:
+        uid = int(r.get("user_id") or 0)
+        et = str(r.get("event_type") or "")
+        action_by_type.setdefault(et, set()).add(uid)
+        meta = _action_meta(r)
+        if et == "skill_result_reported":
+            completed = meta.get("completed") is True or str(meta.get("result_status") or "").startswith("done")
+            partial = meta.get("partial") is True
+            continued = meta.get("continued_after_skill") is True
+            helpful = str(meta.get("helpfulness") or meta.get("effect") or "") in {"helped", "some", "easier", "started_task"}
+            if completed or partial:
+                completed_skill_users.add(uid)
+            if helpful:
+                helped_users.add(uid)
+            if continued:
+                continued_users.add(uid)
+            if completed or partial or continued:
+                useful_days.setdefault(uid, set()).add(_local_day_from_iso(r.get("created_at")))
+        elif et == "attempt_completed_self_reported":
+            completed_skill_users.add(uid)
+            useful_days.setdefault(uid, set()).add(_local_day_from_iso(r.get("created_at")))
+
+    first_useful_day = {uid: min(days) for uid, days in useful_days.items() if days}
+    d1_retained = {uid for uid, days in useful_days.items() if uid in first_useful_day and any(day > first_useful_day[uid] for day in days)}
+    d3_completed = {uid for uid, days in useful_days.items() if len(days) >= 3}
+
+    first_skill_users = by_event.get("new_day_skill_opened", set()) | by_event.get("current_skill_resent", set()) | action_by_type.get("attempt_started", set())
+    activated = first_skill_users
+    returned_after_reactivation = by_event.get("reactivation_success", set()) | by_event.get("reactivation_opened", set())
+    payment_clicked = by_event.get("payment_link_opened", set()) | by_event.get("payment_click_month_1498", set())
+    paid = {uid for uid, u in external_users.items() if str(u.get("payment_status") or "") in {"paid", "test"} or int(u.get("full_mode") or 0) == 1}
+
+    lines = [
+        f"Чистая воронка Skiller{f' за {report_date}' if report_date else ''}",
+        "Только внешние пользователи, без технических дублей.",
+        "",
+        f"Новые уникальные пользователи: {len(by_event.get('start', set()))}",
+        f"Завершили онбординг: {len(by_event.get('onboarding_completed', set()) | by_event.get('notifications_consent_set', set()))}",
+        f"Завершили диагностику: {len(by_event.get('diagnosis_completed', set()))}",
+        f"Получили анализ: {len(by_event.get('analysis_shown', set()) | by_event.get('recommended_track_shown', set()))}",
+        f"Получили первый навык: {len(activated)}",
+        f"Начали первый навык: {len(action_by_type.get('attempt_started', set()))}",
+        f"Завершили первый навык: {len(completed_skill_users)}",
+        f"Навык помог: {len(helped_users)}",
+        f"Продолжили основную задачу: {len(continued_users)}",
+        f"Закрыли день: {len(action_by_type.get('day_closed', set()) | by_event.get('day_closed', set()))}",
+        f"Вернулись на следующий день: {len(d1_retained)}",
+        f"Вернулись после реактивации: {len(returned_after_reactivation)}",
+        f"Дошли до третьего дня: {len(d3_completed)}",
+        f"Увидели оффер: {len(by_event.get('offer_shown', set()) | by_event.get('offer_auto_shown', set()) | by_event.get('offer_details_requested', set()))}",
+        f"Нажали оплату: {len(payment_clicked)}",
+        f"Оплатили: {len(paid)}",
+    ]
+    return "\n".join(lines)
 
 async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     """Handle simple user commands; does not require admin access."""
@@ -8168,6 +8508,15 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return False
     uid = m.from_user.id
     command = normalize_slash_command(text)
+
+    if command in {"/owner_funnel", "/daily_funnel"}:
+        if uid != CURATOR_TELEGRAM_ID and not qa_command_allowed(uid, u):
+            await m.answer("Команда доступна владельцу.")
+            return True
+        parts = text.split(maxsplit=1)
+        report_date = parts[1].strip()[:10] if len(parts) == 2 else ""
+        await m.answer(await build_owner_funnel_report(DB_PATH, report_date=report_date))
+        return True
 
     if command == "/confirm_payment":
         if PAYMENT_ACCEPT_ANY:
@@ -9329,11 +9678,63 @@ async def resume_daily_flow(message: Message, u: Dict[str, Any], *, announce: bo
     await start_day(message, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
 
 
+
+kb_existing_user_start = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Продолжить сегодняшний день")],
+        [KeyboardButton(text="Начать новый день")],
+        [KeyboardButton(text="Открыть мою карту")],
+        [KeyboardButton(text="Начать всё заново")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_restart_confirm = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Да, начать всё заново")],
+        [KeyboardButton(text="Нет, вернуться")],
+    ],
+    resize_keyboard=True,
+)
+
+def is_registered_user(u: Dict[str, Any]) -> bool:
+    return bool(
+        u.get("first_start_date")
+        or u.get("name")
+        or int(u.get("profile_completed") or 0) == 1
+        or int(u.get("diagnostic_completed") or 0) == 1
+        or int(u.get("has_started_training") or 0) == 1
+        or u.get("current_day_id")
+        or u.get("day_core_skill_date")
+    )
+
+async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
+    u["stage"] = "existing_user_start_menu"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "start_repeat", {"stage": u.get("stage"), "analytics_event": False}, db_path=DB_PATH)
+    await m.answer("Вы уже начали работу со Skiller. Что хотите сделать?", reply_markup=kb_existing_user_start)
+
+async def reset_user_to_onboarding(u: Dict[str, Any]) -> None:
+    keep = {"user_id", "telegram_id", "chat_id", "username", "timezone", "notifications_enabled", "notification_consent", "is_test_user"}
+    fresh = default_user(int(u.get("user_id") or 0))
+    for key in keep:
+        if u.get(key) is not None:
+            fresh[key] = u.get(key)
+    u.clear()
+    u.update(fresh)
+    u["stage"] = "ask_name"
+    set_current_state(u, STATE_ONBOARDING, close_action=True)
+
 @router.message(CommandStart())
 async def cmd_start(m: Message):
     uid = m.from_user.id
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
+    if uid in INTERNAL_TEST_USER_IDS:
+        u["is_test_user"] = 1
+    if is_registered_user(u):
+        await show_existing_user_start_menu(m, u)
+        return
     await log_event(
         uid,
         "start",
@@ -9457,6 +9858,38 @@ async def main_flow(m: Message):
         await crisis_redirect(m, u)
         return
 
+    if u.get("stage") == "existing_user_start_menu":
+        if text == "Продолжить сегодняшний день":
+            await log_event(uid, "start_menu_continue_today", {"analytics_event": False}, db_path=DB_PATH)
+            await resume_daily_flow(m, u, announce=True)
+            return
+        if text == "Начать новый день":
+            await log_event(uid, "start_menu_new_day", {"analytics_event": False}, db_path=DB_PATH)
+            await start_new_day(uid, m, u, "repeat_start_menu")
+            return
+        if text == "Открыть мою карту":
+            await log_event(uid, "start_menu_open_map", {"analytics_event": False}, db_path=DB_PATH)
+            await send_user_map(m, u, "repeat_start_menu")
+            return
+        if text == "Начать всё заново":
+            u["stage"] = "restart_onboarding_confirm"
+            await save_user(u, DB_PATH)
+            await log_event(uid, "start_menu_restart_requested", {"analytics_event": False}, db_path=DB_PATH)
+            await m.answer("Начать всё заново? Текущий прогресс будет сброшен. Подтверди отдельно.", reply_markup=kb_restart_confirm)
+            return
+        await show_existing_user_start_menu(m, u)
+        return
+
+    if u.get("stage") == "restart_onboarding_confirm":
+        if text == "Да, начать всё заново":
+            await log_event(uid, "onboarding_restart_confirmed", {"analytics_event": False}, db_path=DB_PATH)
+            await reset_user_to_onboarding(u)
+            await save_user(u, DB_PATH)
+            await m.answer("Ок, начинаем заново. Как к тебе обращаться? (1 слово)", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
+            return
+        await show_existing_user_start_menu(m, u)
+        return
+
     mechanism = detect_user_mechanism(text)
     if mechanism:
         await remember_user_mechanism(u, mechanism)
@@ -9493,6 +9926,65 @@ async def main_flow(m: Message):
     if await handle_admin_command(m, u, text):
         return
     if await handle_user_command(m, u, text):
+        return
+
+    if u.get("stage") == "reminder_overload_settings":
+        mode_by_text = {
+            "Оставить одно в день": "one_per_day",
+            "Только утром": "morning_only",
+            "Только вечером": "evening_only",
+            "Поставить на паузу": "paused",
+        }
+        if text in mode_by_text:
+            u["reminder_mode"] = mode_by_text[text]
+            if u["reminder_mode"] == "paused":
+                u["notifications_enabled"] = 0
+            await save_user(u, DB_PATH)
+            await log_event(uid, "notifications", "reminder_mode_changed", {"mode": u["reminder_mode"], "analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Настроил напоминания без преследования.", kb_day_menu, "day_menu")
+            return
+        await answer_with_keyboard(m, u, "Похоже, напоминания сейчас не помогают. Как поступить?", kb_reminder_overload, "reminder_overload_settings")
+        return
+
+    if u.get("stage") == "notification_active_action":
+        if text == "Продолжить":
+            await log_event(uid, "notification", "notification_continue_clicked", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await send_current_skill(uid, m, u)
+            return
+        if text == "Сделать проще":
+            await log_event(uid, "notification", "notification_simplify_clicked", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await handle_action_request(uid, m, u, repeat=True)
+            return
+        if text == "Другой способ":
+            await log_event(uid, "notification", "notification_other_way_clicked", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await handle_action_request(uid, m, u, repeat=True)
+            return
+        if text == "Больше не актуально":
+            await log_event(uid, "notification", "notification_action_no_longer_relevant", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await bot_record_action_event(u, "skill_skipped", metadata={"source": "notification_no_longer_relevant"})
+            await answer_with_keyboard(m, u, "Ок. Не возвращаю старый эксперимент. Что сейчас сделать?", kb_day_menu, "day_menu")
+            return
+        await restore_from_notification_context(m, u, source="notification_active_action")
+        return
+
+    if u.get("stage") == "notification_completed_action":
+        if text == "Ещё один шаг":
+            await log_event(uid, "notification", "notification_next_step_clicked", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await handle_action_request(uid, m, u, repeat=True)
+            return
+        if text == "Продолжить самостоятельно":
+            await log_event(uid, "notification", "notification_continue_self_clicked", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Продолжай самостоятельно. Я рядом, если понадобится следующий шаг.", kb_day_menu, "day_menu")
+            return
+        if text == "Закрыть день":
+            await mark_day_closed(u, "notification_completed_action")
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            return
+        await restore_from_notification_context(m, u, source="notification_completed_action")
+        return
+
+    if text in NOTIFICATION_BUTTONS and await restore_from_notification_context(m, u, source="notification_button"):
         return
 
     if await handle_reactivation_reply(m, u, text, low):
@@ -9704,6 +10196,23 @@ async def main_flow(m: Message):
         set_current_state(u, STATE_PAUSED, close_action=True)
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, "Пауза без штрафа. Закрыть день или просто остановиться сейчас?", kb_day_pause_confirm, "day_pause_confirm")
+        return
+
+    if u.get("stage") == "experiment_completed_menu":
+        if text == "Продолжить задачу самому":
+            await log_event(u["user_id"], "training", "experiment_continue_self", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await answer_with_keyboard(m, u, "Ок. Эксперимент закрыт. Продолжай задачу сам — без нового цикла отчёта.", kb_day_menu, "day_menu")
+            return
+        if text == "Ещё один маленький шаг":
+            await log_event(u["user_id"], "training", "experiment_next_small_step", {"previous_attempt_id": active_attempt(u).get("attempt_id")}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await open_next_logical_step(m, u, source="experiment_completed_next_small_step")
+            return
+        if text == "Закрыть день":
+            await mark_day_closed(u, "experiment_completed_menu")
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            return
+        await answer_with_keyboard(m, u, "Эксперимент завершён. Что вам сейчас подходит?", kb_experiment_completed, "experiment_completed_menu")
         return
 
     if text in {"➕ Ещё 2 минуты", "💪 Закрепить ещё 2 минуты"}:
@@ -10269,30 +10778,12 @@ async def main_flow(m: Message):
             return
 
         if text == "❌ Не сделал" or "не сделал" in low:
-            screen = engine_handle_action_result(u, "failed")
-            apply_engine_updates(u, screen)
             mark_pending_return_after_disruption(u, "not_done")
-            await save_user(u, DB_PATH)
-            profile = await get_user_profile(u["user_id"], DB_PATH)
-            sid = current_skill_id(u)
-            failed_count = int(profile.get("action_failed_count") or 0) + 1
-            await record_profile_signal(u["user_id"], "training", {
-                "main_pattern": "entry_too_large",
-                "avoidance_pattern": "entry_too_large",
-                "avoidance_trigger": "перегруз перед стартом",
-                "failed_skill": sid,
-                "worst_skill": sid,
-                "needs_downscale": True,
-                "action_failed_count": failed_count,
-                "failed_reason_count": failed_count,
-                **_today_profile_counter_patch(profile, "failed_reason_count_today", "failed_reason_count_date"),
-            }, source="action_failed")
-            await record_development_avatar_event(u["user_id"], "slip_recorded", DB_PATH, {"skill_id": sid})
-            await record_working_map_skill_result(u["user_id"], "failed_skills", sid)
+            u["stage"] = "skill_obstacle"
             set_current_state(u, STATE_AWAITING_STUCK_REASON)
             await save_user(u, DB_PATH)
-            await log_engine_events(u, screen)
-            await answer_with_keyboard(m, u, STUCK_REASON_PROMPT, kb_failed, "failed")
+            await bot_record_action_event(u, "skill_result_reported", skill_id=current_skill_id(u), metadata={"result_status": "not_completed_pending_reason", "button": text, "completed": False, "context_reason_required": True})
+            await answer_with_keyboard(m, u, "Что помешало больше всего?", kb_skill_obstacle, "skill_obstacle")
             return
 
         if u.get("stage") == "stuck_validation_choice":
@@ -12108,6 +12599,106 @@ def set_active_flow(u: Dict[str, Any], flow_type: str, **extra) -> Dict[str, Any
     return flow
 
 
+
+kb_notification_active_action = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Продолжить")],
+        [KeyboardButton(text="Сделать проще")],
+        [KeyboardButton(text="Другой способ")],
+        [KeyboardButton(text="Больше не актуально")],
+    ],
+    resize_keyboard=True,
+)
+
+kb_notification_completed_action = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Ещё один шаг")],
+        [KeyboardButton(text="Продолжить самостоятельно")],
+        [KeyboardButton(text="Закрыть день")],
+    ],
+    resize_keyboard=True,
+)
+
+NOTIFICATION_BUTTONS = {
+    "Продолжить", "Сделать проще", "Другой способ", "Больше не актуально",
+    "Ещё один шаг", "Продолжить самостоятельно", "Закрыть день",
+}
+
+def notification_type_from_keyboard(keyboard_name: str) -> str:
+    if "reactivation" in str(keyboard_name or ""):
+        return "reactivation"
+    if "evening" in str(keyboard_name or ""):
+        return "evening"
+    return "morning"
+
+def active_notification_context(u: Dict[str, Any]) -> Dict[str, Any]:
+    raw = u.get("last_notification_context")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if not isinstance(raw, dict):
+        return {}
+    expires = parse_dt(raw.get("expires_at"))
+    if expires and expires < dt.datetime.now(dt.timezone.utc):
+        return {"expired": True, **raw}
+    return raw
+
+def remember_notification_context(u: Dict[str, Any], keyboard_name: str) -> Dict[str, Any]:
+    now = dt.datetime.now(dt.timezone.utc)
+    attempt = active_attempt(u)
+    ctx = {
+        "notification_id": f"notif_{uuid.uuid4().hex}",
+        "user_id": str(u.get("user_id") or ""),
+        "notification_type": notification_type_from_keyboard(keyboard_name),
+        "target_stage": str(u.get("stage") or ""),
+        "day_id": str(u.get("current_day_id") or ""),
+        "attempt_id": str(attempt.get("attempt_id") or ""),
+        "skill_id": str(current_skill_for_action(u) or u.get("daily_skill_id") or ""),
+        "active_action": bool(current_skill_for_action(u) and not attempt.get("is_closed") and not attempt.get("day_closed")),
+        "sent_at": now.isoformat(),
+        "expires_at": (now + dt.timedelta(hours=36)).isoformat(),
+    }
+    u["last_notification_context"] = ctx
+    return ctx
+
+async def open_safe_day_menu_from_notification(m: Message, u: Dict[str, Any], reason: str) -> None:
+    await log_event(u["user_id"], u.get("stage", ""), "notification_safe_menu_opened", {"reason": reason, "analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if day_closed_today(u):
+        await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+        return
+    await answer_with_keyboard(m, u, "Что сейчас сделать?", kb_day_menu, "day_menu")
+
+async def restore_from_notification_context(m: Message, u: Dict[str, Any], *, source: str) -> bool:
+    ctx = active_notification_context(u)
+    if not ctx:
+        return False
+    if ctx.get("expired"):
+        await open_safe_day_menu_from_notification(m, u, "expired")
+        return True
+    if day_closed_today(u):
+        await open_safe_day_menu_from_notification(m, u, "day_closed")
+        return True
+    attempt = active_attempt(u)
+    skill_id = str(ctx.get("skill_id") or current_skill_for_action(u) or "")
+    if ctx.get("day_id") and not u.get("current_day_id"):
+        u["current_day_id"] = ctx.get("day_id")
+    if skill_id and skill_id in SKILLS_DB:
+        u["current_skill"] = skill_id
+        u["daily_skill_id"] = u.get("daily_skill_id") or skill_id
+    if ctx.get("active_action") and not attempt.get("is_closed"):
+        u["stage"] = "notification_active_action"
+        await save_user(u, DB_PATH)
+        await log_event(u["user_id"], "notification", "notification_context_restored", {**ctx, "source": source, "analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer("Вы остановились на этом эксперименте.", reply_markup=kb_notification_active_action)
+        return True
+    u["stage"] = "notification_completed_action"
+    await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "notification", "notification_context_restored", {**ctx, "source": source, "analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await m.answer("Эксперимент уже выполнен. Что дальше?", reply_markup=kb_notification_completed_action)
+    return True
+
 def remember_last_safe_screen(u: Dict[str, Any], screen_type: str, payload: Dict[str, Any] | None = None, message_id: int | None = None) -> None:
     u["last_safe_screen"] = {"type": screen_type, "payload": dict(payload or {}), "message_id": message_id}
 
@@ -12225,6 +12816,8 @@ def sync_active_attempt(
         attempt["current_mechanism"] = current_mechanism
     if attempt_status in ATTEMPT_STATUSES:
         attempt["attempt_status"] = attempt_status
+        if attempt_status == "not_tried" and is_closed is False and u.get("current_action_id"):
+            attempt["attempt_id"] = str(u.get("current_action_id"))
     if effect_status in EFFECT_STATUSES:
         attempt["effect_status"] = effect_status
     if is_closed is not None:
@@ -12323,8 +12916,45 @@ async def render_current_screen(m: Message, u: Dict[str, Any]) -> None:
     await answer_with_keyboard(m, u, "Актуальный шаг здесь 👇", kb_training_main, "training_main")
 
 
+
+async def claim_callback_once(c: CallbackQuery, u: Dict[str, Any], source: str) -> bool:
+    """Return True only for the first processing attempt of a Telegram callback."""
+    callback_id = str(getattr(c, "id", "") or "")
+    message_id = str(getattr(getattr(c, "message", None), "message_id", "") or "")
+    if not callback_id:
+        return True
+    day_id = str(u.get("current_day_id") or "")
+    attempt_id = str(active_attempt(u).get("attempt_id") or "")
+    state_version = int(u.get("state_version") or 0)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS processed_callbacks (callback_query_id TEXT PRIMARY KEY, user_id INTEGER, message_id TEXT, day_id TEXT, attempt_id TEXT, state_version INTEGER, source TEXT, created_at TEXT)"
+        )
+        try:
+            await db.execute(
+                "INSERT INTO processed_callbacks(callback_query_id, user_id, message_id, day_id, attempt_id, state_version, source, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (callback_id, u.get("user_id"), message_id, day_id, attempt_id, state_version, source, utc_iso()),
+            )
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            await db.rollback()
+    await log_event(u.get("user_id"), u.get("stage", ""), "duplicate_callback_ignored", {
+        "callback_query_id": callback_id,
+        "message_id": message_id,
+        "day_id": day_id,
+        "attempt_id": attempt_id,
+        "state_version": state_version,
+        "source": source,
+        "analytics_event": False,
+    }, DB_PATH, SHEETS_WEBHOOK_URL)
+    await c.answer()
+    return False
+
 async def validate_callback_screen(c: CallbackQuery, u: Dict[str, Any], source: str) -> tuple[bool, str]:
     action, screen_id, callback_version = split_versioned_callback(c.data or "")
+    if not await claim_callback_once(c, u, source):
+        return False, action
     current = u.get("current_screen_id") or ""
     had_active_attempt = bool(u.get("active_attempt"))
     attempt = active_attempt(u)
@@ -12746,13 +13376,52 @@ async def whisper_transcribe(m: Message) -> Optional[str]:
 # BACKGROUND TASKS
 # ============================================================
 
+
+kb_reminder_overload = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Оставить одно в день")],
+        [KeyboardButton(text="Только утром")],
+        [KeyboardButton(text="Только вечером")],
+        [KeyboardButton(text="Поставить на паузу")],
+    ],
+    resize_keyboard=True,
+)
+
+def reminder_mode(u: Dict[str, Any]) -> str:
+    return str(u.get("reminder_mode") or "normal")
+
+def reminder_mode_allows(u: Dict[str, Any], notification_type: str, today: str) -> bool:
+    mode = reminder_mode(u)
+    if mode == "paused":
+        return False
+    if mode == "morning_only" and notification_type != "morning":
+        return False
+    if mode == "evening_only" and notification_type != "evening":
+        return False
+    if mode == "one_per_day" and _proactive_count_today(u, today) >= 1:
+        return False
+    return True
+
+def should_ask_reminder_overload(u: Dict[str, Any]) -> bool:
+    return int(u.get("unanswered_proactive_count") or 0) >= 3 and reminder_mode(u) == "normal"
+
+async def ask_reminder_overload(bot: Bot, u: Dict[str, Any]) -> None:
+    u["stage"] = "reminder_overload_settings"
+    u["unanswered_proactive_count"] = 0
+    await save_user(u, DB_PATH)
+    await bot.send_message(u["chat_id"], "Похоже, напоминания сейчас не помогают. Как поступить?", reply_markup=kb_reminder_overload)
+    await log_event(u.get("user_id"), "notifications", "reminder_overload_prompt_sent", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+
 async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
+    notification_context = remember_notification_context(u, keyboard_name)
+    u["unanswered_proactive_count"] = int(u.get("unanswered_proactive_count") or 0) + 1
+    await save_user(u, DB_PATH)
     button_count = keyboard_button_count(reply_markup)
     await log_event(
         u.get("user_id"),
         u.get("stage", ""),
         "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning",
-        {"keyboard": keyboard_name, "button_count": button_count, "source": "background"},
+        {"keyboard": keyboard_name, "button_count": button_count, "source": "background", "notification_id": notification_context.get("notification_id")},
         DB_PATH,
         SHEETS_WEBHOOK_URL,
     )
@@ -12824,6 +13493,11 @@ async def background_checkins(bot: Bot):
                 closed_today = is_closed and closed_on_local_date(u, today)
 
                 if in_time_window(now_local, 8, 0, 10, 0) and u.get("last_morning_checkin_date") != today:
+                    if not reminder_mode_allows(u, "morning", today):
+                        continue
+                    if should_ask_reminder_overload(u):
+                        await ask_reminder_overload(bot, u)
+                        continue
                     if closed_today:
                         u["last_morning_checkin_date"] = today
                         await save_user(u, DB_PATH)
@@ -12851,6 +13525,11 @@ async def background_checkins(bot: Bot):
                     continue
 
                 if in_time_window(now_local, 18, 0, 20, 30) and u.get("last_evening_checkin_date") != today:
+                    if not reminder_mode_allows(u, "evening", today):
+                        continue
+                    if should_ask_reminder_overload(u):
+                        await ask_reminder_overload(bot, u)
+                        continue
                     u["last_evening_checkin_date"] = today
                     day_active = str(u.get("day_status") or "").lower() == "active" and not int(u.get("today_closed") or 0)
                     u["stage"] = "evening_checkin" if day_active else "evening_not_started"
@@ -12870,8 +13549,14 @@ async def background_checkins(bot: Bot):
                         await send_background_keyboard(bot, u, closed_day_evening_not_started_text(), kb_closed_day_evening_not_started, "evening_not_started")
                     continue
 
+                if should_skip_reactivation_for_closed_day(u, today):
+                    continue
                 if is_closed:
-                    await log_closed_day_auto_block(u, "reactivation", {"today": today})
+                    continue
+                if not reminder_mode_allows(u, "reactivation", today):
+                    continue
+                if should_ask_reminder_overload(u):
+                    await ask_reminder_overload(bot, u)
                     continue
                 ok, reason, meta = can_send_reactivation(u)
                 if not ok:
