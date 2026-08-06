@@ -304,7 +304,7 @@ def check_launch_week_invariants() -> list[str]:
         "не просто выдавать упражнения",
         "уточнять твою персональную модель",
         "что помогает именно тебе",
-        "Продолжение — 14.98 €/месяц",
+        "BASE_OFFER_EUR_LABEL",
     )
     for marker in sales_analysis_required:
         if marker not in texts_text:

@@ -21,6 +21,7 @@ from texts import (
     CRISIS_LIMIT, progress_achievements_text, growth_history_text,
 )
 from skills import SKILLS_DB, get_current_plan, build_28_day_plan, build_plan
+from core.state_machine import FlowState, start_experiment
 from db import (
     get_user, save_user, log_event, USER_FIELDS, is_paid, update_user_profile,
     diagnosis_user_profile_patch, get_user_profile, render_development_avatar,
@@ -30,6 +31,11 @@ from db import (
 
 # Logging
 log = logging.getLogger("bot")
+
+
+def begin_flow_experiment(user_id: int, experiment_id: int, state_revision: int) -> FlowState:
+    """Canonical flow entry: an experiment always gets a fresh persisted id."""
+    return start_experiment(user_id, experiment_id, state_revision)
 
 # ============================================================
 # UTILS
