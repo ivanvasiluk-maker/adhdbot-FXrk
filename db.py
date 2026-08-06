@@ -1550,6 +1550,117 @@ def default_user(uid: int) -> Dict[str, Any]:
         "last_mini_lesson_date": None,
     }
 
+
+async def _ensure_flow_and_mechanism_schema(db: aiosqlite.Connection) -> None:
+    """Create PATCH-01/02 durable entities; safe to call on every startup."""
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS flow_states (
+            user_id INTEGER PRIMARY KEY,
+            current_step TEXT NOT NULL DEFAULT 'onboarding',
+            active_experiment_id INTEGER,
+            resume_step TEXT,
+            revision INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS situation_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            task_summary TEXT NOT NULL,
+            desired_action TEXT NOT NULL,
+            context_domain TEXT NOT NULL,
+            action_phase TEXT NOT NULL,
+            emotion_intensity_0_100 INTEGER NOT NULL CHECK(emotion_intensity_0_100 BETWEEN 0 AND 100),
+            energy_0_100 INTEGER NOT NULL CHECK(energy_0_100 BETWEEN 0 AND 100),
+            urgency TEXT NOT NULL,
+            raw_text_ref TEXT
+        );
+        CREATE TABLE IF NOT EXISTS mechanism_hypotheses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            situation_id INTEGER NOT NULL REFERENCES situation_snapshots(id),
+            mechanism_code TEXT NOT NULL,
+            confidence TEXT NOT NULL CHECK(confidence IN ('low','medium','high')),
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            unknowns_json TEXT NOT NULL DEFAULT '[]',
+            disconfirming_questions_json TEXT NOT NULL DEFAULT '[]',
+            source TEXT NOT NULL CHECK(source IN ('rules','llm','user_confirmed')),
+            confirmed_by_user INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            situation_id INTEGER NOT NULL REFERENCES situation_snapshots(id),
+            mechanism_hypothesis_id INTEGER NOT NULL REFERENCES mechanism_hypotheses(id),
+            skill_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ready',
+            outcome TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS behavioral_experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            situation_id INTEGER NOT NULL REFERENCES situation_snapshots(id),
+            mechanism_hypothesis_id INTEGER NOT NULL REFERENCES mechanism_hypotheses(id),
+            skill_id TEXT NOT NULL,
+            mechanism_code TEXT NOT NULL,
+            context_domain TEXT NOT NULL,
+            difficulty_level INTEGER NOT NULL CHECK(difficulty_level BETWEEN 1 AND 5),
+            instruction_variant TEXT NOT NULL,
+            target_action TEXT NOT NULL,
+            success_criterion TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            status TEXT NOT NULL CHECK(status IN ('proposed','accepted','started','completed','abandoned','safety_stopped')),
+            parent_experiment_id INTEGER REFERENCES behavioral_experiments(id),
+            progression_type TEXT NOT NULL CHECK(progression_type IN ('first','repeat','simplify','advance','transfer','maintenance')),
+            decision_reason_code TEXT NOT NULL,
+            trainer_style TEXT NOT NULL,
+            state_revision INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS behavioral_experiment_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER NOT NULL UNIQUE REFERENCES behavioral_experiments(id),
+            criterion_met INTEGER NOT NULL,
+            observed_result TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS experiment_outcomes (
+            experiment_id INTEGER PRIMARY KEY REFERENCES behavioral_experiments(id),
+            action_started TEXT NOT NULL CHECK(action_started IN ('yes','partial','no')),
+            action_persisted TEXT NOT NULL CHECK(action_persisted IN ('yes','partial','no','not_applicable')),
+            emotional_change TEXT NOT NULL CHECK(emotional_change IN ('better','same','worse','unknown')),
+            before_intensity_0_100 INTEGER CHECK(before_intensity_0_100 BETWEEN 0 AND 100),
+            after_intensity_0_100 INTEGER CHECK(after_intensity_0_100 BETWEEN 0 AND 100),
+            success_criterion_met INTEGER NOT NULL CHECK(success_criterion_met IN (0,1)),
+            independent_use INTEGER NOT NULL CHECK(independent_use IN (0,1)),
+            user_note_short TEXT,
+            failure_reason_code TEXT CHECK(failure_reason_code IN
+                ('too_hard','wrong_mechanism','unclear_instruction','insufficient_repetition',
+                 'wrong_timing','external_blocker','safety_deterioration','skill_mismatch','unknown')),
+            captured_at TEXT NOT NULL,
+            CHECK(success_criterion_met = 1 OR failure_reason_code IS NOT NULL)
+        );
+        CREATE TABLE IF NOT EXISTS behavioral_experiment_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER NOT NULL REFERENCES behavioral_experiments(id),
+            outcome_id INTEGER REFERENCES behavioral_experiment_outcomes(id),
+            decision TEXT NOT NULL,
+            reason_code TEXT NOT NULL,
+            next_experiment_id INTEGER REFERENCES behavioral_experiments(id),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_situations_user_created ON situation_snapshots(user_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_mechanisms_situation ON mechanism_hypotheses(situation_id);
+        CREATE INDEX IF NOT EXISTS idx_experiments_user_status ON experiments(user_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_one_productive_experiment_per_user
+            ON behavioral_experiments(user_id)
+            WHERE status IN ('proposed','accepted','started');
+        CREATE INDEX IF NOT EXISTS idx_behavioral_chain_parent ON behavioral_experiments(parent_experiment_id);
+        """
+    )
+
 async def init_db(db_path: str):
     """Инициализация БД"""
     async with aiosqlite.connect(db_path) as db:
@@ -1802,6 +1913,7 @@ async def init_db(db_path: str):
             (USER_STATE_SCHEMA_VERSION, _utc_iso()),
         )
         await ensure_events_schema(db)
+        await _ensure_flow_and_mechanism_schema(db)
         await db.commit()
 
 def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
@@ -2247,6 +2359,7 @@ async def migrate_db(db_path: str):
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
             (USER_STATE_SCHEMA_VERSION, _utc_iso()),
         )
+        await _ensure_flow_and_mechanism_schema(db)
 
         await ensure_events_schema(db)
 
@@ -2427,6 +2540,243 @@ async def create_skill_attempt(u: Dict[str, Any], db_path: str, *, skill_id: str
         )
         await db.commit()
         return attempt_id
+
+
+async def create_situation_snapshot(db_path: str, snapshot: "SituationSnapshot") -> int:
+    """Persist only the concise snapshot; raw text is referenced, never copied."""
+    from core.mechanism_model import SituationSnapshot
+    if not isinstance(snapshot, SituationSnapshot):
+        raise TypeError("snapshot must be SituationSnapshot")
+    async with aiosqlite.connect(db_path) as db:
+        await _ensure_flow_and_mechanism_schema(db)
+        cur = await db.execute(
+            """INSERT INTO situation_snapshots
+               (user_id,created_at,task_summary,desired_action,context_domain,action_phase,
+                emotion_intensity_0_100,energy_0_100,urgency,raw_text_ref)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (snapshot.user_id, snapshot.created_at or _utc_iso(), snapshot.task_summary[:240],
+             snapshot.desired_action[:240], snapshot.context_domain, snapshot.action_phase,
+             snapshot.emotion_intensity_0_100, snapshot.energy_0_100, snapshot.urgency,
+             snapshot.raw_text_ref),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def create_mechanism_hypothesis(db_path: str, hypothesis: "MechanismHypothesis") -> int:
+    from core.mechanism_model import MechanismHypothesis
+    if not isinstance(hypothesis, MechanismHypothesis):
+        raise TypeError("hypothesis must be MechanismHypothesis")
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            """INSERT INTO mechanism_hypotheses
+               (situation_id,mechanism_code,confidence,evidence_json,unknowns_json,
+                disconfirming_questions_json,source,confirmed_by_user) VALUES(?,?,?,?,?,?,?,?)""",
+            (hypothesis.situation_id, hypothesis.mechanism_code, hypothesis.confidence,
+             json.dumps(hypothesis.evidence, ensure_ascii=False),
+             json.dumps(hypothesis.unknowns, ensure_ascii=False),
+             json.dumps(hypothesis.disconfirming_questions, ensure_ascii=False),
+             hypothesis.source, int(hypothesis.confirmed_by_user)),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def create_experiment(
+    db_path: str, *, user_id: int, situation_id: int,
+    mechanism_hypothesis_id: int, skill_id: str,
+) -> int:
+    """Create a clean experiment linked to its situation and working mechanism."""
+    if not all((user_id, situation_id, mechanism_hypothesis_id, skill_id)):
+        raise ValueError("Every experiment requires user, situation, mechanism, and skill")
+    now = _utc_iso()
+    async with aiosqlite.connect(db_path) as db:
+        # A new row starts with NULL outcome by construction; prior outcomes
+        # can therefore never leak into a new experiment.
+        cur = await db.execute(
+            """INSERT INTO experiments
+               (user_id,situation_id,mechanism_hypothesis_id,skill_id,status,outcome,created_at,updated_at)
+               VALUES(?,?,?,?, 'ready', NULL, ?, ?)""",
+            (user_id, situation_id, mechanism_hypothesis_id, skill_id, now, now),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def create_behavioral_experiment(
+    db_path: str, experiment: "BehavioralExperiment", *, mechanism_hypothesis_id: int,
+) -> int:
+    """Create a new, linked record; pending fields are never reused."""
+    from core.experiment_core import BehavioralExperiment
+    from core.mechanism_model import MECHANISM_CODES
+    if not isinstance(experiment, BehavioralExperiment):
+        raise TypeError("experiment must be BehavioralExperiment")
+    if experiment.mechanism_code not in MECHANISM_CODES:
+        raise ValueError("Experiment requires an MVP behavioral mechanism")
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys=ON")
+        link = await (await db.execute(
+            """SELECT s.user_id,s.context_domain,h.mechanism_code
+               FROM situation_snapshots s JOIN mechanism_hypotheses h ON h.situation_id=s.id
+               WHERE s.id=? AND h.id=?""",
+            (experiment.situation_id, mechanism_hypothesis_id),
+        )).fetchone()
+        if not link or int(link["user_id"]) != experiment.user_id:
+            raise ValueError("Situation and mechanism must belong to the experiment user")
+        if link["mechanism_code"] != experiment.mechanism_code or link["context_domain"] != experiment.context_domain:
+            raise ValueError("Experiment must preserve its situation and mechanism chain")
+        try:
+            cur = await db.execute(
+                """INSERT INTO behavioral_experiments
+                   (user_id,situation_id,mechanism_hypothesis_id,skill_id,mechanism_code,context_domain,
+                    difficulty_level,instruction_variant,target_action,success_criterion,started_at,
+                    completed_at,status,parent_experiment_id,progression_type,decision_reason_code,
+                    trainer_style,state_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (experiment.user_id, experiment.situation_id, mechanism_hypothesis_id,
+                 experiment.skill_id, experiment.mechanism_code, experiment.context_domain,
+                 experiment.difficulty_level, experiment.instruction_variant,
+                 experiment.target_action, experiment.success_criterion, experiment.started_at,
+                 experiment.completed_at, experiment.status, experiment.parent_experiment_id,
+                 experiment.progression_type, experiment.decision_reason_code,
+                 experiment.trainer_style, experiment.state_revision),
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError as exc:
+            raise ValueError("User already has an active productive experiment or the chain is invalid") from exc
+        return int(cur.lastrowid)
+
+
+async def transition_behavioral_experiment(
+    db_path: str, experiment_id: int, *, status: str, expected_revision: int,
+) -> int:
+    """Revisioned experiment lifecycle transition with legal status edges."""
+    edges = {
+        "proposed": {"accepted", "abandoned", "safety_stopped"},
+        "accepted": {"started", "abandoned", "safety_stopped"},
+        "started": {"completed", "abandoned", "safety_stopped"},
+    }
+    async with aiosqlite.connect(db_path) as db:
+        row = await (await db.execute(
+            "SELECT status,state_revision FROM behavioral_experiments WHERE id=?", (experiment_id,)
+        )).fetchone()
+        if not row or int(row[1]) != expected_revision:
+            raise ValueError("STALE_EXPERIMENT")
+        if status not in edges.get(str(row[0]), set()):
+            raise ValueError("INVALID_EXPERIMENT_TRANSITION")
+        now = _utc_iso()
+        cur = await db.execute(
+            """UPDATE behavioral_experiments SET status=?,state_revision=state_revision+1,
+               started_at=CASE WHEN ?='started' THEN COALESCE(started_at,?) ELSE started_at END,
+               completed_at=CASE WHEN ? IN ('completed','abandoned','safety_stopped') THEN ? ELSE completed_at END
+               WHERE id=? AND state_revision=?""",
+            (status, status, now, status, now, experiment_id, expected_revision),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("STALE_EXPERIMENT")
+        await db.commit()
+        return expected_revision + 1
+
+
+async def record_behavioral_outcome_and_decision(
+    db_path: str, experiment_id: int, *, criterion_met: bool,
+    observed_result: str, decision: str, reason_code: str,
+    next_experiment_id: int | None = None,
+) -> tuple[int, int]:
+    """Atomically finish the trace experiment → outcome → decision."""
+    if not observed_result.strip() or not decision.strip() or not reason_code.strip():
+        raise ValueError("Outcome and decision must be explicit")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys=ON")
+        row = await (await db.execute(
+            "SELECT status FROM behavioral_experiments WHERE id=?", (experiment_id,)
+        )).fetchone()
+        if not row or row[0] != "completed":
+            raise ValueError("Outcome can be recorded only for a completed experiment")
+        now = _utc_iso()
+        outcome = await db.execute(
+            """INSERT INTO behavioral_experiment_outcomes
+               (experiment_id,criterion_met,observed_result,created_at) VALUES(?,?,?,?)""",
+            (experiment_id, int(criterion_met), observed_result[:500], now),
+        )
+        decision_row = await db.execute(
+            """INSERT INTO behavioral_experiment_decisions
+               (experiment_id,outcome_id,decision,reason_code,next_experiment_id,created_at)
+               VALUES(?,?,?,?,?,?)""",
+            (experiment_id, int(outcome.lastrowid), decision, reason_code, next_experiment_id, now),
+        )
+        await db.commit()
+        return int(outcome.lastrowid), int(decision_row.lastrowid)
+
+
+async def capture_experiment_outcome(
+    db_path: str, outcome: "ExperimentOutcome", *, expected_revision: int,
+    expected_flow_revision: int | None = None,
+) -> str:
+    """Persist all outcome axes and stop productivity immediately on worsening."""
+    from core.outcome_model import ExperimentOutcome, next_action_policy
+    if not isinstance(outcome, ExperimentOutcome):
+        raise TypeError("outcome must be ExperimentOutcome")
+    terminal_status = "safety_stopped" if outcome.requires_safety_handoff else "completed"
+    failure_reason = "safety_deterioration" if outcome.requires_safety_handoff else outcome.failure_reason_code
+    captured_at = outcome.captured_at or _utc_iso()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            "SELECT status,state_revision FROM behavioral_experiments WHERE id=?",
+            (outcome.experiment_id,),
+        )).fetchone()
+        if not row or row[0] != "started" or int(row[1]) != expected_revision:
+            await db.rollback()
+            raise ValueError("STALE_OR_INACTIVE_EXPERIMENT")
+        if outcome.requires_safety_handoff:
+            if expected_flow_revision is None:
+                await db.rollback()
+                raise ValueError("SAFETY_HANDOFF_REQUIRES_FLOW_REVISION")
+            flow = await (await db.execute(
+                "SELECT current_step,revision FROM flow_states WHERE user_id=(SELECT user_id FROM behavioral_experiments WHERE id=?)",
+                (outcome.experiment_id,),
+            )).fetchone()
+            if not flow or int(flow[1]) != expected_flow_revision:
+                await db.rollback()
+                raise ValueError("STALE_FLOW_STATE")
+        try:
+            await db.execute(
+                """INSERT INTO experiment_outcomes
+                   (experiment_id,action_started,action_persisted,emotional_change,
+                    before_intensity_0_100,after_intensity_0_100,success_criterion_met,
+                    independent_use,user_note_short,failure_reason_code,captured_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (outcome.experiment_id, outcome.action_started, outcome.action_persisted,
+                 outcome.emotional_change, outcome.before_intensity_0_100,
+                 outcome.after_intensity_0_100, int(outcome.success_criterion_met),
+                 int(outcome.independent_use), outcome.user_note_short,
+                 failure_reason, captured_at),
+            )
+            cur = await db.execute(
+                """UPDATE behavioral_experiments SET status=?,completed_at=?,state_revision=state_revision+1,
+                   decision_reason_code=? WHERE id=? AND status='started' AND state_revision=?""",
+                (terminal_status, captured_at,
+                 "SAFETY_HANDOFF_REQUIRED" if outcome.requires_safety_handoff else "OUTCOME_CAPTURED",
+                 outcome.experiment_id, expected_revision),
+            )
+            if cur.rowcount != 1:
+                raise ValueError("STALE_OR_INACTIVE_EXPERIMENT")
+            if outcome.requires_safety_handoff:
+                flow_cur = await db.execute(
+                    """UPDATE flow_states SET resume_step=current_step,current_step='safety_triage',
+                       revision=revision+1,updated_at=CURRENT_TIMESTAMP
+                       WHERE user_id=(SELECT user_id FROM behavioral_experiments WHERE id=?) AND revision=?""",
+                    (outcome.experiment_id, expected_flow_revision),
+                )
+                if flow_cur.rowcount != 1:
+                    raise ValueError("STALE_FLOW_STATE")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return next_action_policy(outcome)
 
 
 async def attempt_count_for_day(day_id: str, db_path: str) -> int:

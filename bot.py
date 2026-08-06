@@ -32,6 +32,8 @@ from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
 
+load_dotenv(override=True)
+
 # Import modules
 # Keep this as a single import to avoid multiline merge-conflict syntax breaks in deploys.
 from texts import *  # noqa: F403,F401
@@ -82,6 +84,12 @@ from core.engine import (
     build_day_core_updates as engine_build_day_core_updates,
     core_round_count_today as engine_core_round_count_today,
 )
+from core.state_machine import (
+    InvalidTransitionError, SQLiteFlowStateRepository, StaleActionError,
+    configure_repository as configure_flow_repository,
+    parse_callback_data as parse_flow_callback, transition as flow_transition,
+)
+from core.mechanism_model import MechanismHypothesis, select_skill_for_mechanism
 import sheets_sync as sheets_sync_module
 from reactivation_service import (
     DAY_ACTIVE, DAY_CLOSED, mark_user_activity, mark_bot_auto_message,
@@ -89,11 +97,14 @@ from reactivation_service import (
     hours_since_last_activity, parse_dt, utc_iso,
 )
 
+
 SHEETS_SYNC_ENABLED = getattr(sheets_sync_module, "SHEETS_SYNC_ENABLED", False)
 SHEETS_SYNC_INTERVAL_SECONDS = getattr(sheets_sync_module, "SHEETS_SYNC_INTERVAL_SECONDS", 60)
 SHEETS_SYNC_BATCH_SIZE = getattr(sheets_sync_module, "SHEETS_SYNC_BATCH_SIZE", 50)
 
-load_dotenv(override=True)
+from core.product_config import BASE_OFFER_EUR, format_eur
+
+BASE_OFFER_EUR_LABEL = format_eur()
 
 # ============================================================
 # CONFIG
@@ -256,6 +267,21 @@ async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model:
 # ============================================================
 
 router = Router()
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("fsm:"))
+async def on_flow_state_callback(c: CallbackQuery) -> None:
+    """Apply revisioned callbacks; stale buttons can never mutate state."""
+    try:
+        action, _entity_id, revision = parse_flow_callback(c.data or "")
+        flow_transition(c.from_user.id, action, revision)
+    except StaleActionError:
+        await c.answer("Эта кнопка уже устарела. Вернись к текущему шагу.", show_alert=True)
+        return
+    except (InvalidTransitionError, ValueError):
+        await c.answer("Сейчас это действие недоступно. Продолжим с текущего шага.", show_alert=True)
+        return
+    await c.answer()
 
 DOWNSCALE_PATTERN = "initiation_before_tool"
 DOWNSCALE_PRIMARY_SKILL = "open_only"
@@ -6173,7 +6199,8 @@ def _offer_next_experiment(summary: Dict[str, Any], profile: Dict[str, Any]) -> 
 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
     return (
-        "Полный режим помогает не начинать каждый день с нуля.\n\n"
+        "Полный режим — это не давление. Он помогает не начинать каждый день с нуля.\n"
+        "Пока это не окончательные выводы.\n\n"
         "За первые попытки уже видно:\n"
         "— что мешает тебе начать;\n"
         "— какие шаги помогают сдвинуться;\n"
@@ -6261,7 +6288,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
     offer_meta = {
         "source": source,
         "day": int(u.get("day") or 0),
-        "price_month": "14.98",
+        "price_month": BASE_OFFER_EUR_LABEL,
         **profile_patch,
     }
     await log_event(u["user_id"], "offer", "offer_shown" if is_auto else "offer_preview_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -6635,7 +6662,7 @@ def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
 async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[str, Any]] = None) -> None:
     meta = dict(meta or {})
     meta.setdefault("days", 30)
-    meta.setdefault("amount", 1 if PAYMENT_ACCEPT_ANY else 14.98)
+    meta.setdefault("amount", 1 if PAYMENT_ACCEPT_ANY else float(BASE_OFFER_EUR))
     days = int(meta.get("days") or 30)
     u["payment_status"] = "paid"
     u["trial_phase"] = "paid"
@@ -7395,39 +7422,25 @@ def _first_non_repeating_skill_id(u: Dict[str, Any], candidates: List[str], bloc
 
 
 def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Choose one skill from the current mechanism, never diagnosis or day number."""
     profile = profile or {}
     attempt = active_attempt(u)
     blocked_today = not_fit_today_skills(u, profile)
-    mechanism_skill = preferred_skill_for_mechanism(str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or ""))
-    if mechanism_skill in SKILLS_DB and mechanism_skill not in blocked_today and not should_block_skill_for_repetition(u, mechanism_skill):
-        skill = dict(SKILLS_DB[mechanism_skill])
-        skill.setdefault("skill_id", mechanism_skill)
-        skill.setdefault("id", mechanism_skill)
-        skill.setdefault("variant", skill.get("variant") or mechanism_skill)
-        return skill
-    last_skills = _daily_skill_history(u, profile)[-3:]
-    blocked: List[str] = list(blocked_today)
-    for raw_sid in ("name_task_one_word", "open_without_timer", "task_naming", "open_only", "visible_next_step", "one_visible_step"):
-        sid = _canonical_daily_skill_id(raw_sid)
-        if sid in SKILLS_DB and (last_skills.count(sid) >= 2 or last_skills[-2:] == [sid, sid]):
-            blocked.append(sid)
-
-    last_crisis_type = str(profile.get("last_crisis_type") or profile.get("crisis_stack") or u.get("last_crisis_type") or "").lower()
-    stuck_count = _profile_or_user_int(u, profile, "stuck_count", "attention_escape_count", "failed_stuck_phone_count")
-    low_energy_count = _profile_or_user_int(u, profile, "low_energy_count", "low_energy_signal_count")
-    too_many_options_count = _profile_or_user_int(u, profile, "too_many_options_count", "overwhelm_count")
-    if "youtube" in last_crisis_type or "stuck" in last_crisis_type or "zalip" in last_crisis_type or stuck_count >= 2:
-        preferred = ["phone_away_3_min", "bad_draft", "body_first"]
-    elif low_energy_count >= 2 or profile.get("energy_pattern") in {"low_start_energy", "low_energy"}:
-        preferred = ["body_first", "one_breath", "minimum_contact"]
-    elif too_many_options_count >= 2 or profile.get("downscale_pattern") == "entry_too_large":
-        preferred = ["one_visible_step", "choose_one", "task_cut"]
-    else:
-        preferred = ["open_without_timer", "bad_draft", "phone_away_3_min", "one_visible_step"]
-
-    if sum(1 for a in user_skill_attempts(u) if _attempt_day_value(a) == int(u.get("day") or u.get("day_number") or 1)) >= 3:
-        preferred = ["restart_after_slip", "one_tab_focus", "body_first", "external_start", *preferred]
-    sid = _first_non_repeating_skill_id(u, preferred, blocked)
+    raw_mechanism = str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or "")
+    mechanism = legacy_mechanism_code(raw_mechanism) or "unclear_next_action"
+    hypothesis = MechanismHypothesis(
+        None, 0, mechanism, "medium" if raw_mechanism else "low",
+        ((f"user_signal:{raw_mechanism}",) if raw_mechanism else ("первый шаг пока не назван",)),
+        (() if raw_mechanism else ("какой минимальный шаг даст безопасный старт",)),
+    )
+    available = {
+        sid for sid in SKILLS_DB
+        if sid not in blocked_today and not should_block_skill_for_repetition(u, sid)
+    }
+    try:
+        sid = select_skill_for_mechanism(hypothesis, available)
+    except LookupError:
+        sid = select_skill_for_mechanism(hypothesis, set(SKILLS_DB))
     skill = dict(SKILLS_DB[sid])
     skill.setdefault("skill_id", sid)
     skill.setdefault("id", sid)
@@ -8964,7 +8977,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             return True
         target_id = int(parts[1])
         target = await get_user(target_id, DB_PATH)
-        await grant_paid_access(target, "admin_mark_paid", {"admin_id": uid, "amount": 14.98})
+        await grant_paid_access(target, "admin_mark_paid", {"admin_id": uid, "amount": float(BASE_OFFER_EUR)})
         await m.answer(f"✅ user_id {target_id} помечен как paid.")
         return True
 
@@ -12341,8 +12354,8 @@ async def main_flow(m: Message):
     # OFFER stage
     if u.get("stage") == "offer":
         low = text.lower().strip()
-        if text in {"💳 Продолжить полный режим", "💳 Продолжить за €14.98", "💳 Месяц — €14.98"} or "полный режим" in low or "месяц" in low or "€14.98" in low or "14.98" == low:
-            await log_event(u["user_id"], "offer", "payment_click_month_1498", {"payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if text in {"💳 Продолжить полный режим", f"💳 Продолжить за €{BASE_OFFER_EUR_LABEL}", f"💳 Месяц — €{BASE_OFFER_EUR_LABEL}"} or "полный режим" in low or "месяц" in low or f"€{BASE_OFFER_EUR_LABEL}" in low or BASE_OFFER_EUR_LABEL == low:
+            await log_event(u["user_id"], "offer", "payment_click_month_1498", {"payment_click": "month_1498", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["payment_status"] = "pending_month_1498"
             u["last_payment_click"] = "month_14_98"
             await save_user(u, DB_PATH)
@@ -12352,12 +12365,12 @@ async def main_flow(m: Message):
             payment_intro = day3_personal_offer_text(build_profile_map_summary(u, profile), profile)
             if pay_url:
                 await m.answer(f"{payment_intro}\n\nНажми кнопку ниже для оплаты.")
-                await m.answer(" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💳 Продолжить за €14.98", url=pay_url)]]))
+                await m.answer(" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💳 Продолжить за €{BASE_OFFER_EUR_LABEL}", url=pay_url)]]))
                 if PAYMENT_ACCEPT_ANY:
                     await answer_with_inline_screen(m, u, "Для теста: после любой успешной оплаты по ссылке нажми подтверждение ниже — я засчитаю её как правильную.", test_payment_confirm_keyboard(), "offer")
             else:
-                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "month_1498", "amount": 14.98}, DB_PATH, SHEETS_WEBHOOK_URL)
-                await log_event(u["user_id"], "offer", "payment_stub_shown", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "month_1498", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await log_event(u["user_id"], "offer", "payment_stub_shown", {"price_month": BASE_OFFER_EUR_LABEL}, DB_PATH, SHEETS_WEBHOOK_URL)
                 await m.answer(payment_month_1498_stub_text())
             return
         if is_action_request(text, low):
@@ -12384,7 +12397,7 @@ async def main_flow(m: Message):
             )
             return
         if text in {"📚 Что входит", "📚 Подробнее о карте", "📚 Что будет дальше"} or "что входит" in low or "подробнее" in low or "что будет дальше" in low:
-            await log_event(u["user_id"], "offer", "profile_map_details_opened", {"price_month": "14.98"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await log_event(u["user_id"], "offer", "profile_map_details_opened", {"price_month": BASE_OFFER_EUR_LABEL}, DB_PATH, SHEETS_WEBHOOK_URL)
             await answer_with_inline_screen(m, u, offer_details_full_mode_text(), offer_details_inline_keyboard(u["user_id"]), "offer")
             return
         if text in {"🧭 Показать карту", "🧭 Показать мои сигналы", "🧭 Показать карту ещё раз", "🧭 Показать мою карту"} or "показать" in low and ("сигнал" in low or "карт" in low):
@@ -12728,15 +12741,32 @@ def has_red_crisis_phrase(text: str) -> bool:
 
 
 def preferred_skill_for_mechanism(mechanism: str) -> str:
+    code = legacy_mechanism_code(mechanism)
+    if not code:
+        return ""
+    hypothesis = MechanismHypothesis(None, 0, code, "medium", (f"user_signal:{mechanism}",), ())
+    try:
+        return select_skill_for_mechanism(hypothesis, set(SKILLS_DB))
+    except LookupError:
+        return ""
+
+
+def legacy_mechanism_code(mechanism: str) -> str:
+    """Boundary adapter; legacy labels are normalized before ranking."""
     return {
-        "anxiety": "body_first",
-        "overload": "one_visible_step",
-        "fear_of_error": "bad_draft",
-        "self_criticism": "bad_draft",
-        "meaning_loss": "one_visible_step",
-        "phone": "phone_away_3_min",
-        "low_energy": "body_first",
-    }.get(mechanism, "")
+        "anxiety": "evaluation_avoidance",
+        "overload": "overwhelm",
+        "fear_of_error": "perfectionism_error_fear",
+        "self_criticism": "perfectionism_error_fear",
+        "meaning_loss": "low_reward",
+        "phone": "attention_drift",
+        "low_energy": "low_activation",
+    }.get(mechanism, mechanism if mechanism in {
+        "evaluation_avoidance", "executive_start_deficit", "choice_overload",
+        "low_activation", "rumination", "emotional_avoidance",
+        "perfectionism_error_fear", "attention_drift", "unclear_next_action",
+        "low_reward", "overwhelm", "recovery_after_lapse",
+    } else "")
 
 
 async def remember_user_mechanism(u: Dict[str, Any], mechanism: str) -> None:
@@ -13600,6 +13630,7 @@ async def main() -> int:
         dp.include_router(router)
         await init_db(DB_PATH)
         await migrate_db(DB_PATH)
+        configure_flow_repository(SQLiteFlowStateRepository(DB_PATH))
 
         if STARTUP_CHECK:
             await bot.session.close()

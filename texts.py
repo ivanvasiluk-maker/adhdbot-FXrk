@@ -9,6 +9,9 @@ import re
 from typing import Dict, Any, Optional, List
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from skills_texts import SKILLS_TEXTS
+from core.product_config import format_eur
+
+BASE_OFFER_EUR_LABEL = format_eur()
 
 # ============================================================
 # TRAINERS (стили)
@@ -616,7 +619,7 @@ def day3_offer_text(main_pattern: str = "сложно войти в действ
         "Это рабочая карта, которую мы строим по твоим действиям.\n\n"
         "Дальше собираем полную карту на 30 дней:\n"
         "навыки, среда, возврат, внимание, отдых и личный режим.\n\n"
-        "Месяц — €14.98"
+        f"Месяц — €{BASE_OFFER_EUR_LABEL}"
     )
 
 
@@ -896,7 +899,7 @@ def day3_primary_map_text(
         "в которую мозгу легче возвращаться.\n\n"
         "Поэтому продолжение — это не библиотека навыков.\n"
         "Это персональная модель, которая каждый день становится точнее.\n\n"
-        "Продолжение — 14.98 €/месяц"
+        f"Продолжение — {BASE_OFFER_EUR_LABEL} €/месяц"
     )
 
 
@@ -2139,7 +2142,7 @@ def payment_inline_20(payment_url_discount: str) -> InlineKeyboardMarkup:
 
 def payment_inline_month_1498(payment_url_full: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Оплатить €14.98", url=payment_url_full)]]
+        inline_keyboard=[[InlineKeyboardButton(text=f"Оплатить €{BASE_OFFER_EUR_LABEL}", url=payment_url_full)]]
     )
 
 kb_yes_no_inline = InlineKeyboardMarkup(
@@ -2395,7 +2398,7 @@ def offer_day_3_text(u: dict) -> str:
         "Это и есть сдвиг.\n\n"
         "Если продолжить, система будет не просто давать упражнения,\n"
         "а уточнять твою персональную модель: что помогает, где ломается вход, как возвращаться быстрее.\n\n"
-        "Продолжение — 14.98 €/месяц."
+        f"Продолжение — {BASE_OFFER_EUR_LABEL} €/месяц."
     )
 
 def inactivity_ping(trainer_key: str) -> str:
