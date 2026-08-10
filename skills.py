@@ -1875,3 +1875,21 @@ def format_skill(skill_id: str, trainer_key: str):
         f"Сделай:\n{steps}\n\n"
         f"Минимум:\n{skill.get('minimum_action') or skill.get('minimum') or ''}"
     )
+
+
+# PATCH-06 compatibility boundary. The full V2 library is validated here at
+# import/startup, while existing delivery call sites may keep using SKILLS_DB.
+from core.product_config import INCLUDE_REVIEWED_SKILLS_FOR_TESTERS  # noqa: E402
+from core.skill_schema import SkillRegistry, adapt_legacy_skills  # noqa: E402
+
+_legacy_v2_skills = adapt_legacy_skills(SKILLS_DB, production_limit=40)
+SKILL_REGISTRY = SkillRegistry(
+    _legacy_v2_skills,
+    include_reviewed=INCLUDE_REVIEWED_SKILLS_FOR_TESTERS,
+)
+PRODUCTION_SKILL_IDS = SKILL_REGISTRY.rankable_ids()
+
+
+def rankable_skill_ids(*, tester: bool = False) -> frozenset[str]:
+    """Ranking entry point; never exposes experimental/disabled catalog rows."""
+    return SKILL_REGISTRY.rankable_ids(tester=tester)

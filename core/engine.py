@@ -374,7 +374,12 @@ def build_day3_summary(user_state: UserState) -> Screen:
 def should_show_offer(user_state: UserState) -> bool:
     day = _safe_int(user_state.get("day"), 0)
     return (
-        day == 3
+        day >= _safe_int(user_state.get("offer_earliest_day"), 3)
+        and _safe_int(user_state.get("completed_experiments"), 0) >= 2
+        and _safe_int(user_state.get("successful_or_partial"), 0) >= 1
+        and bool(user_state.get("personalized_insight_exists"))
+        and bool(user_state.get("value_report_seen_at"))
+        and not bool(user_state.get("safety_active"))
         and (user_state.get("payment_status") or "trial") != "paid"
         and user_state.get("trial_phase") != "paid"
         and _safe_int(user_state.get("free_mode"), 0) != 1

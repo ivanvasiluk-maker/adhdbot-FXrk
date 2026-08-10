@@ -8,6 +8,8 @@ import json
 import aiohttp
 import asyncio
 import logging
+import hashlib
+import hmac
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
@@ -20,6 +22,7 @@ SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
 SHEETS_SYNC_ENABLED = os.getenv("SHEETS_SYNC_ENABLED", "true").lower() == "true"
 SHEETS_SYNC_INTERVAL_SECONDS = int(os.getenv("SHEETS_SYNC_INTERVAL_SECONDS", "60"))
 SHEETS_SYNC_BATCH_SIZE = int(os.getenv("SHEETS_SYNC_BATCH_SIZE", "50"))
+ANALYTICS_ID_SALT = os.getenv("ANALYTICS_ID_SALT", "")
 
 SENSITIVE_KEYS = {
     "problem_text",
@@ -382,6 +385,23 @@ async def post_rows(rows: List[List[Any]], sheet: str = "events") -> Tuple[bool,
             return True, text
 
 
+def behavioral_analytics_to_sheet_row(event: Dict[str, Any], *, secret_salt: str) -> List[Any]:
+    """Serialize only pseudonymous ids, bounded taxonomy, counts, timestamps, and versions."""
+    if not secret_salt:
+        raise ValueError("ANALYTICS_ID_SALT is required for behavioral analytics export")
+    anonymous_user = hmac.new(
+        secret_salt.encode(), str(event.get("user_id") or "").encode(), hashlib.sha256,
+    ).hexdigest()[:20]
+    return [
+        event.get("created_at") or "", event.get("event_name") or "", anonymous_user,
+        event.get("situation_id") or "", event.get("experiment_id") or "",
+        event.get("skill_id") or "", event.get("mechanism_code") or "",
+        event.get("context_domain") or "", event.get("outcome_label") or "",
+        int(event.get("count_value") or 0), event.get("policy_version") or "",
+        event.get("ranking_version") or "", int(event.get("skill_version") or 0),
+    ]
+
+
 async def _fetch_unsynced_events(db: aiosqlite.Connection, limit: int) -> List[Dict[str, Any]]:
     db.row_factory = aiosqlite.Row
     cur = await db.execute(
@@ -497,6 +517,34 @@ async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE
         ok, msg = await post_rows([daily_summary_to_sheet_row(today, all_users, all_events)], sheet="daily_summary")
         if not ok:
             supplemental_warnings.append(f"daily_summary: {msg}")
+
+        # PATCH-16 analytics is an optional, privacy-minimal sheet. It never
+        # shares Telegram identity or free text and requires a private hash salt.
+        analytics_rows = await (await db.execute(
+            """SELECT * FROM behavioral_analytics_events WHERE synced=0 ORDER BY id LIMIT ?""",
+            (limit,),
+        )).fetchall()
+        if analytics_rows and ANALYTICS_ID_SALT:
+            analytics_dicts = [dict(row) for row in analytics_rows]
+            ok, msg = await post_rows(
+                [behavioral_analytics_to_sheet_row(row, secret_salt=ANALYTICS_ID_SALT) for row in analytics_dicts],
+                sheet="behavioral_kpi",
+            )
+            analytics_ids = [int(row["id"]) for row in analytics_dicts]
+            placeholders = ",".join("?" for _ in analytics_ids)
+            if ok:
+                await db.execute(
+                    f"UPDATE behavioral_analytics_events SET synced=1,last_sync_error=NULL WHERE id IN ({placeholders})",
+                    analytics_ids,
+                )
+            else:
+                await db.execute(
+                    f"""UPDATE behavioral_analytics_events SET sync_attempts=sync_attempts+1,last_sync_error=?
+                        WHERE id IN ({placeholders})""", [msg[:500], *analytics_ids],
+                )
+                supplemental_warnings.append(f"behavioral_kpi: {msg}")
+        elif analytics_rows:
+            supplemental_warnings.append("behavioral_kpi: ANALYTICS_ID_SALT is empty")
 
         if synced_ids:
             await _mark_events_synced(db, synced_ids)

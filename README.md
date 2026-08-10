@@ -50,12 +50,25 @@ SHEETS_WEBHOOK_URL=
 SHEETS_SYNC_ENABLED=true
 SHEETS_SYNC_INTERVAL_SECONDS=60
 SHEETS_SYNC_BATCH_SIZE=50
+ANALYTICS_ID_SALT=
+SKILL_LIBRARY_SOURCE_URL=https://docs.google.com/spreadsheets/d/19A4NkJzZJj7mVCqSq5jmY5t1pqD8BrDb/edit
+INCLUDE_REVIEWED_SKILLS_FOR_TESTERS=false
+SKILL_REGISTRY_ENABLED=0
+SKILL_LIBRARY_ALLOWED_STATUSES=production
+SKILL_LIBRARY_PATH=data/skills
+SKILL_LIBRARY_FAIL_CLOSED=1
+SKILL_LIBRARY_COHORT_PERCENT=0
+SKILL_LIBRARY_MANIFEST_PATH=data/skills_manifest.json
 TEST_MODE=0
 TEST_CHEAT_CODE=SKILLER_TEST_1498
 LEARNING_ENGINE_ENABLED=false
 RANKING_ENGINE_ENABLED=false
 ACTIVE_SKILL_QUALITY_LEVEL=validated
-BASE_OFFER_EUR=14.98
+BASE_OFFER_EUR=5.00
+OFFER_EARLIEST_DAY=3
+NEW_ARCHITECTURE_ENABLED=false
+NEW_ARCHITECTURE_TEST_COHORT_ENABLED=true
+NEW_ARCHITECTURE_COHORT_IDS=
 BOT_STARTUP_CHECK=0
 ADMIN_IDS=
 ```
@@ -68,6 +81,54 @@ Notes:
 - Set `BOT_STARTUP_CHECK=1` only for deploy/build sanity checks; in this mode the bot initializes and exits without starting Telegram polling.
 - `DB_PATH` points to the SQLite file; it is auto-created/migrated on start. Treat this file as persistent production data: deploy scripts must mount/keep it and must not delete or recreate it, otherwise users lose their current scenario step.
 - User state is stored in the `users` table and migrated additively. The durable resume columns are `telegram_id`, `day_number`, `current_step`, `access_status`, `trainer`, `mode`, `created_at`, `updated_at`, and `schema_version`; legacy bot fields are kept in sync for compatibility.
+
+## Mandatory regression gate
+
+Run the offline merge gate for every patch:
+
+```bash
+python scripts/regression_gate.py
+```
+
+It runs unit and golden scenarios, legacy required regressions, state-machine restart/stale checks,
+crisis/global/offer/trainer/persistent-state/day-flow smoke tests, privacy/build assertions, and a
+`BOT_STARTUP_CHECK=1` boot against a temporary SQLite database. OpenAI is deliberately disabled.
+
+## Versioned skill library
+
+Canonical reviewed cards belong in `data/skills/*.json`; SQLite remains the source for user history,
+not card text. `python scripts/import_skills.py` is a dry run by default and exports legacy cards only
+with `--write`; every exported card stays `experimental` with `migration_confidence=low`.
+
+To inspect the configured Google workbook, run `python scripts/import_skills.py --google --inspect`.
+After checking its headers, run `python scripts/import_skills.py --google --output data/skills/import.json`
+for a dry run and add `--write` only to save a local review snapshot. The importer uses the configured
+Google URL, converts it to the official XLSX export endpoint, accepts Russian or English column names,
+and refuses incomplete or unreviewed production rows. If Google link access is unavailable, pass a
+downloaded workbook through `--source /path/to/skills.xlsx`.
+
+Run `python scripts/validate_skills.py --write-manifest` after review to validate taxonomy, safety,
+references and fallback graphs and to create `data/skills_manifest.json`. Use
+`python scripts/skills_diff.py OLD_MANIFEST NEW_MANIFEST` in review: changing a card hash without a
+version bump fails. `SKILL_REGISTRY_ENABLED=0` preserves the legacy flow. When enabled,
+`SKILL_LIBRARY_FAIL_CLOSED=1` makes an invalid or empty production library fail before polling without
+changing SQLite. Placeholder cards are deliberately not generated or counted as library content.
+
+The production personalization chain is cohort-gated. Enable `RANKING_ENGINE_ENABLED=1`,
+`LEARNING_ENGINE_ENABLED=1`, and either `NEW_ARCHITECTURE_ENABLED=1` or a test cohort. For those users,
+day selection is made by the deterministic Ranking Engine, a normalized behavioral experiment is
+created before delivery, and completed feedback is processed through Learning Engine and the
+post-experiment policy. The persisted decision includes `reason_code`, `policy_version`,
+`ranking_version`, and `skill_version`. With the flags off, the legacy flow and SQLite data are left
+unchanged.
+
+Post-action UX uses an explicit `post_action_reflection` step: the bot names the observed action,
+interprets the tested barrier without generic praise, stores one session-specific memory anchor, and
+only then offers continue/another step/finish. A failed attempt asks at most four contextual reasons
+plus a free-text alternative. Completing daily training sets `daily_training_completed=1` but keeps
+`interaction_allowed=1`; a substantive text or voice message always starts an additional situation
+analysis, while the completed-day menu remains available for optional skills, the memory anchor, and
+short learning material.
 
 ## Docker
 Build and run with Docker:

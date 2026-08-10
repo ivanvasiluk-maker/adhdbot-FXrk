@@ -21,7 +21,7 @@ TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "de
 
 # Persistent user-state schema version. Migrations must be additive/non-destructive:
 # deploys must never drop the SQLite file or reset existing users.
-USER_STATE_SCHEMA_VERSION = 3
+USER_STATE_SCHEMA_VERSION = 18
 
 
 # ============================================================
@@ -1264,6 +1264,8 @@ USER_FIELDS = [
     "success_repeat_count",
     "day_closed",
     "today_closed",
+    "daily_training_completed",
+    "interaction_allowed",
     "today_started",
     "last_day_closed_at",
     "day_status",
@@ -1501,6 +1503,8 @@ def default_user(uid: int) -> Dict[str, Any]:
         "success_repeat_count": 0,
         "day_closed": 0,
         "today_closed": 0,
+        "daily_training_completed": 0,
+        "interaction_allowed": 1,
         "today_started": 0,
         "last_day_closed_at": None,
         "day_status": "not_started",
@@ -1552,7 +1556,7 @@ def default_user(uid: int) -> Dict[str, Any]:
 
 
 async def _ensure_flow_and_mechanism_schema(db: aiosqlite.Connection) -> None:
-    """Create PATCH-01/02 durable entities; safe to call on every startup."""
+    """Create durable experiment and behavioral-memory entities on startup."""
     await db.executescript(
         """
         CREATE TABLE IF NOT EXISTS flow_states (
@@ -1648,6 +1652,9 @@ async def _ensure_flow_and_mechanism_schema(db: aiosqlite.Connection) -> None:
             outcome_id INTEGER REFERENCES behavioral_experiment_outcomes(id),
             decision TEXT NOT NULL,
             reason_code TEXT NOT NULL,
+            policy_version TEXT NOT NULL DEFAULT 'post-experiment-v1',
+            ranking_version TEXT NOT NULL DEFAULT 'ranking-v1',
+            skill_version TEXT NOT NULL DEFAULT '1.0.0',
             next_experiment_id INTEGER REFERENCES behavioral_experiments(id),
             created_at TEXT NOT NULL
         );
@@ -1658,8 +1665,254 @@ async def _ensure_flow_and_mechanism_schema(db: aiosqlite.Connection) -> None:
             ON behavioral_experiments(user_id)
             WHERE status IN ('proposed','accepted','started');
         CREATE INDEX IF NOT EXISTS idx_behavioral_chain_parent ON behavioral_experiments(parent_experiment_id);
+
+        CREATE TABLE IF NOT EXISTS user_mechanism_profile (
+            user_id INTEGER NOT NULL,
+            mechanism_code TEXT NOT NULL,
+            context_domain TEXT NOT NULL,
+            evidence_count INTEGER NOT NULL DEFAULT 0 CHECK(evidence_count >= 0),
+            last_seen_at TEXT NOT NULL,
+            typical_barriers_json TEXT NOT NULL DEFAULT '[]',
+            confidence TEXT NOT NULL CHECK(confidence IN ('low','medium','high')),
+            evidence_refs_json TEXT NOT NULL,
+            PRIMARY KEY (user_id, mechanism_code, context_domain)
+        );
+        CREATE TABLE IF NOT EXISTS user_skill_effectiveness (
+            user_id INTEGER NOT NULL,
+            skill_id TEXT NOT NULL,
+            mechanism_code TEXT NOT NULL,
+            context_domain TEXT NOT NULL,
+            attempts_count INTEGER NOT NULL DEFAULT 0 CHECK(attempts_count >= 0),
+            successes_count INTEGER NOT NULL DEFAULT 0 CHECK(successes_count >= 0),
+            independent_successes INTEGER NOT NULL DEFAULT 0 CHECK(independent_successes >= 0),
+            worse_count INTEGER NOT NULL DEFAULT 0 CHECK(worse_count >= 0),
+            last_used_at TEXT NOT NULL,
+            effectiveness_band TEXT NOT NULL CHECK(effectiveness_band IN ('unknown','promising','working','unreliable','avoid')),
+            preferred_difficulty INTEGER CHECK(preferred_difficulty BETWEEN 1 AND 5),
+            preferred_trainer_style TEXT,
+            migration_confidence TEXT NOT NULL DEFAULT 'high' CHECK(migration_confidence IN ('low','medium','high')),
+            evidence_refs_json TEXT NOT NULL,
+            PRIMARY KEY (user_id, skill_id, mechanism_code, context_domain)
+        );
+        CREATE TABLE IF NOT EXISTS behavioral_patterns (
+            user_id INTEGER NOT NULL,
+            pattern_code TEXT NOT NULL,
+            summary TEXT NOT NULL CHECK(length(summary) BETWEEN 1 AND 280),
+            evidence_refs TEXT NOT NULL,
+            last_updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, pattern_code)
+        );
+        CREATE TABLE IF NOT EXISTS operational_raw_context (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            raw_context TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS user_skill_preferences (
+            user_id INTEGER NOT NULL,
+            skill_id TEXT NOT NULL,
+            recommendation_disabled INTEGER NOT NULL DEFAULT 0 CHECK(recommendation_disabled IN (0,1)),
+            correction_ref TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, skill_id)
+        );
+        CREATE TABLE IF NOT EXISTS skill_mastery_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            skill_id TEXT NOT NULL,
+            experiment_id INTEGER NOT NULL REFERENCES behavioral_experiments(id),
+            from_status TEXT NOT NULL,
+            to_status TEXT NOT NULL CHECK(to_status IN ('NEW','LEARNING','PRACTICING','MASTERED','GENERALIZING')),
+            reason_code TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS skill_mastery (
+            user_id INTEGER NOT NULL,
+            skill_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('NEW','LEARNING','PRACTICING','GENERALIZING','MASTERED')),
+            current_difficulty INTEGER NOT NULL CHECK(current_difficulty BETWEEN 1 AND 5),
+            successful_practice_count INTEGER NOT NULL DEFAULT 0 CHECK(successful_practice_count >= 0),
+            independent_use_count INTEGER NOT NULL DEFAULT 0 CHECK(independent_use_count >= 0),
+            generalized_contexts_json TEXT NOT NULL DEFAULT '[]',
+            failed_contexts_json TEXT NOT NULL DEFAULT '[]',
+            scaffolding_level TEXT NOT NULL CHECK(scaffolding_level IN ('full','reduced','minimal','none')),
+            last_used_at TEXT NOT NULL,
+            regression_flag INTEGER NOT NULL DEFAULT 0 CHECK(regression_flag IN (0,1)),
+            migration_confidence TEXT NOT NULL DEFAULT 'high' CHECK(migration_confidence IN ('low','medium','high')),
+            version INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (user_id, skill_id)
+        );
+        CREATE TABLE IF NOT EXISTS skill_mastery_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            skill_id TEXT NOT NULL,
+            experiment_id INTEGER NOT NULL REFERENCES behavioral_experiments(id),
+            event_type TEXT NOT NULL CHECK(event_type IN
+                ('first_use','success','independent_use','difficulty_up','transfer','mastered','regression')),
+            from_status TEXT NOT NULL,
+            to_status TEXT NOT NULL,
+            context_domain TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS legacy_migration_links (
+            source_table TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id INTEGER NOT NULL,
+            migrated_at TEXT NOT NULL,
+            PRIMARY KEY (source_table, source_id, target_type)
+        );
+        CREATE TABLE IF NOT EXISTS behavioral_analytics_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_name TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            situation_id INTEGER,
+            experiment_id INTEGER,
+            skill_id TEXT,
+            mechanism_code TEXT,
+            context_domain TEXT,
+            outcome_label TEXT,
+            count_value INTEGER NOT NULL DEFAULT 1,
+            policy_version TEXT NOT NULL,
+            ranking_version TEXT NOT NULL,
+            skill_version INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            synced INTEGER NOT NULL DEFAULT 0 CHECK(synced IN (0,1)),
+            sync_attempts INTEGER NOT NULL DEFAULT 0,
+            last_sync_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_behavioral_memory_lookup
+            ON user_skill_effectiveness(user_id, mechanism_code, context_domain, effectiveness_band);
+        CREATE INDEX IF NOT EXISTS idx_operational_context_expiry ON operational_raw_context(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_mastery_history_user_skill
+            ON skill_mastery_history(user_id,skill_id,created_at);
+        CREATE INDEX IF NOT EXISTS idx_skill_mastery_events_user_skill
+            ON skill_mastery_events(user_id,skill_id,created_at);
+        CREATE INDEX IF NOT EXISTS idx_behavioral_analytics_funnel
+            ON behavioral_analytics_events(event_name,created_at,user_id);
         """
     )
+
+
+async def _insert_behavioral_analytics(
+    db: aiosqlite.Connection, event: "BehavioralAnalyticsEvent", *, created_at: str | None = None,
+) -> int:
+    from core.behavioral_analytics import BehavioralAnalyticsEvent
+    if not isinstance(event, BehavioralAnalyticsEvent):
+        raise TypeError("event must be BehavioralAnalyticsEvent")
+    cur = await db.execute(
+        """INSERT INTO behavioral_analytics_events
+           (event_name,user_id,situation_id,experiment_id,skill_id,mechanism_code,
+            context_domain,outcome_label,count_value,policy_version,ranking_version,skill_version,created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (event.event_name, event.user_id, event.situation_id, event.experiment_id,
+         event.skill_id or None, event.mechanism_code or None, event.context_domain or None,
+         event.outcome_label or None, event.count_value, event.policy_version,
+         event.ranking_version, event.skill_version, created_at or _utc_iso()),
+    )
+    return int(cur.lastrowid)
+
+
+async def record_behavioral_analytics_event(
+    db_path: str, event: "BehavioralAnalyticsEvent", *, created_at: str | None = None,
+) -> int:
+    async with aiosqlite.connect(db_path) as db:
+        await _ensure_flow_and_mechanism_schema(db)
+        event_id = await _insert_behavioral_analytics(db, event, created_at=created_at)
+        await db.commit()
+        return event_id
+
+
+async def get_behavioral_kpis(
+    db_path: str, *, created_from: str | None = None, created_to: str | None = None,
+) -> Dict[str, Any]:
+    """Compute the August funnel from normalized facts; no message text is read."""
+    from core.behavioral_analytics import build_kpis
+    filters = []
+    params: list[Any] = []
+    if created_from:
+        filters.append("created_at>=?")
+        params.append(created_from)
+    if created_to:
+        filters.append("created_at<?")
+        params.append(created_to)
+    where = "WHERE " + " AND ".join(filters) if filters else ""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        event_rows = await (await db.execute(
+            f"""SELECT event_name,COUNT(*) AS count,COUNT(DISTINCT user_id) AS users
+                FROM behavioral_analytics_events {where} GROUP BY event_name""", params,
+        )).fetchall()
+        events = {row["event_name"]: int(row["count"]) for row in event_rows}
+        event_users = {row["event_name"]: int(row["users"]) for row in event_rows}
+        situation_filter = where.replace("created_at", "s.created_at")
+        experiment_filter = where.replace("created_at", "COALESCE(b.started_at,b.completed_at)")
+        situations = await (await db.execute(
+            f"""SELECT COUNT(DISTINCT s.id) AS total,
+                       COUNT(DISTINCT CASE WHEN b.id IS NOT NULL THEN s.id END) AS converted
+                FROM situation_snapshots s LEFT JOIN behavioral_experiments b ON b.situation_id=s.id
+                {situation_filter}""", params,
+        )).fetchone()
+        repeats = await (await db.execute(
+            f"""SELECT COUNT(*) AS total,
+                       COALESCE(SUM(CASE WHEN o.success_criterion_met=1 THEN 1 ELSE 0 END),0) AS successful
+                FROM behavioral_experiments b LEFT JOIN experiment_outcomes o ON o.experiment_id=b.id
+                {experiment_filter + (' AND ' if experiment_filter else ' WHERE ') + "b.progression_type!='first'"}""",
+            params,
+        )).fetchone()
+        timing = await (await db.execute(
+            """WITH per_skill AS (
+                 SELECT user_id,skill_id,MIN(created_at) AS first_at,
+                        MIN(CASE WHEN to_status='PRACTICING' THEN created_at END) AS practicing_at,
+                        MIN(CASE WHEN to_status='MASTERED' THEN created_at END) AS mastered_at
+                 FROM skill_mastery_events GROUP BY user_id,skill_id
+               ) SELECT
+                 AVG(CASE WHEN practicing_at IS NOT NULL THEN (julianday(practicing_at)-julianday(first_at))*86400 END),
+                 AVG(CASE WHEN mastered_at IS NOT NULL THEN (julianday(mastered_at)-julianday(first_at))*86400 END)
+               FROM per_skill"""
+        )).fetchone()
+    counts = {
+        "started_experiments": events.get("experiment_started", 0),
+        "completed_experiments": events.get("experiment_completed", 0),
+        "action_started": events.get("action_started", 0),
+        "situations": int(situations["total"] or 0),
+        "situations_with_experiment": int(situations["converted"] or 0),
+        "repeat_experiments": int(repeats["total"] or 0),
+        "successful_repeats": int(repeats["successful"] or 0),
+        "d3_value_proof_eligible": event_users.get("value_report_viewed", 0),
+        "d3_users": max(event_users.get("value_report_viewed", 0), event_users.get("offer_shown", 0)),
+        "worse_outcomes": 0,
+        "independent_uses": events.get("independent_use", 0),
+        "transfers": events.get("skill_transferred", 0),
+        "value_reports": events.get("value_report_viewed", 0),
+        "offers": events.get("offer_shown", 0),
+        "verified_purchases": events.get("purchase_confirmed", 0),
+        "time_to_practicing_seconds": round(float(timing[0]), 2) if timing and timing[0] is not None else None,
+        "time_to_mastered_seconds": round(float(timing[1]), 2) if timing and timing[1] is not None else None,
+    }
+    # Worse is a bounded outcome label, not inferred from arbitrary event metadata.
+    counts["worse_outcomes"] = sum(
+        int(row[0]) for row in await _analytics_outcome_counts(db_path, "worse", created_from, created_to)
+    )
+    return {"counts": counts, "kpis": build_kpis(counts)}
+
+
+async def _analytics_outcome_counts(
+    db_path: str, outcome_label: str, created_from: str | None, created_to: str | None,
+) -> list[tuple[int]]:
+    clauses = ["event_name='experiment_completed'", "outcome_label=?"]
+    params: list[Any] = [outcome_label]
+    if created_from:
+        clauses.append("created_at>=?")
+        params.append(created_from)
+    if created_to:
+        clauses.append("created_at<?")
+        params.append(created_to)
+    async with aiosqlite.connect(db_path) as db:
+        return await (await db.execute(
+            f"SELECT COUNT(*) FROM behavioral_analytics_events WHERE {' AND '.join(clauses)}", params,
+        )).fetchall()
 
 async def init_db(db_path: str):
     """Инициализация БД"""
@@ -1906,8 +2159,12 @@ async def init_db(db_path: str):
             )
             """
         )
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at)")
+        # A pre-PATCH-15 database may not have these columns until migrate_db.
+        init_user_columns = {row[1] for row in await (await db.execute("PRAGMA table_info(users)")).fetchall()}
+        if "telegram_id" in init_user_columns:
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
+        if "updated_at" in init_user_columns:
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_updated_at ON users(updated_at)")
         await db.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
             (USER_STATE_SCHEMA_VERSION, _utc_iso()),
@@ -1932,6 +2189,9 @@ def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
     u["day"] = day_value
     u["current_day"] = day_value
     u["day_number"] = day_value
+    # Legacy handlers still mutate ``stage`` directly. The dedicated
+    # flow_states repository is authoritative for new-engine transitions;
+    # this adapter mirrors legacy stage until those handlers are migrated.
     step_value = u.get("stage") or u.get("current_step") or "start"
     u["stage"] = step_value
     u["current_step"] = step_value
@@ -2171,6 +2431,8 @@ EXTRA_USER_COLS = {
     "success_repeat_count": "INTEGER DEFAULT 0",
     "day_closed": "INTEGER DEFAULT 0",
     "today_closed": "INTEGER DEFAULT 0",
+    "daily_training_completed": "INTEGER DEFAULT 0",
+    "interaction_allowed": "INTEGER DEFAULT 1",
     "today_started": "INTEGER DEFAULT 0",
     "last_day_closed_at": "TEXT",
     "day_status": "TEXT DEFAULT 'not_started'",
@@ -2240,14 +2502,20 @@ async def migrate_db(db_path: str):
             if col not in cols:
                 await db.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
 
+        cols = [r[1] for r in await (await db.execute("PRAGMA table_info(users)")).fetchall()]
+
         # Non-destructive backfill: preserve legacy values and expose explicit
         # persistent state columns used to resume flows after deploys.
         await db.execute("UPDATE users SET telegram_id = user_id WHERE telegram_id IS NULL")
-        await db.execute("UPDATE users SET day_number = COALESCE(day_number, day, 1)")
+        day_source = "day" if "day" in cols else "1"
+        await db.execute(f"UPDATE users SET day_number = COALESCE(day_number, {day_source}, 1)")
         await db.execute("UPDATE users SET current_step = COALESCE(current_step, stage, 'start')")
-        await db.execute("UPDATE users SET access_status = COALESCE(access_status, payment_status, 'trial')")
-        await db.execute("UPDATE users SET trainer = COALESCE(trainer, trainer_key, 'marsha')")
-        await db.execute("UPDATE users SET mode = COALESCE(mode, input_mode, 'text')")
+        payment_source = "payment_status" if "payment_status" in cols else "'trial'"
+        trainer_source = "trainer_key" if "trainer_key" in cols else "'marsha'"
+        mode_source = "input_mode" if "input_mode" in cols else "'text'"
+        await db.execute(f"UPDATE users SET access_status = COALESCE(access_status, {payment_source}, 'trial')")
+        await db.execute(f"UPDATE users SET trainer = COALESCE(trainer, {trainer_source}, 'marsha')")
+        await db.execute(f"UPDATE users SET mode = COALESCE(mode, {mode_source}, 'text')")
         await db.execute("UPDATE users SET updated_at = COALESCE(updated_at, datetime('now'))")
         await db.execute("UPDATE users SET schema_version = ? WHERE schema_version IS NULL OR schema_version < ?", (USER_STATE_SCHEMA_VERSION, USER_STATE_SCHEMA_VERSION))
         await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)")
@@ -2361,9 +2629,197 @@ async def migrate_db(db_path: str):
         )
         await _ensure_flow_and_mechanism_schema(db)
 
+        # PATCH-15: additive columns for databases that created these tables
+        # before migration confidence became explicit. Never rebuild/drop them.
+        for table, column, declaration in (
+            ("user_skill_effectiveness", "migration_confidence", "TEXT NOT NULL DEFAULT 'high'"),
+            ("skill_mastery", "migration_confidence", "TEXT NOT NULL DEFAULT 'high'"),
+            ("behavioral_experiment_decisions", "policy_version", "TEXT NOT NULL DEFAULT 'post-experiment-v1'"),
+            ("behavioral_experiment_decisions", "ranking_version", "TEXT NOT NULL DEFAULT 'ranking-v1'"),
+            ("behavioral_experiment_decisions", "skill_version", "TEXT NOT NULL DEFAULT '1.0.0'"),
+        ):
+            existing = {row[1] for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()}
+            if column not in existing:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
         await ensure_events_schema(db)
 
         await db.commit()
+
+async def startup_schema_check(db_path: str) -> Dict[str, Any]:
+    """Fail startup clearly when an additive migration was not applied."""
+    required = {
+        "users": {"user_id", "stage", "profile_json"},
+        "flow_states": {"user_id", "current_step", "revision"},
+        "behavioral_experiments": {"id", "user_id", "skill_id", "status"},
+        "experiment_outcomes": {"experiment_id", "action_started", "success_criterion_met"},
+        "user_skill_effectiveness": {"user_id", "skill_id", "migration_confidence"},
+        "skill_mastery": {"user_id", "skill_id", "status", "migration_confidence"},
+        "skill_mastery_events": {"experiment_id", "event_type"},
+        "legacy_migration_links": {"source_table", "source_id", "target_id"},
+        "behavioral_analytics_events": {"event_name", "policy_version", "ranking_version", "skill_version", "synced"},
+        "behavioral_experiment_decisions": {"experiment_id", "decision", "reason_code", "policy_version", "ranking_version", "skill_version"},
+        "schema_migrations": {"version", "applied_at"},
+    }
+    errors: list[str] = []
+    async with aiosqlite.connect(db_path) as db:
+        tables = {row[0] for row in await (await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )).fetchall()}
+        for table, columns in required.items():
+            if table not in tables:
+                errors.append(f"missing table: {table}")
+                continue
+            present = {row[1] for row in await (await db.execute(f"PRAGMA table_info({table})")).fetchall()}
+            for column in sorted(columns - present):
+                errors.append(f"missing column: {table}.{column}")
+        migration = await (await db.execute(
+            "SELECT 1 FROM schema_migrations WHERE version=?", (USER_STATE_SCHEMA_VERSION,)
+        )).fetchone() if "schema_migrations" in tables else None
+        if not migration:
+            errors.append(f"missing schema migration: {USER_STATE_SCHEMA_VERSION}")
+    if errors:
+        raise RuntimeError("STARTUP_SCHEMA_CHECK_FAILED: " + "; ".join(errors))
+    return {"ok": True, "schema_version": USER_STATE_SCHEMA_VERSION, "checked_tables": len(required)}
+
+
+def _legacy_strategy_ids(profile_raw: Any) -> List[str]:
+    profile = _safe_json_dict(profile_raw)
+    values: List[str] = []
+    for key in ("working_strategies", "successful_skills"):
+        for item in _as_list(profile.get(key)):
+            value = str(item or "").strip()
+            if value and value not in values:
+                values.append(value)
+    for key in ("best_skill", "last_successful_skill"):
+        value = str(profile.get(key) or "").strip()
+        if value and value not in values:
+            values.append(value)
+    return values[:50]
+
+
+async def migrate_legacy_data(db_path: str) -> Dict[str, int]:
+    """Idempotently adapt legacy state with low-confidence, non-mastered facts."""
+    counts = {"flow_states": 0, "attempts": 0, "strategies": 0}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            users = await (await db.execute(
+                "SELECT user_id,stage,current_step,profile_json,trainer_key FROM users"
+            )).fetchall()
+            for user in users:
+                current_step = str(user["current_step"] or user["stage"] or "onboarding")
+                cur = await db.execute(
+                    """INSERT OR IGNORE INTO flow_states(user_id,current_step,revision,updated_at)
+                       VALUES(?,?,0,?)""",
+                    (user["user_id"], current_step, _utc_iso()),
+                )
+                counts["flow_states"] += max(0, int(cur.rowcount))
+
+                for skill_id in _legacy_strategy_ids(user["profile_json"]):
+                    source_id = f"{user['user_id']}:{skill_id}"
+                    already = await (await db.execute(
+                        """SELECT 1 FROM legacy_migration_links
+                           WHERE source_table='users.profile_json' AND source_id=? AND target_type='skill_effectiveness'""",
+                        (source_id,),
+                    )).fetchone()
+                    if already:
+                        continue
+                    now = _utc_iso()
+                    await db.execute(
+                        """INSERT OR IGNORE INTO user_skill_effectiveness
+                           (user_id,skill_id,mechanism_code,context_domain,attempts_count,successes_count,
+                            independent_successes,worse_count,last_used_at,effectiveness_band,
+                            preferred_difficulty,preferred_trainer_style,migration_confidence,evidence_refs_json)
+                           VALUES(?,?, 'unclear_next_action','other',0,0,0,0,?,'unknown',NULL,?,'low',?)""",
+                        (user["user_id"], skill_id, now, user["trainer_key"],
+                         json.dumps([f"legacy_profile:{user['user_id']}"])),
+                    )
+                    await db.execute(
+                        """INSERT OR IGNORE INTO skill_mastery
+                           (user_id,skill_id,status,current_difficulty,successful_practice_count,
+                            independent_use_count,generalized_contexts_json,failed_contexts_json,
+                            scaffolding_level,last_used_at,regression_flag,migration_confidence,version)
+                           VALUES(?,?,'NEW',1,0,0,'[]','[]','full',?,0,'low',1)""",
+                        (user["user_id"], skill_id, now),
+                    )
+                    await db.execute(
+                        """INSERT INTO legacy_migration_links
+                           (source_table,source_id,target_type,target_id,migrated_at)
+                           VALUES('users.profile_json',?,'skill_effectiveness',0,?)""",
+                        (source_id, now),
+                    )
+                    counts["strategies"] += 1
+
+            attempts = await (await db.execute("SELECT * FROM skill_attempts ORDER BY attempt_id")).fetchall()
+            for attempt in attempts:
+                source_id = str(attempt["attempt_id"])
+                already = await (await db.execute(
+                    """SELECT 1 FROM legacy_migration_links
+                       WHERE source_table='skill_attempts' AND source_id=? AND target_type='behavioral_experiment'""",
+                    (source_id,),
+                )).fetchone()
+                if already:
+                    continue
+                now = str(attempt["created_at"] or _utc_iso())
+                task_ref = str(attempt["task_id"] or "legacy task")[:120]
+                situation = await db.execute(
+                    """INSERT INTO situation_snapshots
+                       (user_id,created_at,task_summary,desired_action,context_domain,action_phase,
+                        emotion_intensity_0_100,energy_0_100,urgency,raw_text_ref)
+                       VALUES(?,?,?,?, 'other','start',50,50,'unknown',NULL)""",
+                    (attempt["user_id"], now, task_ref, "проверить короткий первый шаг"),
+                )
+                situation_id = int(situation.lastrowid)
+                hypothesis = await db.execute(
+                    """INSERT INTO mechanism_hypotheses
+                       (situation_id,mechanism_code,confidence,evidence_json,unknowns_json,
+                        disconfirming_questions_json,source,confirmed_by_user)
+                       VALUES(?,'unclear_next_action','low',?,'[]','[]','rules',0)""",
+                    (situation_id, json.dumps([f"legacy_attempt:{source_id}"])),
+                )
+                result = str(attempt["result"] or "").lower()
+                success = result in {"done", "completed", "success", "helped"}
+                partial = result in {"partial", "started", "tried"}
+                experiment = await db.execute(
+                    """INSERT INTO behavioral_experiments
+                       (user_id,situation_id,mechanism_hypothesis_id,skill_id,mechanism_code,
+                        context_domain,difficulty_level,instruction_variant,target_action,success_criterion,
+                        started_at,completed_at,status,parent_experiment_id,progression_type,
+                        decision_reason_code,trainer_style,state_revision)
+                       VALUES(?,?,?,?, 'unclear_next_action','other',1,?,?,?, ?,?,'completed',NULL,
+                              'first','LEGACY_MIGRATION',?,0)""",
+                    (attempt["user_id"], situation_id, int(hypothesis.lastrowid),
+                     str(attempt["skill_id"] or "legacy_skill"), "Legacy skill attempt",
+                     "проверить действие", "зафиксирован результат", now, now, "marsha"),
+                )
+                experiment_id = int(experiment.lastrowid)
+                failure = None if success else ("unknown" if not attempt["barrier"] else "external_blocker")
+                await db.execute(
+                    """INSERT INTO experiment_outcomes
+                       (experiment_id,action_started,action_persisted,emotional_change,
+                        before_intensity_0_100,after_intensity_0_100,success_criterion_met,
+                        independent_use,user_note_short,failure_reason_code,captured_at)
+                       VALUES(?,?,?,?,NULL,NULL,?,0,NULL,?,?)""",
+                    (experiment_id, "yes" if success else "partial" if partial else "no",
+                     "yes" if success else "partial" if partial else "not_applicable", "unknown",
+                     int(success), failure, now),
+                )
+                await db.execute(
+                    """INSERT INTO legacy_migration_links
+                       (source_table,source_id,target_type,target_id,migrated_at)
+                       VALUES('skill_attempts',?,'behavioral_experiment',?,?)""",
+                    (source_id, experiment_id, _utc_iso()),
+                )
+                counts["attempts"] += 1
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return counts
+
 
 async def log_event(
     user_id: int,
@@ -2559,8 +3015,14 @@ async def create_situation_snapshot(db_path: str, snapshot: "SituationSnapshot")
              snapshot.emotion_intensity_0_100, snapshot.energy_0_100, snapshot.urgency,
              snapshot.raw_text_ref),
         )
+        situation_id = int(cur.lastrowid)
+        from core.behavioral_analytics import BehavioralAnalyticsEvent
+        await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+            "situation_captured", snapshot.user_id, situation_id=situation_id,
+            context_domain=snapshot.context_domain,
+        ), created_at=snapshot.created_at or _utc_iso())
         await db.commit()
-        return int(cur.lastrowid)
+        return situation_id
 
 
 async def create_mechanism_hypothesis(db_path: str, hypothesis: "MechanismHypothesis") -> int:
@@ -2578,8 +3040,19 @@ async def create_mechanism_hypothesis(db_path: str, hypothesis: "MechanismHypoth
              json.dumps(hypothesis.disconfirming_questions, ensure_ascii=False),
              hypothesis.source, int(hypothesis.confirmed_by_user)),
         )
+        hypothesis_id = int(cur.lastrowid)
+        if hypothesis.confirmed_by_user or hypothesis.source == "user_confirmed":
+            from core.behavioral_analytics import BehavioralAnalyticsEvent
+            owner = await (await db.execute(
+                "SELECT user_id,context_domain FROM situation_snapshots WHERE id=?", (hypothesis.situation_id,),
+            )).fetchone()
+            if owner:
+                await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                    "mechanism_confirmed", int(owner[0]), situation_id=hypothesis.situation_id,
+                    mechanism_code=hypothesis.mechanism_code, context_domain=str(owner[1]),
+                ))
         await db.commit()
-        return int(cur.lastrowid)
+        return hypothesis_id
 
 
 async def create_experiment(
@@ -2641,10 +3114,17 @@ async def create_behavioral_experiment(
                  experiment.progression_type, experiment.decision_reason_code,
                  experiment.trainer_style, experiment.state_revision),
             )
+            experiment_id = int(cur.lastrowid)
+            from core.behavioral_analytics import BehavioralAnalyticsEvent
+            await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                "experiment_proposed", experiment.user_id, situation_id=experiment.situation_id,
+                experiment_id=experiment_id, skill_id=experiment.skill_id,
+                mechanism_code=experiment.mechanism_code, context_domain=experiment.context_domain,
+            ))
             await db.commit()
         except aiosqlite.IntegrityError as exc:
             raise ValueError("User already has an active productive experiment or the chain is invalid") from exc
-        return int(cur.lastrowid)
+        return experiment_id
 
 
 async def transition_behavioral_experiment(
@@ -2658,7 +3138,8 @@ async def transition_behavioral_experiment(
     }
     async with aiosqlite.connect(db_path) as db:
         row = await (await db.execute(
-            "SELECT status,state_revision FROM behavioral_experiments WHERE id=?", (experiment_id,)
+            """SELECT status,state_revision,user_id,situation_id,skill_id,mechanism_code,context_domain
+               FROM behavioral_experiments WHERE id=?""", (experiment_id,)
         )).fetchone()
         if not row or int(row[1]) != expected_revision:
             raise ValueError("STALE_EXPERIMENT")
@@ -2674,6 +3155,13 @@ async def transition_behavioral_experiment(
         )
         if cur.rowcount != 1:
             raise ValueError("STALE_EXPERIMENT")
+        if status in {"started", "completed"}:
+            from core.behavioral_analytics import BehavioralAnalyticsEvent
+            await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                f"experiment_{status}", int(row[2]), situation_id=int(row[3]),
+                experiment_id=experiment_id, skill_id=str(row[4]), mechanism_code=str(row[5]),
+                context_domain=str(row[6]),
+            ), created_at=now)
         await db.commit()
         return expected_revision + 1
 
@@ -2682,17 +3170,21 @@ async def record_behavioral_outcome_and_decision(
     db_path: str, experiment_id: int, *, criterion_met: bool,
     observed_result: str, decision: str, reason_code: str,
     next_experiment_id: int | None = None,
+    policy_version: str = "post-experiment-v1", ranking_version: str = "ranking-v1",
+    skill_version: str = "1.0.0",
 ) -> tuple[int, int]:
     """Atomically finish the trace experiment → outcome → decision."""
-    if not observed_result.strip() or not decision.strip() or not reason_code.strip():
+    if not all(value.strip() for value in (
+        observed_result, decision, reason_code, policy_version, ranking_version, skill_version,
+    )):
         raise ValueError("Outcome and decision must be explicit")
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA foreign_keys=ON")
         row = await (await db.execute(
             "SELECT status FROM behavioral_experiments WHERE id=?", (experiment_id,)
         )).fetchone()
-        if not row or row[0] != "completed":
-            raise ValueError("Outcome can be recorded only for a completed experiment")
+        if not row or row[0] not in {"completed", "safety_stopped"}:
+            raise ValueError("Outcome can be recorded only for a completed or safety-stopped experiment")
         now = _utc_iso()
         outcome = await db.execute(
             """INSERT INTO behavioral_experiment_outcomes
@@ -2701,12 +3193,444 @@ async def record_behavioral_outcome_and_decision(
         )
         decision_row = await db.execute(
             """INSERT INTO behavioral_experiment_decisions
-               (experiment_id,outcome_id,decision,reason_code,next_experiment_id,created_at)
-               VALUES(?,?,?,?,?,?)""",
-            (experiment_id, int(outcome.lastrowid), decision, reason_code, next_experiment_id, now),
+               (experiment_id,outcome_id,decision,reason_code,policy_version,ranking_version,
+                skill_version,next_experiment_id,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (experiment_id, int(outcome.lastrowid), decision, reason_code, policy_version,
+             ranking_version, skill_version, next_experiment_id, now),
+        )
+        await db.execute(
+            "UPDATE behavioral_experiments SET decision_reason_code=? WHERE id=?",
+            (reason_code, experiment_id),
         )
         await db.commit()
         return int(outcome.lastrowid), int(decision_row.lastrowid)
+
+
+def _effectiveness_band(attempts: int, successes: int, independent: int, worse: int) -> str:
+    """Return a conservative, explainable effectiveness classification."""
+    if worse >= 2:
+        return "avoid"
+    if independent >= 1 or successes >= 2:
+        return "working"
+    if successes == 1:
+        return "promising"
+    if attempts >= 3:
+        return "unreliable"
+    return "unknown"
+
+
+async def _update_behavioral_memory_in_transaction(
+    db: aiosqlite.Connection, outcome: "ExperimentOutcome", captured_at: str,
+) -> None:
+    """Project one immutable experiment result into compact durable memory."""
+    db.row_factory = aiosqlite.Row
+    experiment = await (await db.execute(
+        """SELECT user_id,skill_id,mechanism_code,context_domain,difficulty_level,trainer_style
+           FROM behavioral_experiments WHERE id=?""", (outcome.experiment_id,),
+    )).fetchone()
+    if not experiment:
+        raise ValueError("Memory evidence experiment does not exist")
+    evidence_ref = f"experiment:{outcome.experiment_id}"
+    mechanism_row = await (await db.execute(
+        """SELECT evidence_count,typical_barriers_json,evidence_refs_json
+           FROM user_mechanism_profile
+           WHERE user_id=? AND mechanism_code=? AND context_domain=?""",
+        (experiment["user_id"], experiment["mechanism_code"], experiment["context_domain"]),
+    )).fetchone()
+    barriers = json.loads(mechanism_row["typical_barriers_json"]) if mechanism_row else []
+    if outcome.failure_reason_code and outcome.failure_reason_code not in barriers:
+        barriers = [*barriers, outcome.failure_reason_code][-8:]
+    mechanism_refs = json.loads(mechanism_row["evidence_refs_json"]) if mechanism_row else []
+    if evidence_ref not in mechanism_refs:
+        mechanism_refs.append(evidence_ref)
+    evidence_count = int(mechanism_row["evidence_count"] if mechanism_row else 0) + 1
+    confidence = "high" if evidence_count >= 5 else "medium" if evidence_count >= 2 else "low"
+    await db.execute(
+        """INSERT INTO user_mechanism_profile
+           (user_id,mechanism_code,context_domain,evidence_count,last_seen_at,
+            typical_barriers_json,confidence,evidence_refs_json) VALUES(?,?,?,?,?,?,?,?)
+           ON CONFLICT(user_id,mechanism_code,context_domain) DO UPDATE SET
+            evidence_count=excluded.evidence_count,last_seen_at=excluded.last_seen_at,
+            typical_barriers_json=excluded.typical_barriers_json,confidence=excluded.confidence,
+            evidence_refs_json=excluded.evidence_refs_json""",
+        (experiment["user_id"], experiment["mechanism_code"], experiment["context_domain"],
+         evidence_count, captured_at, json.dumps(barriers, ensure_ascii=False), confidence,
+         json.dumps(mechanism_refs)),
+    )
+
+    skill_row = await (await db.execute(
+        """SELECT attempts_count,successes_count,independent_successes,worse_count,evidence_refs_json
+           FROM user_skill_effectiveness WHERE user_id=? AND skill_id=? AND mechanism_code=? AND context_domain=?""",
+        (experiment["user_id"], experiment["skill_id"], experiment["mechanism_code"], experiment["context_domain"]),
+    )).fetchone()
+    attempts = int(skill_row["attempts_count"] if skill_row else 0) + 1
+    successes = int(skill_row["successes_count"] if skill_row else 0) + int(outcome.success_criterion_met)
+    independent = int(skill_row["independent_successes"] if skill_row else 0) + int(
+        outcome.success_criterion_met and outcome.independent_use
+    )
+    worse = int(skill_row["worse_count"] if skill_row else 0) + int(outcome.emotional_change == "worse")
+    skill_refs = json.loads(skill_row["evidence_refs_json"]) if skill_row else []
+    if evidence_ref not in skill_refs:
+        skill_refs.append(evidence_ref)
+    successful = bool(outcome.success_criterion_met)
+    await db.execute(
+        """INSERT INTO user_skill_effectiveness
+           (user_id,skill_id,mechanism_code,context_domain,attempts_count,successes_count,
+            independent_successes,worse_count,last_used_at,effectiveness_band,
+            preferred_difficulty,preferred_trainer_style,evidence_refs_json)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(user_id,skill_id,mechanism_code,context_domain) DO UPDATE SET
+            attempts_count=excluded.attempts_count,successes_count=excluded.successes_count,
+            independent_successes=excluded.independent_successes,worse_count=excluded.worse_count,
+            last_used_at=excluded.last_used_at,effectiveness_band=excluded.effectiveness_band,
+            preferred_difficulty=COALESCE(excluded.preferred_difficulty,user_skill_effectiveness.preferred_difficulty),
+            preferred_trainer_style=COALESCE(excluded.preferred_trainer_style,user_skill_effectiveness.preferred_trainer_style),
+            evidence_refs_json=excluded.evidence_refs_json""",
+        (experiment["user_id"], experiment["skill_id"], experiment["mechanism_code"],
+         experiment["context_domain"], attempts, successes, independent, worse, captured_at,
+         _effectiveness_band(attempts, successes, independent, worse),
+         experiment["difficulty_level"] if successful else None,
+         experiment["trainer_style"] if successful else None, json.dumps(skill_refs)),
+    )
+
+
+async def get_behavioral_memory(
+    db_path: str, *, user_id: int, mechanism_code: str, context_domain: str,
+) -> Dict[str, Any]:
+    """Return reusable barriers and successful skills for a similar situation."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        mechanism = await (await db.execute(
+            """SELECT evidence_count,last_seen_at,typical_barriers_json,confidence,evidence_refs_json
+               FROM user_mechanism_profile WHERE user_id=? AND mechanism_code=? AND context_domain=?""",
+            (user_id, mechanism_code, context_domain),
+        )).fetchone()
+        skills = await (await db.execute(
+            """SELECT skill_id,effectiveness_band,attempts_count,successes_count,independent_successes,
+                      preferred_difficulty,preferred_trainer_style,evidence_refs_json
+               FROM user_skill_effectiveness
+               WHERE user_id=? AND mechanism_code=? AND context_domain=?
+                 AND effectiveness_band IN ('working','promising')
+               ORDER BY CASE effectiveness_band WHEN 'working' THEN 0 ELSE 1 END,
+                        independent_successes DESC,successes_count DESC""",
+            (user_id, mechanism_code, context_domain),
+        )).fetchall()
+    return {
+        "mechanism_code": mechanism_code,
+        "context_domain": context_domain,
+        "barriers": json.loads(mechanism["typical_barriers_json"]) if mechanism else [],
+        "mechanism_evidence_refs": json.loads(mechanism["evidence_refs_json"]) if mechanism else [],
+        "working_skills": [dict(row) | {"evidence_refs": json.loads(row["evidence_refs_json"])} for row in skills],
+    }
+
+
+async def get_skill_map_records(db_path: str, *, user_id: int) -> List[Dict[str, Any]]:
+    """Return structured evidence for the user-facing working-skills map."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT e.skill_id,e.mechanism_code,e.context_domain,e.attempts_count,
+                      e.successes_count,e.independent_successes,e.worse_count,e.last_used_at,
+                      e.effectiveness_band,e.preferred_difficulty,e.preferred_trainer_style,
+                      e.evidence_refs_json,COALESCE(p.recommendation_disabled,0) AS recommendation_disabled
+               FROM user_skill_effectiveness e
+               LEFT JOIN user_skill_preferences p ON p.user_id=e.user_id AND p.skill_id=e.skill_id
+               WHERE e.user_id=? ORDER BY e.last_used_at DESC,e.skill_id""",
+            (user_id,),
+        )).fetchall()
+    return [dict(row) | {"evidence_refs": json.loads(row["evidence_refs_json"])} for row in rows]
+
+
+async def set_skill_recommendation_disabled(
+    db_path: str, *, user_id: int, skill_id: str, disabled: bool, correction_id: str,
+) -> None:
+    """Apply the user's explicit recommendation preference without deleting evidence."""
+    if not skill_id.strip() or not correction_id.strip():
+        raise ValueError("skill_id and explicit correction reference are required")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """INSERT INTO user_skill_preferences
+               (user_id,skill_id,recommendation_disabled,correction_ref,updated_at) VALUES(?,?,?,?,?)
+               ON CONFLICT(user_id,skill_id) DO UPDATE SET
+               recommendation_disabled=excluded.recommendation_disabled,
+               correction_ref=excluded.correction_ref,updated_at=excluded.updated_at""",
+            (user_id, skill_id, int(disabled), f"user_correction:{correction_id}", _utc_iso()),
+        )
+        await db.commit()
+
+
+async def get_disabled_skill_ids(db_path: str, *, user_id: int) -> frozenset[str]:
+    async with aiosqlite.connect(db_path) as db:
+        rows = await (await db.execute(
+            "SELECT skill_id FROM user_skill_preferences WHERE user_id=? AND recommendation_disabled=1",
+            (user_id,),
+        )).fetchall()
+    return frozenset(str(row[0]) for row in rows)
+
+
+async def get_experiment_journal_records(
+    db_path: str, *, user_id: int, root_experiment_id: int | None = None,
+) -> List[Dict[str, Any]]:
+    """Reconstruct the journal only from normalized experiment-owned tables."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        params: list[Any] = [user_id]
+        chain_filter = ""
+        if root_experiment_id is not None:
+            chain_filter = """AND b.id IN (
+                WITH RECURSIVE chain(id) AS (
+                    SELECT id FROM behavioral_experiments WHERE id=? AND user_id=?
+                    UNION ALL
+                    SELECT child.id FROM behavioral_experiments child JOIN chain ON child.parent_experiment_id=chain.id
+                ) SELECT id FROM chain
+            )"""
+            params.extend((root_experiment_id, user_id))
+        rows = await (await db.execute(
+            f"""SELECT b.id AS experiment_id,b.parent_experiment_id,b.progression_type,b.skill_id,
+                       b.mechanism_code,b.context_domain,b.difficulty_level,b.instruction_variant,
+                       b.target_action,b.success_criterion,b.status,b.started_at,b.completed_at,
+                       s.task_summary,s.desired_action,h.confidence AS mechanism_confidence,
+                       o.action_started,o.action_persisted,o.emotional_change,o.success_criterion_met,
+                       o.independent_use,o.failure_reason_code,o.user_note_short,o.captured_at,
+                       d.decision AS next_action,d.reason_code AS decision_reason_code,
+                       d.next_experiment_id
+                FROM behavioral_experiments b
+                JOIN situation_snapshots s ON s.id=b.situation_id
+                JOIN mechanism_hypotheses h ON h.id=b.mechanism_hypothesis_id
+                LEFT JOIN experiment_outcomes o ON o.experiment_id=b.id
+                LEFT JOIN behavioral_experiment_decisions d ON d.id=(
+                    SELECT d2.id FROM behavioral_experiment_decisions d2
+                    WHERE d2.experiment_id=b.id ORDER BY d2.id DESC LIMIT 1
+                )
+                WHERE b.user_id=? {chain_filter}
+                ORDER BY COALESCE(b.started_at,b.completed_at,''),b.id""",
+            params,
+        )).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def get_value_proof_metrics(db_path: str, *, user_id: int) -> Dict[str, Any]:
+    """Measure offer value from normalized experiments, never calendar age alone."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            """SELECT COUNT(o.experiment_id) AS completed_experiments,
+                      COALESCE(SUM(CASE WHEN o.success_criterion_met=1 OR o.action_started='partial'
+                                        THEN 1 ELSE 0 END),0) AS successful_or_partial
+               FROM behavioral_experiments b
+               JOIN experiment_outcomes o ON o.experiment_id=b.id
+               WHERE b.user_id=? AND b.status='completed'""",
+            (user_id,),
+        )).fetchone()
+        latest = await (await db.execute(
+            """SELECT b.instruction_variant,b.skill_id,b.mechanism_code,o.action_started,
+                      o.emotional_change,o.success_criterion_met,o.failure_reason_code
+               FROM behavioral_experiments b JOIN experiment_outcomes o ON o.experiment_id=b.id
+               WHERE b.user_id=? AND b.status='completed'
+               ORDER BY o.captured_at DESC LIMIT 1""",
+            (user_id,),
+        )).fetchone()
+    return {
+        "completed_experiments": int(row["completed_experiments"] if row else 0),
+        "successful_or_partial": int(row["successful_or_partial"] if row else 0),
+        "latest_experiment": dict(latest) if latest else {},
+    }
+
+
+async def record_skill_mastery_transition(
+    db_path: str, *, user_id: int, skill_id: str, experiment_id: int,
+    from_status: str, to_status: str, reason_code: str,
+) -> int:
+    """Persist mastery history separately while requiring experiment evidence."""
+    allowed = {"NEW", "LEARNING", "PRACTICING", "MASTERED", "GENERALIZING"}
+    if from_status not in allowed or to_status not in allowed or not reason_code.strip():
+        raise ValueError("Valid mastery statuses and reason_code are required")
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA foreign_keys=ON")
+        evidence = await (await db.execute(
+            """SELECT situation_id,mechanism_code,context_domain FROM behavioral_experiments
+               WHERE id=? AND user_id=? AND skill_id=?""",
+            (experiment_id, user_id, skill_id),
+        )).fetchone()
+        if not evidence:
+            raise ValueError("Mastery transition requires a matching experiment")
+        cur = await db.execute(
+            """INSERT INTO skill_mastery_history
+               (user_id,skill_id,experiment_id,from_status,to_status,reason_code,created_at)
+               VALUES(?,?,?,?,?,?,?)""",
+            (user_id, skill_id, experiment_id, from_status, to_status, reason_code, _utc_iso()),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def get_skill_mastery_history(
+    db_path: str, *, user_id: int, skill_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        query = "SELECT * FROM skill_mastery_history WHERE user_id=?"
+        params: list[Any] = [user_id]
+        if skill_id is not None:
+            query += " AND skill_id=?"
+            params.append(skill_id)
+        query += " ORDER BY created_at,id"
+        rows = await (await db.execute(query, params)).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def apply_skill_mastery_signal(
+    db_path: str, *, user_id: int, skill_id: str, signal: "LearningSignal",
+    criteria: "LearningCriteria", initial_difficulty: int = 1,
+) -> "LearningUpdate":
+    """Atomically update mastery and append experiment-linked objective events."""
+    from core.learning_engine import (
+        LearningCriteria, LearningSignal, SkillMasteryState, apply_learning_signal, initial_mastery,
+    )
+    if not isinstance(signal, LearningSignal) or not isinstance(criteria, LearningCriteria):
+        raise TypeError("signal and criteria must be Learning Engine values")
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("BEGIN IMMEDIATE")
+        evidence = await (await db.execute(
+            """SELECT situation_id,mechanism_code,context_domain FROM behavioral_experiments
+               WHERE id=? AND user_id=? AND skill_id=?""",
+            (signal.experiment_id, user_id, skill_id),
+        )).fetchone()
+        if not evidence:
+            await db.rollback()
+            raise ValueError("Mastery signal requires a matching experiment")
+        row = await (await db.execute(
+            "SELECT * FROM skill_mastery WHERE user_id=? AND skill_id=?", (user_id, skill_id),
+        )).fetchone()
+        if row:
+            state = SkillMasteryState(
+                user_id, skill_id, row["status"], int(row["current_difficulty"]),
+                int(row["successful_practice_count"]), int(row["independent_use_count"]),
+                tuple(json.loads(row["generalized_contexts_json"])),
+                tuple(json.loads(row["failed_contexts_json"])), row["scaffolding_level"],
+                row["last_used_at"], bool(row["regression_flag"]), int(row["version"]),
+            )
+        else:
+            state = initial_mastery(user_id, skill_id, difficulty=initial_difficulty)
+        update = apply_learning_signal(state, signal, criteria)
+        value = update.state
+        try:
+            await db.execute(
+                """INSERT INTO skill_mastery
+                   (user_id,skill_id,status,current_difficulty,successful_practice_count,
+                    independent_use_count,generalized_contexts_json,failed_contexts_json,
+                    scaffolding_level,last_used_at,regression_flag,version)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(user_id,skill_id) DO UPDATE SET
+                    status=excluded.status,current_difficulty=excluded.current_difficulty,
+                    successful_practice_count=excluded.successful_practice_count,
+                    independent_use_count=excluded.independent_use_count,
+                    generalized_contexts_json=excluded.generalized_contexts_json,
+                    failed_contexts_json=excluded.failed_contexts_json,
+                    scaffolding_level=excluded.scaffolding_level,last_used_at=excluded.last_used_at,
+                    regression_flag=excluded.regression_flag,version=excluded.version""",
+                (user_id, skill_id, value.status, value.current_difficulty,
+                 value.successful_practice_count, value.independent_use_count,
+                 json.dumps(value.generalized_contexts), json.dumps(value.failed_contexts),
+                 value.scaffolding_level, value.last_used_at or _utc_iso(),
+                 int(value.regression_flag), value.version),
+            )
+            now = signal.occurred_at or _utc_iso()
+            for event in update.events:
+                await db.execute(
+                    """INSERT INTO skill_mastery_events
+                       (user_id,skill_id,experiment_id,event_type,from_status,to_status,context_domain,created_at)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    (user_id, skill_id, event.experiment_id, event.event_type,
+                     event.from_status, event.to_status, event.context_domain, now),
+                )
+                analytics_name = {
+                    "difficulty_up": "skill_advanced", "transfer": "skill_transferred",
+                    "mastered": "skill_mastered", "regression": "skill_regressed",
+                }.get(event.event_type)
+                if analytics_name:
+                    from core.behavioral_analytics import BehavioralAnalyticsEvent
+                    await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                        analytics_name, user_id, situation_id=int(evidence["situation_id"]),
+                        experiment_id=event.experiment_id, skill_id=skill_id,
+                        mechanism_code=str(evidence["mechanism_code"]),
+                        context_domain=event.context_domain,
+                    ), created_at=now)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        return update
+
+
+async def get_skill_mastery(db_path: str, *, user_id: int, skill_id: str) -> Optional[Dict[str, Any]]:
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM skill_mastery WHERE user_id=? AND skill_id=?", (user_id, skill_id),
+        )).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["generalized_contexts"] = json.loads(result.pop("generalized_contexts_json"))
+    result["failed_contexts"] = json.loads(result.pop("failed_contexts_json"))
+    return result
+
+
+async def correct_behavioral_pattern(
+    db_path: str, *, user_id: int, pattern_code: str, summary: str,
+    correction_id: str, delete: bool = False,
+) -> None:
+    """Apply an explicit user correction without modifying experiment history."""
+    if not correction_id.strip():
+        raise ValueError("An explicit user correction reference is required")
+    if not delete and (not summary.strip() or len(summary) > 280):
+        raise ValueError("Pattern summary must contain 1..280 characters")
+    async with aiosqlite.connect(db_path) as db:
+        if delete:
+            await db.execute(
+                "DELETE FROM behavioral_patterns WHERE user_id=? AND pattern_code=?",
+                (user_id, pattern_code),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO behavioral_patterns(user_id,pattern_code,summary,evidence_refs,last_updated_at)
+                   VALUES(?,?,?,?,?) ON CONFLICT(user_id,pattern_code) DO UPDATE SET
+                   summary=excluded.summary,evidence_refs=excluded.evidence_refs,last_updated_at=excluded.last_updated_at""",
+                (user_id, pattern_code, summary.strip(),
+                 json.dumps([f"user_correction:{correction_id}"]), _utc_iso()),
+            )
+        await db.commit()
+
+
+async def store_operational_context(
+    db_path: str, *, user_id: int, raw_context: str, ttl_seconds: int = 86400,
+) -> int:
+    """Store short-lived raw context outside durable behavioral memory."""
+    if not raw_context or not 60 <= ttl_seconds <= 7 * 86400:
+        raise ValueError("Operational context TTL must be between 60 seconds and 7 days")
+    created = datetime.now(timezone.utc)
+    expires = datetime.fromtimestamp(created.timestamp() + ttl_seconds, timezone.utc)
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "INSERT INTO operational_raw_context(user_id,raw_context,created_at,expires_at) VALUES(?,?,?,?)",
+            (user_id, raw_context, created.isoformat(), expires.isoformat()),
+        )
+        await db.commit()
+        return int(cur.lastrowid)
+
+
+async def purge_expired_operational_context(db_path: str, *, now: str | None = None) -> int:
+    """Delete expired raw context without touching structured memory or experiments."""
+    async with aiosqlite.connect(db_path) as db:
+        cur = await db.execute(
+            "DELETE FROM operational_raw_context WHERE expires_at <= ?", (now or _utc_iso(),),
+        )
+        await db.commit()
+        return int(cur.rowcount)
 
 
 async def capture_experiment_outcome(
@@ -2754,6 +3678,37 @@ async def capture_experiment_outcome(
                  int(outcome.independent_use), outcome.user_note_short,
                  failure_reason, captured_at),
             )
+            # Durable memory is a projection of a referenced experiment, never
+            # of raw conversation text or an unverified model inference.
+            await _update_behavioral_memory_in_transaction(db, outcome, captured_at)
+            analytics_experiment = await (await db.execute(
+                """SELECT user_id,situation_id,skill_id,mechanism_code,context_domain
+                   FROM behavioral_experiments WHERE id=?""", (outcome.experiment_id,),
+            )).fetchone()
+            from core.behavioral_analytics import BehavioralAnalyticsEvent
+            analytics_base = dict(
+                user_id=int(analytics_experiment["user_id"]),
+                situation_id=int(analytics_experiment["situation_id"]),
+                experiment_id=outcome.experiment_id,
+                skill_id=str(analytics_experiment["skill_id"]),
+                mechanism_code=str(analytics_experiment["mechanism_code"]),
+                context_domain=str(analytics_experiment["context_domain"]),
+            )
+            await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                "experiment_completed", outcome_label=outcome.emotional_change, **analytics_base,
+            ), created_at=captured_at)
+            if outcome.action_started in {"yes", "partial"}:
+                await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                    "action_started", outcome_label=outcome.action_started, **analytics_base,
+                ), created_at=captured_at)
+            if outcome.action_persisted in {"yes", "partial"}:
+                await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                    "action_persisted", outcome_label=outcome.action_persisted, **analytics_base,
+                ), created_at=captured_at)
+            if outcome.independent_use:
+                await _insert_behavioral_analytics(db, BehavioralAnalyticsEvent(
+                    "independent_use", outcome_label=outcome.action_started, **analytics_base,
+                ), created_at=captured_at)
             cur = await db.execute(
                 """UPDATE behavioral_experiments SET status=?,completed_at=?,state_revision=state_revision+1,
                    decision_reason_code=? WHERE id=? AND status='started' AND state_revision=?""",
@@ -2871,6 +3826,7 @@ ACTION_EVENT_TYPES = {
     "skill_result_reported",
     "crisis_started",
     "crisis_resolved_or_paused",
+    "extra_step_after_day_closed",
 }
 
 
