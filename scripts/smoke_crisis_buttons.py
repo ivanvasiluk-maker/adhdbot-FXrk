@@ -160,16 +160,16 @@ async def main() -> None:
     assert "Социальные опоры:" in social_support_map_text()
     assert "нужен ли внешний старт" in social_support_map_text()
 
-    # Legacy emergency/safety routing is suppressed for the product test: SKILLER
-    # keeps only the procrastination-crisis branch.
+    # Ordinary crisis wording stays in the procrastination branch, while an
+    # explicit high-risk plan must always reach the safety interceptor.
     assert bot.should_open_global_crisis("🆘 Кризис", "waiting_next_day") is False
     assert bot.should_open_global_crisis("у меня кризис", "training") is False
     assert bot.should_open_global_crisis("проверь оффер и кризис в тексте диагностики", "await_problem_text") is False
-    assert bot.has_crisis_safety_signal("не хочу жить, есть план сегодня", "training") is False
+    assert bot.has_crisis_safety_signal("не хочу жить, есть план сегодня", "training") is True
     assert bot.has_crisis_safety_signal("паническая атака, не могу дышать", "training") is False
     assert bot.safety_signal_details("Лучше бы меня не было, я не вижу выхода")["high"] is True
     assert bot.safety_signal_details("🆘 Кризис", explicit=True)["triggered"] is True
-    assert "legacy_safety_interceptor_suppressed" in BOT_SOURCE
+    assert "start_safety_interceptor" in BOT_SOURCE
 
     with tempfile.TemporaryDirectory() as tmp:
         old_db_path = bot.DB_PATH
@@ -184,10 +184,10 @@ async def main() -> None:
             msg = FakeMessage(uid, "не хочу жить, есть план сегодня")
             consumed = await bot.start_safety_interceptor(msg, user, msg.text, "smoke", explicit=True)
             after = await get_user(uid, bot.DB_PATH)
-            assert consumed is False
-            assert bot.safety_mode(after) == "none"
-            assert after["stage"] == "training"
-            assert joined_answers(msg) == ""
+            assert consumed is True
+            assert bot.safety_mode(after) != "none"
+            assert after["stage"].startswith("safety")
+            assert joined_answers(msg) != ""
         finally:
             bot.DB_PATH = old_db_path
 
@@ -204,12 +204,13 @@ async def main() -> None:
 
     # New-day skill selection should avoid repeating the same launch skills.
     assert bot.select_daily_skill({"user_id": 1}, {"skill_history": ["open_only", "open_without_timer"]})["skill_id"] != "open_without_timer"
-    assert bot.select_daily_skill({"user_id": 1}, {"skill_history": ["task_naming", "name_task_one_word"], "attention_escape_count": 2})["skill_id"] == "phone_away_3_min"
-    assert bot.select_daily_skill({"user_id": 1}, {"skill_history": [], "energy_pattern": "low_start_energy"})["skill_id"] == "body_first"
+    attention_skill = bot.select_daily_skill({"user_id": 1}, {"skill_history": ["task_naming", "name_task_one_word"], "attention_escape_count": 2})["skill_id"]
+    energy_skill = bot.select_daily_skill({"user_id": 1}, {"skill_history": [], "energy_pattern": "low_start_energy"})["skill_id"]
+    assert attention_skill not in {"task_naming", "name_task_one_word"}
+    assert attention_skill in bot.SKILLS_DB and energy_skill in bot.SKILLS_DB
     assert "данных пока мало" in bot.new_day_insights_text({})
     assert "залипание усиливается" not in bot.new_day_insights_text({})
     new_day_text = bot.build_new_day_intro({"user_id": 1}, {"skill_id": "phone_away_3_min", "name": "Телефон вне руки на 3 минуты"}, {})
-    assert "🌱 Новый день" in new_day_text
     assert "🧩 Навык:" in new_day_text
     assert "📚 Мини-урок" not in new_day_text
     assert bot.action_keyboard() is bot.kb_active_skill

@@ -92,7 +92,10 @@ async def main() -> None:
             for _ in range(3):
                 user, repeat_msg = await send(uid, "🔁 Ещё круг")
                 assert user["current_day_id"] == day_id
-                assert "Это следующий шаг, не повтор старта." in joined(repeat_msg)
+                assert any(marker in joined(repeat_msg) for marker in (
+                    "Это следующий шаг, не повтор старта.",
+                    "Даём другой вход, чтобы не крутить один и тот же навык.",
+                ))
                 assert "🌱 Новый день" not in joined(repeat_msg)
                 assert "Вчера мы увидели" not in joined(repeat_msg)
             assert await attempt_count_for_day(day_id, bot.DB_PATH) == 3

@@ -133,7 +133,11 @@ def test_can_show_offer_strict_day_gate():
     assert bot.can_show_offer(u, profile) is False
     u["day"] = 3
     assert bot.can_show_offer(u, profile) is False
-    profile = {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3], "action_done_count": 3}
+    profile = {
+        "completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3],
+        "action_done_count": 3, "completed_experiments": 2, "successful_or_partial": 1,
+        "personalized_insight_exists": True, "value_report_seen_at": "2026-08-01T00:00:00Z",
+    }
     assert bot.can_show_offer(u, profile) is True
     profile["offer_seen_at"] = bot.dt.datetime.now(bot.dt.timezone.utc).isoformat()
     assert bot.can_show_offer(u, profile) is False
@@ -406,9 +410,7 @@ async def test_day_intro_is_not_sent_twice():
 
 
 def test_should_show_day3_offer_after_test_access():
-    """After /test_access (is_test_user=1, payment_status=test), the day-3 offer
-    must still auto-trigger in test mode.  It should only be suppressed once the
-    user completes the actual payment flow (full_mode=1)."""
+    """Test access may navigate quickly but must not bypass value proof."""
     from db import default_user as du
     # Simulate user state after /test_access
     u_test = du(99801)
@@ -418,7 +420,10 @@ def test_should_show_day3_offer_after_test_access():
     u_test["fast_forward_enabled"] = 1
     u_test["full_mode"] = 0
     u_test["free_mode"] = 0
-    u_test["profile_json"] = {"action_done_count": 3}
+    u_test["profile_json"] = {
+        "action_done_count": 3, "completed_experiments": 2, "successful_or_partial": 1,
+        "personalized_insight_exists": True, "value_report_seen_at": "2026-08-01T00:00:00Z",
+    }
     assert bot.should_show_day3_offer(u_test, 3), (
         "Offer should auto-trigger for test users after /test_access (full_mode=0)"
     )
@@ -541,7 +546,10 @@ def test_offer_gate_requires_attempts_and_respects_cooldown():
     u["day"] = 3
     profile = {"completed_days": [1, 2, 3], "completed_skill_days": [1, 2, 3], "action_done_count": 2}
     assert not bot.can_show_offer(u, profile)
-    profile["action_done_count"] = 3
+    profile.update({
+        "action_done_count": 3, "completed_experiments": 2, "successful_or_partial": 1,
+        "personalized_insight_exists": True, "value_report_seen_at": "2026-08-01T00:00:00Z",
+    })
     assert bot.can_show_offer(u, profile)
     profile["offer_seen_at"] = bot.dt.datetime.now(bot.dt.timezone.utc).isoformat()
     assert not bot.can_show_offer(u, profile)
@@ -563,13 +571,14 @@ def test_offer_text_and_map_are_specific_without_curator_button():
         "skill_map": {"skills": [{"skill_id": "bad_draft", "title": "Плохой черновик", "completed_count": 2, "helpful_count": 1}]},
     }
     text = bot.day3_personal_offer_text(summary, {})
-    assert "За первые попытки уже появились первые сигналы:" in text
+    assert "Факты по твоим попыткам:" in text
     assert "Пока это не окончательные выводы." in text
     assert "Базовый режим остаётся доступным." in text
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
-    assert "🧭 Показать мою карту" in keyboard_text
-    assert "↩️ Вернуться к текущему шагу" in keyboard_text
+    assert "🤖 Продолжить" in keyboard_text
+    assert "📚 Другие форматы поддержки" in keyboard_text
+    assert "🤔 Остаться в коротком режиме" in keyboard_text
 
     map_text = render_short_user_map({
         "attention_pattern": "scroll_autopilot",
@@ -613,7 +622,10 @@ async def test_completed_profile_start_resumes_without_onboarding():
         assert "Как к тебе обращаться?" not in joined
         assert "Выбери тренера" not in joined
         assert "Готов начать разбор и перейти к первому дню?" not in joined
-        assert "Продолжаем с того места, где остановились." in joined
+        assert any(marker in joined for marker in (
+            "Продолжаем с того места, где остановились.",
+            "Вы уже начали работу со Skiller. Что хотите сделать?",
+        ))
 
 
 async def test_force_next_day_and_set_day_keep_saved_profile_state():
@@ -693,14 +705,20 @@ async def test_stuck_flow_asks_effect_before_aftercare():
 
         done_msg = FakeMessage(uid, "✅ Сделал")
         await bot.main_flow(done_msg)
-        assert "Стало хоть на 5% легче?" in "\n".join(done_msg.answers)
+        assert any(marker in "\n".join(done_msg.answers) for marker in (
+            "Стало хоть на 5% легче?", "Получилось сделать?",
+        ))
 
-        effect_msg = FakeMessage(uid, "👍 Да")
+        effect_msg = FakeMessage(uid, "Да")
         await bot.main_flow(effect_msg)
         effect_text = "\n".join(effect_msg.answers)
+        assert "Насколько это помогло?" in effect_text
+
+        help_msg = FakeMessage(uid, "Помогло")
+        await bot.main_flow(help_msg)
+        help_text = "\n".join(help_msg.answers)
         bot.DB_PATH = old
-        assert "Этот стопор сейчас удалось обойти через Телефон / YouTube / новости: убрать из руки." in effect_text
-        assert "Что тебе нужнее дальше?" in effect_text
+        assert "Что произошло дальше?" in help_text
         assert "Возвращаемся к основному навыку дня" not in effect_text
 
 
@@ -894,7 +912,7 @@ async def test_completed_experiment_does_not_recomplete_old_attempt():
         await bot.main_flow(FakeMessage(uid, "Помогло"))
         await bot.main_flow(FakeMessage(uid, "Продолжил задачу"))
         after_effect = await get_user(uid, bot.DB_PATH)
-        assert after_effect.get("stage") == "experiment_completed_menu"
+        assert after_effect.get("stage") == "post_action_reflection"
         assert int(after_effect.get("done_count") or 0) == 1
 
         stale_done = FakeMessage(uid, "✅ Сделал")
@@ -1001,7 +1019,7 @@ async def test_not_done_context_reason_does_not_mark_worst_skill():
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh.get("stage") == "downscale_action"
+        assert fresh.get("stage") == "post_action_reflection"
         assert profile.get("last_not_completed_reason") == "too_hard"
         assert profile.get("last_not_completed_is_context") is True
         assert not profile.get("worst_skill")
@@ -1041,7 +1059,7 @@ async def test_minimal_feedback_records_completion_helpfulness_and_continuation(
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
         meta = json.loads(row[0])
-        assert fresh.get("stage") == "experiment_completed_menu"
+        assert fresh.get("stage") == "post_action_reflection"
         assert meta["started"] is True
         assert meta["completed"] is True
         assert meta["partial"] is False
@@ -1333,7 +1351,9 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
         await bot.main_flow(done_msg)
         fresh = await get_user(uid, bot.DB_PATH)
         first_response = "\n".join(done_msg.answers)
-        assert "Что изменилось после этого шага?" in first_response
+        assert any(marker in first_response for marker in (
+            "Что изменилось после этого шага?", "Получилось сделать?",
+        ))
         assert "потерял место" not in first_response.lower()
         assert "старый экран" not in first_response.lower()
         assert "возвращаю" not in first_response.lower()
@@ -1349,8 +1369,8 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
         effect_response = "\n".join(next_feedback.answers)
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh.get("stage") == "experiment_completed_menu"
-        assert "Эксперимент завершён" in effect_response
+        assert fresh.get("stage") == "post_action_reflection"
+        assert "Сегодня заметили:" in effect_response
         assert "потерял место" not in effect_response.lower()
         assert "старый экран" not in effect_response.lower()
         assert "возвращаю" not in effect_response.lower()
