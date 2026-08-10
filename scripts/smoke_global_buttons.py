@@ -35,7 +35,7 @@ def main() -> None:
         "🔄 Выбрать другой навык": "change_skill",
         "🤷 Не моё": "change_skill",
         "🎭 Сменить тренера": "trainer_switch",
-        "🆘 Кризис прокрастинации": "stuck",
+        "🆘 Кризис прокрастинации": "crisis",
         "Ещё": "more",
         "📚 Почему это работает": "why",
         "🧠 Почему этот навык": "why_skill",
@@ -61,9 +61,9 @@ def main() -> None:
     assert "Пропуск записал как данные" in BOT_SOURCE
     assert "Ок. Не будем повторять навык, который сейчас не ложится." in BOT_SOURCE
     assert "Задача, карта и прогресс сохранятся." in BOT_SOURCE
-    assert bot.global_button_kind("🆘 Кризис", "🆘 кризис") == ""
+    assert bot.global_button_kind("🆘 Кризис", "🆘 кризис") == "crisis"
     assert bot.global_button_kind("🆘 Мне небезопасно", "🆘 мне небезопасно") == ""
-    assert bot.has_crisis_safety_signal("не хочу жить", "training") is False
+    assert bot.has_crisis_safety_signal("не хочу жить", "training") is True
     assert bot.should_open_global_crisis("у меня кризис", "training") is False
 
     for key in ("marsha", "skinny", "beck"):
