@@ -60,7 +60,8 @@ class PostActionFeedbackTests(unittest.TestCase):
         labels = [button.text for row in bot.kb_completed_day_open.keyboard for button in row]
         self.assertEqual(labels, [
             "🎯 Разобрать ещё одну ситуацию", "⚡ Дать короткий навык",
-            "🧠 Что я сегодня понял", "📚 Что посмотреть / почитать", "🌙 На сегодня хватит",
+            "🧠 Что я сегодня понял", "✏️ Исправить вывод",
+            "📚 Что посмотреть / почитать", "🌙 На сегодня хватит",
         ])
 
 

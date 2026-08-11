@@ -101,6 +101,9 @@ from core.experiment_core import BehavioralExperiment
 from core.outcome_model import ExperimentOutcome
 from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
+from core.personal_working_model import render_working_model, update_working_model
+from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
+from core.session_continuity import render_return_continuity, render_session_closure
 from core.ranking_engine import PersonalSkillState, RankingInput, choose_skill
 import core.product_config as product_config
 import sheets_sync as sheets_sync_module
@@ -386,6 +389,7 @@ kb_completed_day_open = ReplyKeyboardMarkup(
         [KeyboardButton(text="🎯 Разобрать ещё одну ситуацию")],
         [KeyboardButton(text="⚡ Дать короткий навык")],
         [KeyboardButton(text="🧠 Что я сегодня понял")],
+        [KeyboardButton(text="✏️ Исправить вывод")],
         [KeyboardButton(text="📚 Что посмотреть / почитать")],
         [KeyboardButton(text="🌙 На сегодня хватит")],
     ],
@@ -4281,6 +4285,7 @@ async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: st
     await _process_normalized_feedback(u, feedback)
     u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
     reflection = build_user_post_action_reflection(u, feedback, u["profile_json"])
+    u["profile_json"] = await persist_personal_working_model(u, feedback, u["profile_json"])
     await record_profile_signal(u["user_id"], "training", {
         "last_memory_anchor": reflection.memory_anchor,
         "last_session_pattern": reflection.personal_pattern,
@@ -4403,6 +4408,34 @@ def build_user_post_action_reflection(
         known_pattern=known_pattern,
     ))
 
+
+async def persist_personal_working_model(
+    u: Dict[str, Any], feedback: Dict[str, Any], profile: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Persist one compact observation backed by the current experiment/attempt."""
+    attempt = active_attempt(u)
+    evidence_ref = str(
+        u.get("active_experiment_id") or attempt.get("experiment_id")
+        or attempt.get("attempt_id") or ""
+    )
+    if not evidence_ref:
+        return profile
+    sid = str(feedback.get("skill_id") or current_skill_for_action(u) or "")
+    skill = SKILLS_DB.get(sid) or {}
+    model = update_working_model(
+        profile.get("personal_working_model"),
+        barrier=str(feedback.get("barrier") or profile.get("last_not_completed_reason") or "барьер уточняется"),
+        skill_title=str(skill.get("name") or sid or "короткий вход"),
+        context=str(attempt.get("context_domain") or "general"),
+        successful=bool(feedback.get("completed") or feedback.get("partial")),
+        evidence_ref=evidence_ref,
+        step_size=str(attempt.get("current_step") or u.get("current_next_physical_step") or ""),
+    )
+    return await update_user_profile(
+        u["user_id"], {"personal_working_model": model.as_dict()}, DB_PATH,
+        source="personal_working_model_evidence",
+    )
+
 async def ask_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, source: str) -> bool:
     if source not in {"action_done", "downscale_done", "downscale_name_done", "return"}:
         return False
@@ -4446,6 +4479,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         patch.update({"continued_after_skill_count": int(profile.get("continued_after_skill_count") or 0) + 1})
     await _process_normalized_feedback(u, feedback)
     reflection = build_user_post_action_reflection(u, feedback, profile)
+    profile = await persist_personal_working_model(u, feedback, profile)
     patch.update({
         "last_memory_anchor": reflection.memory_anchor,
         "last_session_pattern": reflection.personal_pattern,
@@ -4575,6 +4609,7 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
             "barrier": result_status if not completed else "",
         }
         reflection = build_user_post_action_reflection(u, feedback, profile)
+        profile = await persist_personal_working_model(u, feedback, profile)
         await record_profile_signal(u["user_id"], "training", {
             "last_memory_anchor": reflection.memory_anchor,
             "last_session_pattern": reflection.personal_pattern,
@@ -8247,6 +8282,29 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         return False
     if not day_closed_today(u):
         return False
+    if u.get("stage") == "personal_model_correction":
+        if not closed_day_substantive_message(text):
+            await answer_with_keyboard(
+                m, u, "Напиши одной короткой фразой, что я понял неверно или как сформулировать точнее.",
+                kb_completed_day_open, "personal_model_correction",
+            )
+            return True
+        correction = " ".join(text.split())[:240]
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        model = dict(profile.get("personal_working_model") or {})
+        model["explicit_user_correction"] = correction
+        model["confidence"] = "user_corrected"
+        await update_user_profile(
+            u["user_id"], {"personal_working_model": model, "last_memory_anchor": correction},
+            DB_PATH, source="explicit_user_correction",
+        )
+        u["stage"] = "day_core_stop"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(
+            m, u, f"Исправил вывод: {correction}\n\nИстория попыток при этом сохранена.",
+            kb_completed_day_open, "day_core_stop",
+        )
+        return True
     if u.get("stage") == "closed_day_new_situation":
         if closed_day_substantive_message(text):
             await start_closed_day_additional_analysis(m, u, text)
@@ -8292,7 +8350,11 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         if text == "🌙 Нет, оставить день закрытым" or low.startswith("нет"):
             u["stage"] = "day_core_stop"
             await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Ок. Оставляем день закрытым. До завтра.", kb_day_core_stop, "day_core_stop")
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            await answer_with_keyboard(
+                m, u, render_session_closure(str(profile.get("last_memory_anchor") or "")),
+                kb_completed_day_open, "day_core_stop",
+            )
             return True
     if kind == "map":
         await send_user_map(m, u, "day_closed")
@@ -8314,13 +8376,23 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
     if text == "🧠 Что я сегодня понял":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         anchor = str(profile.get("last_memory_anchor") or "Пока нет конкретного вывода — сначала нужна одна проверенная попытка.")
-        await answer_with_keyboard(m, u, f"Запомнить: {anchor}", kb_completed_day_open, "day_core_stop")
+        model_text = render_working_model(profile.get("personal_working_model") or {})
+        await answer_with_keyboard(m, u, f"{model_text}\n\nЗапомнить: {anchor}", kb_completed_day_open, "day_core_stop")
+        return True
+    if text == "✏️ Исправить вывод":
+        u["stage"] = "personal_model_correction"
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(
+            m, u, "Напиши одной короткой фразой, что я понял неверно или как сформулировать точнее.",
+            kb_completed_day_open, "personal_model_correction",
+        )
         return True
     if text == "📚 Что посмотреть / почитать":
         sid = current_skill_for_action(u) or current_skill_id(u)
-        skill = SKILLS_DB.get(sid) or {}
-        explanation = skill.get("why_short") or skill.get("explain") or "Смотри не на объём задачи, а на то, какое первое действие реально запускается."
-        await answer_with_keyboard(m, u, f"Коротко по сегодняшней проверке:\n\n{explanation}", kb_completed_day_open, "day_core_stop")
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        barrier = str(profile.get("last_not_completed_reason") or "")
+        item = CONTENT_REGISTRY.select(barrier_type=barrier, skill_id=str(sid or ""))
+        await answer_with_keyboard(m, u, render_content_suggestion(item, reason="он связан с сегодняшней проверкой"), kb_completed_day_open, "day_core_stop")
         return True
     if text == "🌙 На сегодня хватит":
         u["stage"] = "day_core_stop"
@@ -10167,6 +10239,7 @@ async def resume_daily_flow(message: Message, u: Dict[str, Any], *, announce: bo
 
 kb_existing_user_start = ReplyKeyboardMarkup(
     keyboard=[
+        [KeyboardButton(text="Проверим снова"), KeyboardButton(text="Сегодня другое")],
         [KeyboardButton(text="Продолжить сегодняшний день")],
         [KeyboardButton(text="Начать новый день")],
         [KeyboardButton(text="Открыть мою карту")],
@@ -10198,7 +10271,12 @@ async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
     u["stage"] = "existing_user_start_menu"
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "start_repeat", {"stage": u.get("stage"), "analytics_event": False}, db_path=DB_PATH)
-    await m.answer("Вы уже начали работу со Skiller. Что хотите сделать?", reply_markup=kb_existing_user_start)
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    anchor = str(profile.get("last_memory_anchor") or "")
+    await m.answer(
+        "Вы уже начали работу со Skiller. Что хотите сделать?\n\n" + render_return_continuity(anchor),
+        reply_markup=kb_existing_user_start,
+    )
 
 async def reset_user_to_onboarding(u: Dict[str, Any]) -> None:
     keep = {"user_id", "telegram_id", "chat_id", "username", "timezone", "notifications_enabled", "notification_consent", "is_test_user"}
@@ -10345,11 +10423,11 @@ async def main_flow(m: Message):
         return
 
     if u.get("stage") == "existing_user_start_menu":
-        if text == "Продолжить сегодняшний день":
+        if text in {"Продолжить сегодняшний день", "Проверим снова"}:
             await log_event(uid, "start_menu_continue_today", {"analytics_event": False}, db_path=DB_PATH)
             await resume_daily_flow(m, u, announce=True)
             return
-        if text == "Начать новый день":
+        if text in {"Начать новый день", "Сегодня другое"}:
             await log_event(uid, "start_menu_new_day", {"analytics_event": False}, db_path=DB_PATH)
             await start_new_day(uid, m, u, "repeat_start_menu")
             return
@@ -10701,7 +10779,11 @@ async def main_flow(m: Message):
         if text == "Закрыть день":
             await mark_day_closed(u, "experiment_completed_menu")
             await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            await answer_with_keyboard(
+                m, u, render_session_closure(str(profile.get("last_memory_anchor") or "")),
+                kb_completed_day_open, "day_core_stop",
+            )
             return
         await answer_with_keyboard(m, u, "Выбери следующий шаг после вывода:", kb_post_action_reflection, "post_action_reflection")
         return
