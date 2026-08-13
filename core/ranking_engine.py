@@ -196,9 +196,15 @@ def choose_skill(skills: Sequence[Skill], data: RankingInput) -> tuple[RankingDe
         progression = "repeat"
     else:
         progression = "first"
+    # Auditing needs both policy exclusions and the strongest eligible losers;
+    # user-facing rendering never exposes either internal code or score.
+    eligible_losers = tuple(
+        RejectedCandidate(item.skill_id, ("LOWER_POLICY_RANK", *item.reason_codes))
+        for item in ranked[1:4]
+    )
     decision = RankingDecision(
         winner.skill_id, winner.selected_difficulty, progression, winner.reason_codes,
-        tuple(rejected[:5]), data.policy_version,
+        tuple((*rejected, *eligible_losers)[:5]), data.policy_version,
     )
     return decision, ranked
 

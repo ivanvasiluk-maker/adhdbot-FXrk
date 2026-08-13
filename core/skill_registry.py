@@ -99,9 +99,12 @@ class FileSkillRegistry:
                 issues = [*_raw_issues(raw, card.skill), *validate_skill(card.skill, source_version=card.semver)]
                 fatal = [issue for issue in issues if issue.fatal]
                 if fatal:
-                    if fail_closed:
+                    # Fail closed only for cards claiming production eligibility.
+                    # Draft contours are isolated with inspectable errors and can
+                    # never enter an allowed/rankable candidate set.
+                    if fail_closed and card.skill.quality_status == "production":
                         raise SkillLibraryError(_format_issues(fatal))
-                    parse_issues.extend(fatal)
+                    parse_issues.extend(issues)
                     continue
                 if issues:
                     parse_issues.extend(issues)
@@ -184,6 +187,12 @@ class FileSkillRegistry:
              "status": card.skill.quality_status, "source": card.source_path}
             for card in sorted(self._cards.values(), key=lambda item: (item.skill.id, _semver_key(item.semver)))
         ]}
+
+    def contour_counts(self) -> dict[str, int]:
+        counts = {status: 0 for status in ("production", "reviewed", "experimental", "disabled")}
+        for card in self._latest_cards().values():
+            counts[card.skill.quality_status] = counts.get(card.skill.quality_status, 0) + 1
+        return counts
 
 
 def _semver_key(value: str) -> tuple[int, int, int]:

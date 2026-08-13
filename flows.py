@@ -22,6 +22,7 @@ from texts import (
 )
 from skills import SKILLS_DB, get_current_plan, build_28_day_plan, build_plan
 from core.state_machine import FlowState, start_experiment
+from core.legacy_flow_adapter import set_legacy_day, set_legacy_stage
 from db import (
     get_user, save_user, log_event, USER_FIELDS, is_paid, update_user_profile,
     diagnosis_user_profile_patch, get_user_profile, render_development_avatar,
@@ -162,8 +163,8 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
         source="daily_focus",
     )
 
-    u["day"] = day
-    u["stage"] = "await_training_target"
+    set_legacy_day(u, day)
+    set_legacy_stage(u, "await_training_target")
     u["pending_skill_id"] = sid
     u["pending_skill_day"] = day
     set_skill_explanation_context(u, skill, sid)
@@ -237,8 +238,8 @@ async def start_day1(m: Message, u: Dict[str, Any], db_path: str):
         source="daily_focus",
     )
     set_skill_explanation_context(u, skill, sid)
-    u["day"] = 1
-    u["stage"] = "await_training_target"
+    set_legacy_day(u, 1)
+    set_legacy_stage(u, "await_training_target")
     u["pending_skill_id"] = sid
     u["pending_skill_day"] = 1
     await save_user(u, db_path)
@@ -301,8 +302,8 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
     await log_event(u["user_id"], "training", "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning", {"keyboard": "training_main", "button_count": button_count}, db_path)
     await m.answer(trainer_say(trainer_key, msg), reply_markup=kb_training_main if button_count <= MAX_KEYBOARD_BUTTONS else None)
 
-    u["day"] = day
-    u["stage"] = "await_training_target"
+    set_legacy_day(u, day)
+    set_legacy_stage(u, "await_training_target")
     u["pending_skill_id"] = sid
     u["pending_skill_day"] = day
     await save_user(u, db_path)
@@ -319,7 +320,7 @@ async def start_day_simple(m: Message, u: Dict[str, Any], day: int, db_path: str
 
 async def advance_day(m: Message, u: Dict[str, Any], next_day: int, db_path: str):
     """Перейти на следующий день"""
-    u["day"] = next_day
+    set_legacy_day(u, next_day)
     await save_user(u, db_path)
     await start_day_simple(m, u, next_day, db_path)
 
@@ -340,7 +341,7 @@ async def handle_crisis(m: Message, u: dict, user_text: str, db_path: str, sheet
 
     await log_event(u["user_id"], u.get("stage", ""), "crisis_message", {"len": len(user_text or "")}, db_path, sheets_webhook)
     gamify_apply(u, 1, "crisis_used")
-    u["stage"] = "crisis_stabilize"
+    set_legacy_stage(u, "crisis_stabilize")
     await save_user(u, db_path)
     await log_event(u["user_id"], "crisis_stabilize", "crisis_stabilize_shown", {}, db_path, sheets_webhook)
     await m.answer(crisis_stabilize_text(), reply_markup=kb_crisis_stabilize)
@@ -1335,7 +1336,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 
     if analysis_needs_more_input(user_text):
         u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True), ensure_ascii=False)
-        u["stage"] = "analysis_need_more"
+        set_legacy_stage(u, "analysis_need_more")
         await save_user(u, db_path)
         await log_event(u["user_id"], "analysis", "analysis_needs_more_input", {"len": len(user_text or "")}, db_path, sheets_webhook)
         button_count = keyboard_button_count(kb_analysis_need_more)
@@ -1371,7 +1372,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     analysis_result = build_analysis_result(comp_to_store, user_text)
     if len(analysis_result.get("evidence_signals") or []) < 3:
         u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
-        u["stage"] = "analysis_need_more"
+        set_legacy_stage(u, "analysis_need_more")
         await save_user(u, db_path)
         await log_event(u["user_id"], "analysis", "analysis_evidence_too_low", {"signals": len(analysis_result.get("evidence_signals") or [])}, db_path, sheets_webhook)
         await m.answer(analysis_need_more_text(user_text), reply_markup=kb_analysis_need_more)
@@ -1388,10 +1389,10 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
     u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
-    u["day"] = 1
+    set_legacy_day(u, 1)
 
     # set stage to confirm comprehensive analysis and persist
-    u["stage"] = "confirm_analysis"
+    set_legacy_stage(u, "confirm_analysis")
     await save_user(u, db_path)
 
     # Log that analysis was shown

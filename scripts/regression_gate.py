@@ -23,6 +23,8 @@ CHECKS = (
     (PYTHON, "scripts/smoke_persistent_user_state.py"),
     (PYTHON, "scripts/smoke_day_flow.py"),
     (PYTHON, "scripts/check_build_sanity.py"),
+    (PYTHON, "scripts/check_product_policy.py"),
+    (PYTHON, "scripts/check_legacy_state_writes.py"),
     (PYTHON, "scripts/validate_skills.py"),
 )
 

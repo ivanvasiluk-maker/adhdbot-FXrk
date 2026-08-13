@@ -44,7 +44,7 @@ class FileSkillRegistryTests(unittest.TestCase):
 
     def test_invalid_experimental_is_isolated(self):
         invalid = card("draft", status="experimental", mechanism="invented", fallback=())
-        registry = self.load([invalid], fail_closed=False)
+        registry = self.load([invalid], fail_closed=True)
         self.assertIsNone(registry.get("draft"))
         self.assertTrue(registry.explain_validation_error("draft"))
 
@@ -66,6 +66,8 @@ class FileSkillRegistryTests(unittest.TestCase):
         self.assertEqual(len(registry.manifest()["cards"]), 300)
         self.assertLess(time.monotonic() - started, 2.0)
         self.assertEqual(registry.get_candidates("evaluation_avoidance", "work", "start"), ())
+        self.assertEqual(registry.contour_counts()["experimental"], 300)
+        self.assertEqual(registry.contour_counts()["production"], 0)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ class SkillSchemaTests(unittest.TestCase):
     def test_invalid_cross_reference_fails_registry_startup(self):
         invalid = Skill(
             "bad", 2, "Bad", "bad", "OTHER", ("overwhelm",), ("start",), ("work",),
-            (), (), (), (), ("missing",), (1,), "min", "standard", "done", (), "twice", 2,
+            (), (), (), (), ("missing",), (1,), "min", "standard", "done", ("Что изменилось?",), "twice", 2,
             "repeat", (), "review", "production",
             {"marsha": "a", "skinny": "b", "beck": "c"},
         )

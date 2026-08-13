@@ -21,7 +21,7 @@ success_metric: percentage of interrupted users resuming within 24 hours
 requires_engine: learning  # optional: learning | ranking
 ```
 
-Run `python scripts/check_product_policy.py path/to/feature.json` in review/CI. It exits non-zero when the constitution rejects the proposal and prints the stable reason code.
+Add every user-facing scenario to `features/*.json`. Run `python scripts/check_product_policy.py`; CI validates every specification, exits non-zero when the constitution rejects one, and prints its stable reason code.
 
 ## Runtime flags
 
@@ -30,4 +30,4 @@ Run `python scripts/check_product_policy.py path/to/feature.json` in review/CI. 
 | `LEARNING_ENGINE_ENABLED` | `false` | Enable learning-engine features. |
 | `RANKING_ENGINE_ENABLED` | `false` | Enable ranking-engine features. |
 | `ACTIVE_SKILL_QUALITY_LEVEL` | `validated` | Active skill-library quality contour. |
-| `BASE_OFFER_EUR` | `14.98` | Base offer in euros. |
+| `BASE_OFFER_EUR` | `5.00` | Base offer in euros. |

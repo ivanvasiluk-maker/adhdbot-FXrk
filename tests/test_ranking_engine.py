@@ -70,6 +70,12 @@ class RankingEngineTests(unittest.TestCase):
         self.assertNotIn("MECHANISM_MATCH", text)
         self.assertNotIn("score", text.lower())
 
+    def test_decision_keeps_top_eligible_losers_for_audit(self):
+        decision, _ = choose_skill(self.skills, self.data())
+        losers = {item.skill_id: item.reason_codes for item in decision.rejected_top_candidates}
+        self.assertTrue(losers)
+        self.assertTrue(any("LOWER_POLICY_RANK" in codes for codes in losers.values()))
+
 
 if __name__ == "__main__":
     unittest.main()

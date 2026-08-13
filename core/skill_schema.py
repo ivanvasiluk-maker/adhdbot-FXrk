@@ -70,6 +70,12 @@ class SkillRegistry:
                 raise SkillRegistryError(f"{skill.id}: at least one mechanism is required")
             if not skill.completion_criterion.strip():
                 raise SkillRegistryError(f"{skill.id}: completion criterion is required")
+            if not skill.min_variant.strip() or not skill.standard_variant.strip():
+                raise SkillRegistryError(f"{skill.id}: minimum and standard variants are required")
+            if skill.minimum_successes < 1 or not str(skill.mastery_criteria).strip():
+                raise SkillRegistryError(f"{skill.id}: objective mastery criteria are required")
+            if not skill.feedback_questions:
+                raise SkillRegistryError(f"{skill.id}: at least one outcome question is required")
             if not skill.difficulty_levels or any(level not in range(1, 6) for level in skill.difficulty_levels):
                 raise SkillRegistryError(f"{skill.id}: difficulty must be within 1..5")
             if set(skill.trainer_variants) != {"marsha", "skinny", "beck"}:
@@ -78,7 +84,7 @@ class SkillRegistry:
             missing = sorted(set(references) - ids)
             if missing:
                 raise SkillRegistryError(f"{skill.id}: missing references: {', '.join(missing)}")
-            if skill.quality_status == "production" and (not skill.fallback_skills or not skill.min_variant.strip()):
+            if skill.quality_status == "production" and not skill.fallback_skills:
                 raise SkillRegistryError(f"{skill.id}: production skill requires simplify fallback and min variant")
 
     def get(self, skill_id: str) -> Skill | None:

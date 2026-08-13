@@ -24,7 +24,7 @@ class NextAction(str, Enum):
 
 @dataclass(frozen=True)
 class SkillMastery:
-    status: Literal["NEW", "PRACTICING", "MASTERED", "GENERALIZING"] = "NEW"
+    status: Literal["NEW", "LEARNING", "PRACTICING", "MASTERED", "GENERALIZING"] = "NEW"
     successes_in_context: int = 0
     independent_successes: int = 0
     minimum_successes: int = 2

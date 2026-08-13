@@ -84,7 +84,7 @@ def main() -> None:
     assert "Что тяжелее" in bot._analysis_clarify_question({"trainer_key": "beck"}, "fear", 0)
     assert bot._analysis_clarify_keyboard("fear", 0).keyboard
     assert "Slash commands are explicit navigation/debug intents" in BOT_SOURCE
-    assert "u[\"stage\"] = \"analysis_details\"" in BOT_SOURCE
+    assert "set_legacy_stage(u, \"analysis_details\")" in BOT_SOURCE
     assert "проверяла" not in BOT_SOURCE.lower()
 
     print("[SMOKE] global buttons OK")
