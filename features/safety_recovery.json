@@ -1,0 +1,1 @@
+{"name":"safety_recovery","behavioral_goal":"recover","success_metric":"share of safety exits resumed only after explicit user confirmation"}

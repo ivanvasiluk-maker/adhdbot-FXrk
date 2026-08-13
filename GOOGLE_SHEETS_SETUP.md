@@ -9,6 +9,7 @@ Create a Google Sheet with these tabs:
 - `daily_summary`
 - `payments`
 - `errors`
+- `behavioral_kpi`
 
 ## Headers
 
@@ -31,6 +32,12 @@ Create a Google Sheet with these tabs:
 ### errors
 
 `created_at | event_name | user_id | telegram_username | telegram_name | stage | error_type | error_source | metadata_json`
+
+### behavioral_kpi
+
+`created_at | event_name | anonymous_user_id | situation_id | experiment_id | skill_id | mechanism_code | context_domain | outcome_label | count_value | policy_version | ranking_version | skill_version`
+
+This tab never receives Telegram identity, raw text, voice/crisis content, prompts, or personal stories.
 
 ## Apps Script webhook
 
@@ -81,6 +88,7 @@ SHEETS_WEBHOOK_URL=https://script.google.com/macros/s/XXXXX/exec
 SHEETS_SYNC_ENABLED=true
 SHEETS_SYNC_INTERVAL_SECONDS=60
 SHEETS_SYNC_BATCH_SIZE=50
+ANALYTICS_ID_SALT=replace-with-a-long-private-random-value
 ADMIN_IDS=123456789,987654321
 ```
 
