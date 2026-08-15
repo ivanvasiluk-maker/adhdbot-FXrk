@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "enforced_after_commit": "992144aeb3047977d2797450cffbfded459e77ef",
+  "phases": [
+    {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},
+    {"id": 2, "patches": ["PATCH-04", "PATCH-05", "PATCH-06", "PATCH-07", "PATCH-08"]},
+    {"id": 3, "patches": ["PATCH-09", "PATCH-10", "PATCH-11", "PATCH-12", "PATCH-13", "PATCH-14"]},
+    {"id": 4, "patches": ["PATCH-15", "PATCH-16", "PATCH-17"]}
+  ],
+  "patches": [
+    {"id": "PATCH-00", "title": "Product contract", "requires": [], "tests": ["python -m unittest tests.test_product_policy", "python scripts/check_product_policy.py"]},
+    {"id": "PATCH-01", "title": "Unified state machine", "requires": ["PATCH-00"], "tests": ["python scripts/test_state_machine.py"]},
+    {"id": "PATCH-02", "title": "Situation and mechanism", "requires": ["PATCH-01"], "tests": ["python -m unittest tests.test_mechanism_model tests.test_situation_persistence"]},
+    {"id": "PATCH-03", "title": "Behavioral experiment", "requires": ["PATCH-02"], "tests": ["python -m unittest tests.test_experiment_core"]},
+    {"id": "PATCH-04", "title": "Normalized outcome", "requires": ["PATCH-03"], "tests": ["python -m unittest tests.test_outcome_model"]},
+    {"id": "PATCH-05", "title": "Behavioral memory", "requires": ["PATCH-04"], "tests": ["python -m unittest tests.test_behavioral_memory"]},
+    {"id": "PATCH-06", "title": "Skill schema and registry", "requires": ["PATCH-05"], "tests": ["python -m unittest tests.test_skill_schema tests.test_file_skill_registry tests.test_skill_spreadsheet_import", "python scripts/validate_skills.py"]},
+    {"id": "PATCH-07", "title": "Ranking Engine", "requires": ["PATCH-06"], "tests": ["python -m unittest tests.test_ranking_engine"]},
+    {"id": "PATCH-08", "title": "Post-experiment policy", "requires": ["PATCH-07"], "tests": ["python -m unittest tests.test_post_experiment_policy"]},
+    {"id": "PATCH-09", "title": "Working skill map", "requires": ["PATCH-08"], "tests": ["python -m unittest tests.test_working_skill_map", "python scripts/smoke_profile_map.py"]},
+    {"id": "PATCH-10", "title": "Experiment journal", "requires": ["PATCH-09"], "tests": ["python -m unittest tests.test_experiment_journal"]},
+    {"id": "PATCH-11", "title": "Reminders and continuity", "requires": ["PATCH-10"], "tests": ["python -m unittest tests.test_continuity_features"]},
+    {"id": "PATCH-12", "title": "Safety recovery", "requires": ["PATCH-11"], "tests": ["python scripts/smoke_crisis_buttons.py", "python -m unittest tests.test_no_dead_end_matrix"]},
+    {"id": "PATCH-13", "title": "Sale after demonstrated value", "requires": ["PATCH-12"], "tests": ["python -m unittest tests.test_value_proof_offer tests.test_offer_paths", "python scripts/test_offer_buttons.py"]},
+    {"id": "PATCH-14", "title": "Learning Engine", "requires": ["PATCH-13"], "tests": ["python -m unittest tests.test_learning_engine tests.test_personalization_integration"]},
+    {"id": "PATCH-15", "title": "Legacy migration", "requires": ["PATCH-14"], "tests": ["python -m unittest tests.test_legacy_migrations", "python scripts/check_legacy_state_writes.py", "python scripts/smoke_persistent_user_state.py"]},
+    {"id": "PATCH-16", "title": "Behavioral analytics", "requires": ["PATCH-15"], "tests": ["python -m unittest tests.test_behavioral_analytics"]},
+    {"id": "PATCH-17", "title": "Mandatory regression", "requires": ["PATCH-16"], "tests": ["python scripts/regression_gate.py"]}
+  ]
+}

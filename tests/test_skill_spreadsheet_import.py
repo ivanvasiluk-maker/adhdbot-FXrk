@@ -3,7 +3,7 @@ import io
 import zipfile
 
 from core.skill_importer import map_rows
-from core.skill_spreadsheet import flatten, read_csv, read_xlsx
+from core.skill_spreadsheet import SpreadsheetTable, flatten, read_csv, read_xlsx, skill_tables
 from scripts.import_skills import google_export_url
 
 
@@ -46,6 +46,23 @@ class SkillSpreadsheetImportTests(unittest.TestCase):
         cards, problems = map_rows(rows, source_ref="sheet:test")
         self.assertEqual(cards, [])
         self.assertIn("not explicitly reviewed", problems[0].message)
+
+    def test_bseb_headers_map_draft_to_experimental_card(self):
+        rows = [{
+            "ID": "ADHD-0001", "Версия": "v0.2", "Статус проверки": "Черновик для экспертной проверки",
+            "Навык": "Один список", "Алгоритм": "Записать задачу", "Мини-версия": "Записать одну задачу",
+            "Источник": "Safren et al.", "Безопасность/ограничения": "Не применять при кризисе",
+        }]
+        cards, problems = map_rows(rows, source_ref="bseb.xlsx")
+        self.assertEqual(problems, [])
+        self.assertEqual(cards[0]["status"], "experimental")
+        self.assertEqual(cards[0]["version"], "0.2.0")
+        self.assertEqual(cards[0]["variants"]["standard"], "Записать задачу")
+
+    def test_only_card_worksheets_are_selected(self):
+        cards = SpreadsheetTable("300_навыков", ("ID", "Навык", "Алгоритм"), ())
+        review = SpreadsheetTable("Экспертная_проверка", ("ID", "Решение"), ())
+        self.assertEqual(skill_tables((cards, review)), (cards,))
 
 
 if __name__ == "__main__":

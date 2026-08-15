@@ -5,16 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from core.skill_taxonomy import MECHANISM_CODES
+
 ContextDomain = Literal["work", "study", "relationships", "health", "home", "finance", "other"]
 ActionPhase = Literal["start", "continue", "return", "choose", "finish", "rest", "stabilize"]
 Confidence = Literal["low", "medium", "high"]
 
-MECHANISM_CODES = frozenset({
-    "evaluation_avoidance", "executive_start_deficit", "choice_overload",
-    "low_activation", "rumination", "emotional_avoidance",
-    "perfectionism_error_fear", "attention_drift", "unclear_next_action",
-    "low_reward", "overwhelm", "recovery_after_lapse",
-})
 DIAGNOSIS_FIELDS = frozenset({"diagnosis", "diagnostic_label", "disorder", "adhd_type"})
 
 # Mechanism is the primary key. Values are deliberately short candidate classes,

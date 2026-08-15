@@ -1,0 +1,2712 @@
+{
+  "schema_version": 2,
+  "skills": 386,
+  "production": 40,
+  "reviewed": 46,
+  "experimental": 300,
+  "disabled": 0,
+  "cards": [
+    {
+      "skill_id": "ADHD-0001",
+      "version": "0.2.0",
+      "sha256": "3351da38dd286954f17449244c9ba4750971ac2706d384d25cf19f8101abdcba",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0002",
+      "version": "0.2.0",
+      "sha256": "00242f28d868aa9df0d2eecbb9f61b03e0d325eef32223c39e92c5c6f8d994fd",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0003",
+      "version": "0.2.0",
+      "sha256": "97d36d886de00d2eaf26a05a5402d048717a6a4b3561e82d5f8a30305bf4bc65",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0004",
+      "version": "0.2.0",
+      "sha256": "96118156a149f592c3e382d0ab5e90fff45158c3b25d080bd3ef1ce3393b57f3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0005",
+      "version": "0.2.0",
+      "sha256": "563daf6952617f606bb301fc4a8ac9d4f04f4539bdad1ed90e299c97c3c1841d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0006",
+      "version": "0.2.0",
+      "sha256": "2868c4d87a3f754de3187521bd3061eeb62c26e15c281b738cee72e6884160d5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0007",
+      "version": "0.2.0",
+      "sha256": "2b9d1c13f0060ac5f07aa46ca87e67886b8a2ce4707d2d57809d36f0c365ad5f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0008",
+      "version": "0.2.0",
+      "sha256": "f6d731b11cd311fbe2f67882916830a19517e2b0788e9a4fed0ec66a5fbfa18c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0009",
+      "version": "0.2.0",
+      "sha256": "64af30770f68ff6c6923a4012dc81e59714b34a8f38ac3da66241c8e53fa3a7d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0010",
+      "version": "0.2.0",
+      "sha256": "cb0a0677ecb7d012465b2b26153616a4dd223bd09776d50d0c11a4dcd98ca10e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0011",
+      "version": "0.2.0",
+      "sha256": "bd2159bfabdddf7a38e3254951dc3a52f615c11bc21510ebf05d63515bc07617",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0012",
+      "version": "0.2.0",
+      "sha256": "72088dc77a6730a0bfd7c0acee39bae043f2762dd663aba75c6415906c289d6c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0013",
+      "version": "0.2.0",
+      "sha256": "c0bb7d1d572824621c1462ef9aa3726a7e0f4dce61700c405241e370a1d212bd",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0014",
+      "version": "0.2.0",
+      "sha256": "7522a28a8e49ebcfcb8c4b2a829a0363f2fdffb795cf78a6375c8b3009547ec7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0015",
+      "version": "0.2.0",
+      "sha256": "13209c9613a72efebb4ca97b42a536e6de6efa61748d54840d15b157f7f45b4c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0016",
+      "version": "0.2.0",
+      "sha256": "3fee7e8ed4519923f1fb6d82616d788b3d9f6cb5b00433d554453df96c801307",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0017",
+      "version": "0.2.0",
+      "sha256": "66c9379cb33ea8a11dc29bfdba8f531d05dd8608aeac9b749c107557612323a2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0018",
+      "version": "0.2.0",
+      "sha256": "fb0b30b778e0e8a7ed0b048e59c4dd620f4ba20d934b3a5c7e3d8ec6d066bf34",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0019",
+      "version": "0.2.0",
+      "sha256": "de65ebb35727b55b0458d07954d9f7d5f6dc616fa40000363c62692e9ac09390",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0020",
+      "version": "0.2.0",
+      "sha256": "053322a76652e082cb221573f08002069f72e8cce195a8b993c4cb34a0a56564",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0021",
+      "version": "0.2.0",
+      "sha256": "0ebd067b222d0d619c9c3040e647a847672f037ba692d3bae7c7160544a62420",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0022",
+      "version": "0.2.0",
+      "sha256": "16b2871b1c6eb904ed00bc2aa98d27c9ff96db525bafd95d08234e46217062ae",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0023",
+      "version": "0.2.0",
+      "sha256": "3a71a93017cb62d2080df256dbf382ebabccbdbd25ea843b24fa0e7790d7dcc9",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0024",
+      "version": "0.2.0",
+      "sha256": "c6fa1f0001bb964c0dd7a2332d1d1a932c47fd4e3cdcbf7c07f4687bb8251033",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0025",
+      "version": "0.2.0",
+      "sha256": "8a3dac84b046e3cc30a5caf763d3c133c61f351c28a4331b7ed9788395b03f6e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0026",
+      "version": "0.2.0",
+      "sha256": "a5043a94ba5c5fa80e8b12b13a0b468ccc4133ffc8e14ec811eed75ba7d02723",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0027",
+      "version": "0.2.0",
+      "sha256": "ba5396c3e3dcabe202e917d97572dd640219f1c62d63e9b3d62a6ebd2a28f207",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0028",
+      "version": "0.2.0",
+      "sha256": "a559066ac8c8c852fef02d2f16b6324cff33456245f4f02d5f7aeca05b222c8b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0029",
+      "version": "0.2.0",
+      "sha256": "71e7f826561cabe52c87fa88378173f9c36a7c7a3f8388ff26a8f3271775badf",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0030",
+      "version": "0.2.0",
+      "sha256": "8865d32c3a80531f36039c2b396f54b847157ec2cbae287744dcf65d7ad1b6e1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0031",
+      "version": "0.2.0",
+      "sha256": "5afc2eb4ef6ed3085b93101c2f7c64db79ecac1075580ad0b7de24d8870a47d4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0032",
+      "version": "0.2.0",
+      "sha256": "5aa8638c996c713cfbc7245d9f693cfe546587086ca76de40ff1dfac3b7ad3a4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0033",
+      "version": "0.2.0",
+      "sha256": "2bff7a95eb663a33447ade145b0f11051b4582402176ed7bb998518fd1405319",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0034",
+      "version": "0.2.0",
+      "sha256": "750532e68c91c12feb5c340fd82d22b3c9c34ad73e74e3d801b7773e069a535c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0035",
+      "version": "0.2.0",
+      "sha256": "1a1a91152b245c1cf51945cf22810f884999459aead9f8e8b5fc2de2508dc02d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0036",
+      "version": "0.2.0",
+      "sha256": "db14d4d11cdcdcd09271a9eb4c1912345a944ef5e14888a31b4757cc23f60c0b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0037",
+      "version": "0.2.0",
+      "sha256": "842084372482dce285901068c7ce8e96e94820855de75fd85c5c2741647264d7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0038",
+      "version": "0.2.0",
+      "sha256": "5ff2b3fdca7732a655ef64592a3a22293302e126d81dcd097fb10d1559318560",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0039",
+      "version": "0.2.0",
+      "sha256": "03d57b788fd213a3e4399c893bca54717e482229f7b4c0f4779266d1937b9929",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0040",
+      "version": "0.2.0",
+      "sha256": "400c7d25fd4675444550e9a38b045e621ffccbd4443831c09e61968a443f1cc6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0041",
+      "version": "0.2.0",
+      "sha256": "5477b3391a054ee9240566f4ef5c31a65522a534517c5879105ee557b8a492d8",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0042",
+      "version": "0.2.0",
+      "sha256": "e709d7b020819a02cc25ad41d219cc9574352fd0b6b324aab76653678aa63627",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0043",
+      "version": "0.2.0",
+      "sha256": "dd06358cf64402583a1071fa589d80bddaa231ddc8e2bcf8ce314cc37478fe3f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0044",
+      "version": "0.2.0",
+      "sha256": "900de8072b6a31a94f55a4b5653602df03bef47b03b075c6844d07a0250081ea",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0045",
+      "version": "0.2.0",
+      "sha256": "d92640f7a5d542c722862877fb150508fff24eb2500fc3718f4e70ae1f9e0733",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0046",
+      "version": "0.2.0",
+      "sha256": "8764606427eacde4b46130cac72445e3d557ec8af5000999fa1841423424824e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0047",
+      "version": "0.2.0",
+      "sha256": "e1aca7e7b5486118daebcf1e3f7f660d5b7dfbd7c955a6258bc5e26aa3200a0a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0048",
+      "version": "0.2.0",
+      "sha256": "1f804efa4ec2d09541a987d367a39b47d1ad84ed207af969f2c96ca0fba98971",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0049",
+      "version": "0.2.0",
+      "sha256": "a54b10cebafba2c357f75176091be0834346c1fe9578e5053baf51143fad6fe6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0050",
+      "version": "0.2.0",
+      "sha256": "56adc48bff9b7f5264d98ca4121ff40e1ca46b710ce1e94dece7515206cacff5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0051",
+      "version": "0.2.0",
+      "sha256": "ffb7672c65164e3f5ee0b245c26cb53c95b685a6c753e92add14d622369109f5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0052",
+      "version": "0.2.0",
+      "sha256": "44ee6fd32f82016db82d722ad264019087f3c8f3bbf9bd70cbc8dd841bd94303",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0053",
+      "version": "0.2.0",
+      "sha256": "f22aa43f13c8632a3b55185ea218587fe8b16cb3206a44ad5f1f4f10573e77c4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0054",
+      "version": "0.2.0",
+      "sha256": "ac172ad4663df2525f8d65c9cbf8de6dd1636ab71e0da8af3df2c204e6533da8",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0055",
+      "version": "0.2.0",
+      "sha256": "4006b1a5792f182c5467d89c7f42e2bf57c2bcdccfd853b4e6c399a8bdad247b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0056",
+      "version": "0.2.0",
+      "sha256": "afc92ba7f2d5e59505f4746f25d9b191dc2075fc4ce4a5ad68a20d8d925e35fa",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0057",
+      "version": "0.2.0",
+      "sha256": "08d081fa757af2c253b8efe608e02840765ed8261ee7f51a585bbeca97bd01fc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0058",
+      "version": "0.2.0",
+      "sha256": "1bd93ea5979e306a6ce8d1347e059382b3d6c684eeb320783d041b554b0ef91e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0059",
+      "version": "0.2.0",
+      "sha256": "772e37f03807df789df6ad05cb2554f6c8e4a848b06a23f780dc6b46bb562137",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0060",
+      "version": "0.2.0",
+      "sha256": "ea227c1420a27879fff528bacf8a5c56de688e8806d9ca90496cd8070317592e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0061",
+      "version": "0.2.0",
+      "sha256": "e104d18e40a1873d66f9564474a300158af36dc973fc1fec83a057576d488ad3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0062",
+      "version": "0.2.0",
+      "sha256": "e1fbe0a210be1c489d9769f80a42c768b940e5161fa49693d3b03768ec2aa128",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0063",
+      "version": "0.2.0",
+      "sha256": "d290d9fd627b8f4b3c9254fc5e8228b908945d1daf398b1aa4db109530a20939",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0064",
+      "version": "0.2.0",
+      "sha256": "ffa9921dc536e3e9563b486f588793339870ab91c46eacab3a2a0b22b0e0f4c5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0065",
+      "version": "0.2.0",
+      "sha256": "927f5d67d622bd24c2107c26f7c992372cf924ca1cf6e6a1d73e5a0ba68c2482",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0066",
+      "version": "0.2.0",
+      "sha256": "2487261003d36fba6a54b7aefde86060b34ba41aebf009e6dbcadc67fa15e474",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0067",
+      "version": "0.2.0",
+      "sha256": "919dbf4a9611066c8dcbd40cba0cd2b0833049de383a371e63eaf322a4d74476",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0068",
+      "version": "0.2.0",
+      "sha256": "e6bdcfcd732536d1e71d98f35ea705b276cabfa72e2413ab1b445bb896785f13",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0069",
+      "version": "0.2.0",
+      "sha256": "d7ab41a675c0321f03571ba5680863644d37167dc75c833815e1e76f693f173f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0070",
+      "version": "0.2.0",
+      "sha256": "2a48874d874928de86d193fa2d717a966026af1661f49f79b70cfde2a5e68054",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0071",
+      "version": "0.2.0",
+      "sha256": "b0a239d809b8e9e6fbeda2750f587711fc7c4d05af9fc4cbfa77626f1e1d7857",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0072",
+      "version": "0.2.0",
+      "sha256": "b2cd4100d9c024c97dfda5b1c5efb17d111d447e8446317d6d71fedf083ca0db",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0073",
+      "version": "0.2.0",
+      "sha256": "6b991071c8edaad74939b0056bdea14d32a6dad2097efa365a6325e1236d3b70",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0074",
+      "version": "0.2.0",
+      "sha256": "818e845682e9dd07af173b9a4b34d9b624687aa1da94d39fbeca8ac1a854881a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0075",
+      "version": "0.2.0",
+      "sha256": "c0be85fb089abf4bc8a037d5689709179b202799956d71aa5c42f7b43a46e5a5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0076",
+      "version": "0.2.0",
+      "sha256": "d12e086d30eed4a8b911a3b852b720fb9414726d46c223590c7fc55daa5a0292",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0077",
+      "version": "0.2.0",
+      "sha256": "69c78009c3f30114a2fcfa8858cdfa6c7025b69f6f0f2f1933fa4939f1b3283f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0078",
+      "version": "0.2.0",
+      "sha256": "9dcfd1dce07fa68e3f3a373daefa6af48f2411843ab06bda5ddda50e72f6afb1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0079",
+      "version": "0.2.0",
+      "sha256": "cebee53be7c3d0230245372a9306935fb95ddb133dd287a33438e746c479d4ce",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0080",
+      "version": "0.2.0",
+      "sha256": "6749157e3dd7b762d3fe8228f90636ceda2ab35e7a62c2b94732a67abafcf907",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0081",
+      "version": "0.2.0",
+      "sha256": "dc10fffbed930215661cbfee218958a6e3af8a9727fc10adc53b7c9f709a6d17",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0082",
+      "version": "0.2.0",
+      "sha256": "beadd87cd97261c3d5cacf5b4d2cfcec9dbb53f34c9f54344762a14fbc19365e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0083",
+      "version": "0.2.0",
+      "sha256": "dc3a21606c9bc2db09fb84ca38104ebbe04da186156c9932f67731e3f1a6cf59",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0084",
+      "version": "0.2.0",
+      "sha256": "37fe762f5191972ccd7c08bb58e092020d9e965ad9ecfa6e5998669ffff667f4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0085",
+      "version": "0.2.0",
+      "sha256": "c43f2aebd5d6b9b511e6fc84aed8c344552836c1a9ab1adca95ae7b8a720e258",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0086",
+      "version": "0.2.0",
+      "sha256": "dbdd306c44aea46d3de10c6b07f8ea2bf7b196cbbff578e3f61c074f91250cec",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0087",
+      "version": "0.2.0",
+      "sha256": "383064d207fc3823d7b66d5074eb045c7a93f9c619b5d1a8bebf57889a0d2c0d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0088",
+      "version": "0.2.0",
+      "sha256": "7db23b86f88783117efd841b66aeaa0302da09a6c2729df96b79c9b0624539ca",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0089",
+      "version": "0.2.0",
+      "sha256": "214e5ea7a790fb5b7dd6850faf91c1a49510935625667c48e47e64cb2c84e500",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0090",
+      "version": "0.2.0",
+      "sha256": "a30aa59016e14b0913a87ad4ee3f75cd3d894e145f6e1c58906be2c0adc560ff",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0091",
+      "version": "0.2.0",
+      "sha256": "cf3428b4c5f9f706692872e79f6113b4a4e9c830c16fab3352bf1753b5696616",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0092",
+      "version": "0.2.0",
+      "sha256": "0f930416adc90159a0bc1476ec64b0b585812f95f6fce3b92fa08ed6398cea12",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0093",
+      "version": "0.2.0",
+      "sha256": "712392f06fadb62c15c7fea3b7f3045ca7bb14ef7aafdf891c69f8717965c4f6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0094",
+      "version": "0.2.0",
+      "sha256": "f9409f012b34f29b114c3784055be21120c74d0e9fdde551ae8dc54ecfc8f030",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0095",
+      "version": "0.2.0",
+      "sha256": "63f020e9c2150ed5102f395c832214fa98486769c185a688b773681013a83b4f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0096",
+      "version": "0.2.0",
+      "sha256": "e60ad6ede927674764831f76eb497b560e35df50df48b05ac45150bcef5e1936",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0097",
+      "version": "0.2.0",
+      "sha256": "4131090a1a3ed051d97a25a62455b1a514c7e2ec8c9cb7fb3af88d20f89cee45",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0098",
+      "version": "0.2.0",
+      "sha256": "803b3a6ba5f0ad8a158b603eb62d93d794fa1e70fed733f0615a3d93e5414f4e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0099",
+      "version": "0.2.0",
+      "sha256": "a7ab61df54e227adddd34db9a3e56618a271c035c0fadd0bfcfa2dcf643eb249",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0100",
+      "version": "0.2.0",
+      "sha256": "ac4517688285d1c39797674ccfb48dbaf72afb59e40865fa35744c5a2ef9f297",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0101",
+      "version": "0.2.0",
+      "sha256": "15c5a03a96c99869a737981d2bd0bab6dca0eae9b01b845a2651db1fabd89dcb",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0102",
+      "version": "0.2.0",
+      "sha256": "c761b1638c2ac94f0dc5a5aff2603fa3959f81564e8b3b96536eee76c720e48a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0103",
+      "version": "0.2.0",
+      "sha256": "7fb94aef7b79044d96f9cfe19e92634ee437921c38f92a94389ebff30b454a31",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0104",
+      "version": "0.2.0",
+      "sha256": "9f46e31516d4390d0f7d8db011ff86a508063eef9d4ab5460d99881c7f2be619",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0105",
+      "version": "0.2.0",
+      "sha256": "896f9b8abb1f52c1d9c0c8f5e7d68c23827a83c0ab8f78ddec7e77cb848550a6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0106",
+      "version": "0.2.0",
+      "sha256": "c97c6ad629b61ed6e86da8b414c2e1ca4e0ecb3f6e9aa5bd7b3ba1ac134710b5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0107",
+      "version": "0.2.0",
+      "sha256": "48d69ce0c6b8f24bec55d699c0642ded2f866613f15ae817b7d6d3a9af1aa1d1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0108",
+      "version": "0.2.0",
+      "sha256": "c9e071cec9e9fc36c506ddbe9866186148bb189c3d1cf2f9b7ddacbb50b53b21",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0109",
+      "version": "0.2.0",
+      "sha256": "68aa5033e260eed29e75cad5a1758bb0b028f48c75a74e2c312777a103acf257",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0110",
+      "version": "0.2.0",
+      "sha256": "3c5872cf40ae081425132e17244ae653ec3f24b0a740f460eb0d67822dc2a8ec",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0111",
+      "version": "0.2.0",
+      "sha256": "ad802ec284e0c7cee073eaa1f525b9794a43f7104143fa10c90a3f1a8bd210be",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0112",
+      "version": "0.2.0",
+      "sha256": "79a95f55e54f75d344f4d2302a87ad685539506567e9be45f8f67ab9bf760c0d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0113",
+      "version": "0.2.0",
+      "sha256": "de58efd45966c195df94272bcbe79aa6c9d42b937a14436b8b4aa47d275e94d5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0114",
+      "version": "0.2.0",
+      "sha256": "1bf1d89a3d675cc6a904107453bd38d75c40448b86bb101ba8282a08d130bff5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0115",
+      "version": "0.2.0",
+      "sha256": "496f63d85957ebc35dd5b0e3c6ea1357dc9d5aee067bc213a92abac640df0a41",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0116",
+      "version": "0.2.0",
+      "sha256": "2aaa1d628d7e4d52b3462031a43cf77c5c7a17b4d03897826f78fc8725555ec2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0117",
+      "version": "0.2.0",
+      "sha256": "70337fc090c0ea826b443237280c5f537b58e96912ffb774aa9f108dfad16c9c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0118",
+      "version": "0.2.0",
+      "sha256": "757dab1b09a4b8646c4f6d8e28de6872ec438b950f40c04d132ec9b157e7340b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0119",
+      "version": "0.2.0",
+      "sha256": "6da34308d3b87a19832f7161f7111f793690004196cfe656754276fcc99af760",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0120",
+      "version": "0.2.0",
+      "sha256": "de6b9758b2dc4e0faad5c15e2c55bb1a5ae4a778dcc241f6b0eea1fb3e92263b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0121",
+      "version": "0.2.0",
+      "sha256": "da877facd4efe40aa25b8ba411ed65c9c65400632432ab53621e4e76ca8570b3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0122",
+      "version": "0.2.0",
+      "sha256": "240701328cdd732d8a3a21c571e6579c2bbb5b7c5f6cb21ac3f1ee005fb275e6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0123",
+      "version": "0.2.0",
+      "sha256": "f6f33023f2c46c404ec1dcd857f4ffa816bb127a08942609e98154f524c49778",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0124",
+      "version": "0.2.0",
+      "sha256": "e8fe1d5f7b0466da0299369d2d3ff92f09f804f0b535a72dd9442251a30d169d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0125",
+      "version": "0.2.0",
+      "sha256": "3929c7fecc76c07bcaa12f60799442995fa670b7c8ce57830ec9747ce0ff4fa7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0126",
+      "version": "0.2.0",
+      "sha256": "4df4e0be35b9830c152b68d16731e6967a796a8571e41aff1780c269afaab3f1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0127",
+      "version": "0.2.0",
+      "sha256": "75cd253e2ccd1cc80138eb0f0a116826f627b8fdb04f6433c81edaf6bf599a08",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0128",
+      "version": "0.2.0",
+      "sha256": "b6b99772d3e9955eef1583be629b5400eefc2f059b6353dfe9c1bf4bc7072411",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0129",
+      "version": "0.2.0",
+      "sha256": "4d2bddf4853a1909fa0325bd627c3a9d350db9731886433727b1a1496450ba7c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0130",
+      "version": "0.2.0",
+      "sha256": "07c60525449b85d091fb0c474d8befc65d0b0af67410ee70769e0575ea45a2d8",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0131",
+      "version": "0.2.0",
+      "sha256": "3bce7125ec7af04a678d946f5982475e0cf7f3b8dc5592ee93fe829b23c940e2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0132",
+      "version": "0.2.0",
+      "sha256": "d2986cd6670c7cdce2869d8b9e80dc41add6d360bb6ea73c63a8a0708c8106df",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0133",
+      "version": "0.2.0",
+      "sha256": "9e5e546d6c7463da60adf33ccaf0b3cc54b76835f9e46429909988008c23b362",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0134",
+      "version": "0.2.0",
+      "sha256": "b6c4a06eb4927cdfc8a3fd2fc967916035712ee67597d443e2c5eb80cdc376ed",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0135",
+      "version": "0.2.0",
+      "sha256": "b739bdfa096e622af0fb5eb2a5c736801ed3eb6b3064aef9d9e15ea19ce0828c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0136",
+      "version": "0.2.0",
+      "sha256": "a8eda5b6dbd7ae4e2434d904f097d8739f96050df75493aec56acfdc412ab464",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0137",
+      "version": "0.2.0",
+      "sha256": "3e794c73217b485f403f4a010388f20d604a1936be3e850f66362a6f6f0f86dc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0138",
+      "version": "0.2.0",
+      "sha256": "403fe8c2eaa5137a32642b0ae460b416bb825ebf50b94bee1c7e2628ff361397",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0139",
+      "version": "0.2.0",
+      "sha256": "7c175667506f7cf8a388a77290a79abd85c890313aca36cc753dd7499173fe19",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0140",
+      "version": "0.2.0",
+      "sha256": "9bf44c917feb92a74b644305070507c70f70b2a57fbb828d5ed6bad4c3eeb92a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0141",
+      "version": "0.2.0",
+      "sha256": "d6eda5229d983b02b9568762cda524af8744f5679ff4a9f2ab0e46cb2216f6f1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0142",
+      "version": "0.2.0",
+      "sha256": "7b2440335ecfd0f567d9d8043b049ee9fd1f90449461629e53a62c7d825802f4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0143",
+      "version": "0.2.0",
+      "sha256": "cf5f70ac03a66fce61d2ee7df0a29bb2d15626f0161484c5d99e94aca77db71c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0144",
+      "version": "0.2.0",
+      "sha256": "57786c9282bc566ad54a3fc5159c934555f280180c61046fa71d26f9637116f1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0145",
+      "version": "0.2.0",
+      "sha256": "d68ff36aebc47a262044e2c9ed09d4b0629753a7012d0b5ed183bc6f3b57b9ee",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0146",
+      "version": "0.2.0",
+      "sha256": "9e3d1acdea6a45c64b8af64e262e6a8227d2eddaac2aa185eb88418332dbac39",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0147",
+      "version": "0.2.0",
+      "sha256": "0a0288a37f2dc933f719ff07d9cdbae76a45bb5d2ee03b9980340b87c90aed7f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0148",
+      "version": "0.2.0",
+      "sha256": "4708ca6f2d24748331f22986f01b7d86b76f2d0ab80585c67b8227f7e99c3cab",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0149",
+      "version": "0.2.0",
+      "sha256": "3f4961be1a04a986a043cc4b05b3dec0128911f44db08275777b6bac78f9c93a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0150",
+      "version": "0.2.0",
+      "sha256": "70648cd35e9803c3e2018218a72cab69457b7d3cb616edf6c8b240ccdd3965ad",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0151",
+      "version": "0.2.0",
+      "sha256": "9670ec530a3046eb061d1172f54e101bb7ec2156693d378f1aeea026aaa01348",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0152",
+      "version": "0.2.0",
+      "sha256": "78b523084900680a4b1df9f5318b1e41caf8379ed7ad779c41ae0e94330a7814",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0153",
+      "version": "0.2.0",
+      "sha256": "f2c9cdafdcb865980de5b461b0e467a417ed905cbbb8ba0f0ff9be5d82b9b590",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0154",
+      "version": "0.2.0",
+      "sha256": "4056ef0184bf2233a3ed6c2f6613c44e1d59ab891268311647d334b3efc29afb",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0155",
+      "version": "0.2.0",
+      "sha256": "6f78b6914b61f7e16ad95bc0e6c30ea168ee3f5d26ceffa97a61cacb9122f24d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0156",
+      "version": "0.2.0",
+      "sha256": "d080f0dd6f24604d3fb3c0011be8cd1a5ba656fbc03ff55b708b6fa0fb1a7f57",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0157",
+      "version": "0.2.0",
+      "sha256": "83a761a367c6b8f48d56000d91bb5bd27c5a3f6801d7890b96c64ca3679ffc06",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0158",
+      "version": "0.2.0",
+      "sha256": "6c6ecd606e1564309462f03be1c8525eaa3a5beb88a9fc30a7e9866e3aca1766",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0159",
+      "version": "0.2.0",
+      "sha256": "1b00758ff5e090f3098fec283f4b4b34b5ba114f77aecd7943a7bdfcc344be10",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0160",
+      "version": "0.2.0",
+      "sha256": "4eff2038bcce4dc3d8dad0173904ece272d7005ad49218df7434738537f98174",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0161",
+      "version": "0.2.0",
+      "sha256": "30a52088e7b83bfba0d0316d640fb6a465e0ca8d048447875409e37b80465520",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0162",
+      "version": "0.2.0",
+      "sha256": "a65f43edb96beaaa1978192bde67d3ad1c4f490fb4d13c77f8e89133b9b75dde",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0163",
+      "version": "0.2.0",
+      "sha256": "5a8776e260a384992f177b348b71e21a05b3d4f45c8a10e6b6b6f36d1816d0a6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0164",
+      "version": "0.2.0",
+      "sha256": "79e11579cdf50657fee09ecf5e81a268e42249354033a0c4dd7c5493f93771ff",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0165",
+      "version": "0.2.0",
+      "sha256": "cd461517ae12c330b6e6d6a919ba71fa3e7cf3d2d87c1f83d454edcd32c8d758",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0166",
+      "version": "0.2.0",
+      "sha256": "de73413a781d531b96479cacc9f33932525f02e72fa7cb174039d5d6365d4d85",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0167",
+      "version": "0.2.0",
+      "sha256": "f2183342ada390b1a1247269e06d6cc3a1115de1a415d566a9674765eaa78da7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0168",
+      "version": "0.2.0",
+      "sha256": "98b65808cffee6861236c4bcd86f56379ba7c840e49678416091f857e4bd9ab3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0169",
+      "version": "0.2.0",
+      "sha256": "3b039ec57442056868482ef831bc20bf1432d4a7c14274f3ad4797858cf59e2f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0170",
+      "version": "0.2.0",
+      "sha256": "4a4e0e9db5a983c8e6109e021a4523a1e42ee91180acd4b44a4946d9264c5cbd",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0171",
+      "version": "0.2.0",
+      "sha256": "63f33bb8faca432bb7671d1bde7a74c97f9b2e75b789972a520bc7743dd239cb",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0172",
+      "version": "0.2.0",
+      "sha256": "296efae208cd4e6451c69e10c87c4b12ccafec1e1e65c9295f3c9afbbd20960c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0173",
+      "version": "0.2.0",
+      "sha256": "7af4182edf9b450c2dd9135d6f0372572456a9ce6af7ebaedd0cbd55ab1c17e6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0174",
+      "version": "0.2.0",
+      "sha256": "5076a562dbfaaf5a58e4713411a0f9c326656d586c95f35f908a917448e2cdda",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0175",
+      "version": "0.2.0",
+      "sha256": "7d3034a4dc185a0cfa98ed02a562774ed16eb515d2873a26c999c1616e379eaf",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0176",
+      "version": "0.2.0",
+      "sha256": "44243489aca8dae9927796e97619e6bd5e209252f37b1afd092f0255659ee762",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0177",
+      "version": "0.2.0",
+      "sha256": "db8761157b981740e4878373449369449ab8aca7e75de5ad6fde78d36510cc46",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0178",
+      "version": "0.2.0",
+      "sha256": "04419f1415e8143f3eb993e1173806b50a5bad68580602763aeef1301ecf10c7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0179",
+      "version": "0.2.0",
+      "sha256": "1b48c47072486923f6ec7c479571b36d659e0598cf60f71427c93f3a4e61e844",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0180",
+      "version": "0.2.0",
+      "sha256": "be18e4dcf6285d34d0e4373f82c5227f8d8ada85393057d9bbca844f113b9263",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0181",
+      "version": "0.2.0",
+      "sha256": "ec5d2acd167042ab7e823e4eb1e6d6551aab2db5df60e2495c0ca6d781d4273f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0182",
+      "version": "0.2.0",
+      "sha256": "a6e84076094e621191b204fde510eabb5b4503835b12cb5e5ddf43416e3b1caa",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0183",
+      "version": "0.2.0",
+      "sha256": "a336b0c6b3221a32c7518a9f492d640091ed35bd0ba2cf8158dd9f6941c2f438",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0184",
+      "version": "0.2.0",
+      "sha256": "de50f2b6ded1265bd4ac9fe0e67598e8ab799106a2de114d20f5380f3e6a79de",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0185",
+      "version": "0.2.0",
+      "sha256": "50777c3e92d49224d0a016011847caae9d478caa415a2fad346712acf103a7dd",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0186",
+      "version": "0.2.0",
+      "sha256": "fb93f81673015bd788f67b130ef69f30168ce62e4fe9fd6d2a6f21c3c2bbaf10",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0187",
+      "version": "0.2.0",
+      "sha256": "5d819d30982a2b7cb3d834022d4306480e6219dbeedce77808268e68f4d00bbe",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0188",
+      "version": "0.2.0",
+      "sha256": "c258b2349ff7f1a445769aa0acbcb2c971ed5a73369f57eac5667a78693e07a8",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0189",
+      "version": "0.2.0",
+      "sha256": "3f15d5e58f4795947559799795305ff9a97d156465a22834cb5bfbab5ba9e1de",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0190",
+      "version": "0.2.0",
+      "sha256": "3ec0cc509bdf283064bbb5a8fafe61eadf4269edd17570e7d74b048d08f1b630",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0191",
+      "version": "0.2.0",
+      "sha256": "fc038381208fd1fd98c75d3813ac81fce1fb09587f658111b5b4f42eb39292bc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0192",
+      "version": "0.2.0",
+      "sha256": "84704801c533549c056dfd209d72f1a997c07a0cafbf860d8d266779bd9a1a1c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0193",
+      "version": "0.2.0",
+      "sha256": "9411328253f1cf15b54c8d077ed25da40ef4a32deca26eb1640596ff5f0bef59",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0194",
+      "version": "0.2.0",
+      "sha256": "f778d8749c16342b079aa42db0ab24acf2a5a60e9a6170af43ef041d4f01a746",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0195",
+      "version": "0.2.0",
+      "sha256": "223e8be973225121b314d9300bcb9158eb6079958edbae76ca571656b5b59ce0",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0196",
+      "version": "0.2.0",
+      "sha256": "b41c12a84c6260a5266260d3c7b8a6fca18e0634a2010f6728230db7749cbfb5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0197",
+      "version": "0.2.0",
+      "sha256": "1f1351bd8a909ba3dfb1866920e7b52109ea52232f4ee4768d2e1c6a782148bb",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0198",
+      "version": "0.2.0",
+      "sha256": "85bd67326b6c3dafc00228c956f18ae5a918904edb9ec94865bc5f5e3209b5ef",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0199",
+      "version": "0.2.0",
+      "sha256": "9c0be89f4c50a0e08114d4fe31cfd3aeb444c0e7c3c3d1a7f8fbf3d023907861",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0200",
+      "version": "0.2.0",
+      "sha256": "a8fa6a33ed4ae04f39df30f741f3493afb184e2ab575170d0d7f0aa350254f05",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0201",
+      "version": "0.2.0",
+      "sha256": "b08816eb82ef5a42320c35982fb5871dfe9b04df5f59efa431e720e6222abfa6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0202",
+      "version": "0.2.0",
+      "sha256": "668da4f772f600136de84611ee94e60d2fed9a663cbc26cdcac456336c56c186",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0203",
+      "version": "0.2.0",
+      "sha256": "96bc2bfe67f4b96e25d5711831a1145a10f1464baed548d27e56d54ddd16f97a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0204",
+      "version": "0.2.0",
+      "sha256": "b1646225f92028bbee574591767c40c22393808d6df66ce6a17ad4367007b4bc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0205",
+      "version": "0.2.0",
+      "sha256": "d5df615bcefbb64643bb33a66049a9db1b807d15f131aa88dbd888e95578ab12",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0206",
+      "version": "0.2.0",
+      "sha256": "4a1c36d90b4f4e97e759fb4c4dea7aedb653db78b9117d008106e80a4d95210c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0207",
+      "version": "0.2.0",
+      "sha256": "09b2c85c3cd8911652b0b707b0ba1aa24e06adf4cc16b422dd2a0ed751955bf6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0208",
+      "version": "0.2.0",
+      "sha256": "693eed5d68ec7244a9d1d494763a7f228cabd6f44c735c253eb5ac0500b04d02",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0209",
+      "version": "0.2.0",
+      "sha256": "44ef46eb5d7b4099b705684da16939c8e544902f3c569a4eee224ec06af9ecf1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0210",
+      "version": "0.2.0",
+      "sha256": "0cd645c7593ab769438a5108b96ef68fe56e17234698ee874a597dd91d6794cb",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0211",
+      "version": "0.2.0",
+      "sha256": "ae0b3794e8325a3ca2cdb2e79e2d19a96d2ebced709365e28bb6ab5b3f32c78a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0212",
+      "version": "0.2.0",
+      "sha256": "10ed9ee8802337941f2e587ce3736d1fb5389b1ed6da9dc19a052fdcf061c41a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0213",
+      "version": "0.2.0",
+      "sha256": "03d25d80d8f4a2b22c9d9ce0514c600e40dad50457b8782c2e017b1d94b2763c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0214",
+      "version": "0.2.0",
+      "sha256": "e30e5162d6d30e942185e1772f8c4987bcafd9e12abd3d0f47308bd0db28a587",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0215",
+      "version": "0.2.0",
+      "sha256": "d48a458199b6cd47027194544f981e4b802c81c62e538f69f0daf6d7e7a06a0f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0216",
+      "version": "0.2.0",
+      "sha256": "e38ef0d495befcdff313b9f17731a8d72bfba52b7c685e17cccd66a919a27a1c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0217",
+      "version": "0.2.0",
+      "sha256": "3a44f7c644d0554ee86cc8b11db43c2aabcd2b5cd6e3e5c7d1f46b8652314155",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0218",
+      "version": "0.2.0",
+      "sha256": "28777277aa336e1c7ae02615e8aa41fe5823cb78212f8b3348f7f245ae11c77f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0219",
+      "version": "0.2.0",
+      "sha256": "5e1f81c29143686637b0d2bce0882b7d77c9dfe10fb96a5f8eaab9bb2d12ed4a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0220",
+      "version": "0.2.0",
+      "sha256": "b13109918b51af279569739e200f9a42ed9e2394a47050f35b34ec40142bf8d4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0221",
+      "version": "0.2.0",
+      "sha256": "be12beffea8ed2eb17ad0e5bb4bb2b81af29cdd061c396c597a640b08ad9c8f5",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0222",
+      "version": "0.2.0",
+      "sha256": "7b90ccaee59b3c162283ece23120530ab91fed6304e50da152b4b073b264e043",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0223",
+      "version": "0.2.0",
+      "sha256": "b70887904e5457108a74be40db4e0c014844b992c95e3e9e55d7de3b7f0b8fc8",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0224",
+      "version": "0.2.0",
+      "sha256": "b465039e0ccc7b87328e9cc8ba909c93bbb611335719cb8319191969f5a1ae51",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0225",
+      "version": "0.2.0",
+      "sha256": "b19f3dd26e6483e954f417370a037384d7cf359bce14410814a9545c2b52b132",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0226",
+      "version": "0.2.0",
+      "sha256": "70a0a75ea0559ad242eb0e71eeac23fe4007c0233982350efc52bf46bb49dd6e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0227",
+      "version": "0.2.0",
+      "sha256": "bc5c062785ba1ce515496e72a3efd74dc52863643554be42ac92857856354071",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0228",
+      "version": "0.2.0",
+      "sha256": "dcead350251791f2485b23a8c60a20efb2fc5818bdb50a3668863aa5a6f3adf3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0229",
+      "version": "0.2.0",
+      "sha256": "6713161e9694a825a4c27fc665a62fded3d93740511b1dcb09650a0babfbcec7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0230",
+      "version": "0.2.0",
+      "sha256": "1c1141a76e1f660f201aaf99716ed064b7edbfb26f3eeda68853725e113d7814",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0231",
+      "version": "0.2.0",
+      "sha256": "7b8bd2c41e28820064ed97da91a549b445cd0440b3f06f0c60891b47dc85c179",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0232",
+      "version": "0.2.0",
+      "sha256": "c029b62c3b89d888c18620fbeed41d15399e7cd25457e1c3279754707060e146",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0233",
+      "version": "0.2.0",
+      "sha256": "6dbae2374775d68ddca9cf647aed0ebadedc165c8a21841d0d9057dc8efc5257",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0234",
+      "version": "0.2.0",
+      "sha256": "d4d70ae3d55a524b78b1570a8324792b617f33695c39e3c1ac0025fff413ae51",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0235",
+      "version": "0.2.0",
+      "sha256": "6a0b3a66749aebe434ffd75b0380a39ebd253b39c879ad12150b0473edbf61a7",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0236",
+      "version": "0.2.0",
+      "sha256": "2b76541816702167f025376df6771b12eed0c6fafee0115dcc395bdc8e5d5448",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0237",
+      "version": "0.2.0",
+      "sha256": "e6e2f73ffdfd74107375cd299aae68b3555e8f9b9405604c952eda250f3bfd24",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0238",
+      "version": "0.2.0",
+      "sha256": "d4c23db2f073b28c93f676c8e8e63ac409e3316b5654aa8175774e96a85f25cc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0239",
+      "version": "0.2.0",
+      "sha256": "5552a883a649d395f0b8886e37bf531b155d06c3c787a2ce9dfb288aa3dbed06",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0240",
+      "version": "0.2.0",
+      "sha256": "c62bbad660e6decfcb553caee2021f5c481f6f3d511b2867f29416a4d576ba67",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0241",
+      "version": "0.2.0",
+      "sha256": "454aeea6d4076dcada05e8a759bd5795440513fe35471636439c4a682dad07e3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0242",
+      "version": "0.2.0",
+      "sha256": "1de23680be1ba0c8734efb414276b6d014b59e481592724e79b75df1906a0d31",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0243",
+      "version": "0.2.0",
+      "sha256": "6384354d6e93fa88e407cc08e1593a2c4eae68d9de0563099aff80813e36aefe",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0244",
+      "version": "0.2.0",
+      "sha256": "828f692ae285c9758ca992bf6a126dbc51d38f2a660fefc3dad18665023f381a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0245",
+      "version": "0.2.0",
+      "sha256": "0167b3ce758b50bef59c1cfc96937bc06e9af63aaec72bab274a0d2ccc712271",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0246",
+      "version": "0.2.0",
+      "sha256": "00f62d395b3516acec0105104f8dc2120cc768a46184dc454845ca5367b02b98",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0247",
+      "version": "0.2.0",
+      "sha256": "39dcce0e199278d4f50b33b7c6ca8e89fb07808ad6c14ad3608c8187a02377e0",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0248",
+      "version": "0.2.0",
+      "sha256": "40da16ce35779f285f10043a9130fa966340a5333254225362720db52fb564d6",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0249",
+      "version": "0.2.0",
+      "sha256": "bb72235516e0bd2c0bc7bad4f959eb93b036384012bea5106a5f681a7345a8e2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0250",
+      "version": "0.2.0",
+      "sha256": "d5d4207bdb10d656e4c2a897094ae8117b085153fd94534d1d29d809e4924ce4",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0251",
+      "version": "0.2.0",
+      "sha256": "0639358ca2025903fbf4602dad3d99661ce64be5c84f40e5de6c753081b402af",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0252",
+      "version": "0.2.0",
+      "sha256": "0b1af48b0ddb8bf82b707e6541267b6865843314b72f994a67837ebfd116ff27",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0253",
+      "version": "0.2.0",
+      "sha256": "86d875f79d93044440fd2cb423878f767ee5d1a53e187c712e1d897914d3ee23",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0254",
+      "version": "0.2.0",
+      "sha256": "d3ee283094015edf5ad2949d129f9b8934f86d98b9c50f78db6bbb4c031deee9",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0255",
+      "version": "0.2.0",
+      "sha256": "cbb6a13073b8a6c290d6bd8cbb4cd84f00a2e342c47bdbd8598067f2e0c634be",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0256",
+      "version": "0.2.0",
+      "sha256": "4b3163acff38da18fdf656cdee9dd54e3e5e542e00797dadaf9049f8b508ffb3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0257",
+      "version": "0.2.0",
+      "sha256": "93d02957668391e0b9fc891b6119850387b2fb11f2a70868b595da4b0036d3ba",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0258",
+      "version": "0.2.0",
+      "sha256": "53435322ffebae74fa8b8b9f5a10a22fa167d5a151c991fe5e06ca40efe8f32f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0259",
+      "version": "0.2.0",
+      "sha256": "325722a61b181f6312c658e1a0cf8e76e95362b8ecd46f0c3e0ce8c29375cfb2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0260",
+      "version": "0.2.0",
+      "sha256": "6d01d5a264f7f90359aaaf5e0ac19c9ab5d5f12b7e6f721c9f4b22f85dc2b64a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0261",
+      "version": "0.2.0",
+      "sha256": "2cd0522a37c2c9942c3e03f43757e5a51bfd9c64aebee2042d967797ca87018e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0262",
+      "version": "0.2.0",
+      "sha256": "ce0d74874c3c0e7d9c9fbf920b98cb25c197e03679bd9c209b01f3875dd6dc61",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0263",
+      "version": "0.2.0",
+      "sha256": "dced4e40d97cef51f95e7d27b473f66363afdc419ddf5128082bcff9a43645a3",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0264",
+      "version": "0.2.0",
+      "sha256": "8ecc877613555e5816c32c017754fed7fb70fbecb0f37952eb31b726abd1a9fd",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0265",
+      "version": "0.2.0",
+      "sha256": "dac650c27e317e9ae61ef905d8e09eb4a23535933650b497ab920511dc244fae",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0266",
+      "version": "0.2.0",
+      "sha256": "2724d1f9f65485135d07ed74cab002ae62684a15a7b16c1ec5d4b8f439715d12",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0267",
+      "version": "0.2.0",
+      "sha256": "de5b51fbf0f0e86d7f8f142fa1e06d2a4d685d9f4ba353c04059dbbaf8099df1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0268",
+      "version": "0.2.0",
+      "sha256": "7615b58a16c95aabc79512105b704815cc24c3248c691627fcc032f481c385cf",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0269",
+      "version": "0.2.0",
+      "sha256": "f844f459a89058d7b0fd42f3ca07c032bc8948ac08be9e5076a9e76304511747",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0270",
+      "version": "0.2.0",
+      "sha256": "d7962c08e93d01893fca2ce737bb80fbbee72884ec58d87f09d2e30dba1b1c05",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0271",
+      "version": "0.2.0",
+      "sha256": "38bbb8ec4cbc88606c93402a8f091cc2a0f707b65e58c511e5b303183bb2e65b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0272",
+      "version": "0.2.0",
+      "sha256": "ce185ccb39eaf923957db54f51ce959a6fe780407f82ea226e4295e8b927366d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0273",
+      "version": "0.2.0",
+      "sha256": "2669d214bfc21c39e53c5b0e2d455f31304d58a92530b58faeceab6043d99d4d",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0274",
+      "version": "0.2.0",
+      "sha256": "2ef263b9914469e80868fa9b215e3210f7a0c783c6cb7309f9b710873fb21725",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0275",
+      "version": "0.2.0",
+      "sha256": "11845de7de246974437102a40f952b8614157e2770baee0b447499c75289e553",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0276",
+      "version": "0.2.0",
+      "sha256": "b57a353f628683a5dde9bbdd5d6a0f3084d53ce1345191322f381d75b5a8cae0",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0277",
+      "version": "0.2.0",
+      "sha256": "c5ae4ec5e35d09f2d4a1e6063b253925b63982145264f93ff0c83ae8c6477f24",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0278",
+      "version": "0.2.0",
+      "sha256": "bd02abc778b55029ef8c0fde2493427954fdd2398f6efec57d4eec2a65b2553c",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0279",
+      "version": "0.2.0",
+      "sha256": "e0a095686759cd9964ab186fdc7c994489948ebef911416609bf994b594d49fc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0280",
+      "version": "0.2.0",
+      "sha256": "305141efc39c5dddb77a7d025ecde8fc7c9b766127190c246720db0b23c4e275",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0281",
+      "version": "0.2.0",
+      "sha256": "1802cac564dfad451dd3dc797ba1267d428d2b6c455e29eb3bd62050eb6f20fe",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0282",
+      "version": "0.2.0",
+      "sha256": "bac1de2a05cd3df71e0200ad9ab89d37c7ff20ae5641fe2a04566b531d9dfdc2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0283",
+      "version": "0.2.0",
+      "sha256": "39d69d1892a4228a47552466d8d472a4a3f389f72333d23c7c225fde9b976cee",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0284",
+      "version": "0.2.0",
+      "sha256": "6fb179a5e315711f3bf6c84053ef8e2fa6c6fdcdfeaae2e9d65eea14203a8f30",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0285",
+      "version": "0.2.0",
+      "sha256": "ff3ce7d45e1ed1d75bf450272f4438d2c2188e7da19806c2df98413a990be103",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0286",
+      "version": "0.2.0",
+      "sha256": "5e41161d93e6558acad19aea75fdd276cbebd9f1e578ce27a91210f33141f1f1",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0287",
+      "version": "0.2.0",
+      "sha256": "86a1384ffaa53e059a6c77cd86bbe90af671a9815b29ae6282acb40348fc192e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0288",
+      "version": "0.2.0",
+      "sha256": "93aa4ba7c7f3956c154b5b940e01b8d84228399c839d37eec429b61d481ab89a",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0289",
+      "version": "0.2.0",
+      "sha256": "9292bea0572124207401fc4df051b2e15538a641992da750915776745ba6dd0b",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0290",
+      "version": "0.2.0",
+      "sha256": "4fe18e5818e116438a708534b6080b4c56df9064bfec3b53256dc977f9a0d6fa",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0291",
+      "version": "0.2.0",
+      "sha256": "90fe65cf8c386f9b9154fb7479f9ba81acd3b18b92473c9bf6a6def2dc0e694e",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0292",
+      "version": "0.2.0",
+      "sha256": "bdea22fbbf306d2a9063e9243eea6f3ad228e682bdf30dd176e478087412b09f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0293",
+      "version": "0.2.0",
+      "sha256": "f6bd66b42d12a061a895f78e0e005ff54c2c9d51a8d02b67700096688970d997",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0294",
+      "version": "0.2.0",
+      "sha256": "4f6110d3453ac839fe9ef14bac4ecf5bf0bac99f7257e18cb10dff5ec9563716",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0295",
+      "version": "0.2.0",
+      "sha256": "e2fcbaeffcc0ecf64bcef43617fd4b913303bfc0abf79b8be7f8cbce780a55b2",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0296",
+      "version": "0.2.0",
+      "sha256": "bf2185f7dcd577a08c9361d690a90ff30e786bb82221f8e2881162b8f5081fe0",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0297",
+      "version": "0.2.0",
+      "sha256": "837026857053f529eb8bf8aea918c73e1690ac87ee37d68b4ff43f80806c3e45",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0298",
+      "version": "0.2.0",
+      "sha256": "3f0850e44582691b0d3b3b2f7ae701f7002d007fa26df48565a1720d8bc5e84f",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0299",
+      "version": "0.2.0",
+      "sha256": "cac8246fcc48fa99250a285458156cf4190a495d693ad5f327144c0d45b0b6dc",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "ADHD-0300",
+      "version": "0.2.0",
+      "sha256": "a495b0ef96c721b4f900335ef2c320c2f2ec42b768c03d7178d1810974f59fac",
+      "status": "experimental",
+      "source": "data/skills/bseb_adhd_300_v0_2.json"
+    },
+    {
+      "skill_id": "a_w1_anchor_60_base",
+      "version": "2.0.0",
+      "sha256": "e03bcaeb5af73fab8c24cba7fb25e7eee864b80f28c44574e1a6dd6999b0326e",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w1_task_clarity_alt",
+      "version": "2.0.0",
+      "sha256": "4ae6c7872195f0ea8e69e54910b743134cc817726ccfc514c2f1e7e831df6cbe",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w2_experiment_alt",
+      "version": "2.0.0",
+      "sha256": "3c12bc6fc3ca47835e0b6d117bcbfaaac56c8fdb2964681f68843a9673e75358",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w2_notice_thought_base",
+      "version": "2.0.0",
+      "sha256": "b3708c5095ae99ed93a6bb430a20877627a420317b07807e1fc5940dbc37f113",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w3_separate_critic_base",
+      "version": "2.0.0",
+      "sha256": "6006181451aef08cdabb10ff6e2def252748ca0b7350014b0d79e1e71b516bdf",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w3_support_alt",
+      "version": "2.0.0",
+      "sha256": "dcf7f1a2a39a37e97049035649d0d6cbd1a66248d2d95f978d0e831332361dc3",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w4_env_shield_base",
+      "version": "2.0.0",
+      "sha256": "4dec0ddb5893d5266fe140f968e13e683d67b0344119fb988e33b5ef9e517900",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "a_w4_weekly_review_alt",
+      "version": "2.0.0",
+      "sha256": "b843e5da0af89d6b0569d215204e5afecdb9f8ff6474c9d98f4608b10b7f2f0d",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "adhd_1_not_todo",
+      "version": "2.0.0",
+      "sha256": "435b72c1c1ddca921c3d2fd45311e6ab345ad8931fcfb24f444549a1c118cf57",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "adhd_2_focus_sprint",
+      "version": "2.0.0",
+      "sha256": "de5379825c6824c29cd0ff98090c49f857742aac8843c8f41d8ca67865e93869",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "anx_1_anchor",
+      "version": "2.0.0",
+      "sha256": "f09e9ed8eb379467357b7d09ef640546d66daf7349ba494d0ee71f24fe2f0324",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "anx_2_worry_time",
+      "version": "2.0.0",
+      "sha256": "0e01a299337f5a6969f2843b0d25605b448ef7a41e2e46bc88356e6695586545",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "anx_3_exposure_micro",
+      "version": "2.0.0",
+      "sha256": "0ecf2fbb380ccc08b6d06f796ea3fae8d45d465cc081e1fb514ef12ecaccbe5d",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "anx_4_cognitive_check",
+      "version": "2.0.0",
+      "sha256": "6df5fe35fdbb180336a43de559475a3979560473ea956628223bb0d1be465ed1",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "bad_draft",
+      "version": "2.0.0",
+      "sha256": "6b0fae879244d16b9a49aac873d33ac17bb6a88f1a63064ddca73fe9241e059f",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "bad_first_step",
+      "version": "2.0.0",
+      "sha256": "e7889930a5ec6b4793bf56283a7653b48477221ba9388e935b8beb54238d3e9a",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "body_before_task",
+      "version": "2.0.0",
+      "sha256": "196d45f30f24799aa52b5091382cc6bffb3275192635be9ab7aa883d41c91b20",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "body_doubling_plan",
+      "version": "2.0.0",
+      "sha256": "4293eb3ca5a2386c9e94f1af40f9d013c67a4aaf491ed2bfb7936a902c59ab5a",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "body_first",
+      "version": "2.0.0",
+      "sha256": "dd8e65752f2bd06756015553f720437c1edbb0f94cf1f37681757401d3c9d150",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "check_the_facts_light",
+      "version": "2.0.0",
+      "sha256": "da051cd0eaed40a9b17f07c9701f650eee3d1a5f0ab5a70c227b7e03ab5a32f9",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "crisis_grounding",
+      "version": "2.0.0",
+      "sha256": "61b4e6eee6fc0e495211f3872d51a655765ca8a9ca4ecf869c28ca456f54209e",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d1_day_catch_escape",
+      "version": "2.0.0",
+      "sha256": "f69d98cf90f7218476e20d8aa3bdc78b7dc7d0dba07627182f80d378d6de6a00",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d1_moment_anxious",
+      "version": "2.0.0",
+      "sha256": "3e15ab1e3c0ccc4e9ef064e8d46b17ce3655dc642e64008692162c65b4dcf47b",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d1_moment_distractible",
+      "version": "2.0.0",
+      "sha256": "ed63012165d1a28a1e0c9f0e0ccd2752200612d3c24ab65e6ba9ddfaea6103ef",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d1_moment_low_energy",
+      "version": "2.0.0",
+      "sha256": "2bc4c599d80d80d3ded003d5003de255d6543d02535f2b0e4ea05daeaeb18e3a",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d1_moment_mixed",
+      "version": "2.0.0",
+      "sha256": "2a587b5f74c013f67da68d0c3fcc1af0677cf043888e2a032899bd16aa441b77",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d2_day_state_switch",
+      "version": "2.0.0",
+      "sha256": "f0529584a4d83398cf5a1e4ac8d54338abe71c18fa2a91e4850d6396d00a1eaf",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d2_moment_anxious",
+      "version": "2.0.0",
+      "sha256": "0c53912e0ed6a817fd0b94437c3f4eb4e15b94a5f12eb3f5964fdffab8404aea",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d2_moment_distractible",
+      "version": "2.0.0",
+      "sha256": "9ca5c96abcbac39c475b576547730dafc2c9a5e3252913347e5bbde25b0f7579",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d2_moment_low_energy",
+      "version": "2.0.0",
+      "sha256": "397f3e07960880b39987b4926c085cc58b931dd4eaa5e01af5998a27b3b3833d",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d2_moment_mixed",
+      "version": "2.0.0",
+      "sha256": "294a87a87579c19562949d6c4550fd5331afb0667c4f30198a611d2d7e1038d7",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d3_day_return_no_shame",
+      "version": "2.0.0",
+      "sha256": "8fd06e3c6e3da87d7341efcdc50262ab5e3e633304349d6b6f2a565af3978d47",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d3_moment_anxious",
+      "version": "2.0.0",
+      "sha256": "13f4b535f9e9b6fbb941f50ffb6481f5fd64b282e32805ffd33b8d34ff2b772e",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d3_moment_distractible",
+      "version": "2.0.0",
+      "sha256": "00d04c839e7d8050e5559f34e1be1a963772173300cd8cf475e3fcf45ca54702",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d3_moment_low_energy",
+      "version": "2.0.0",
+      "sha256": "506f356d19a4e157617284c0074c6bf38dac21b2057c22b1de03b7ff87e6fc0d",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d3_moment_mixed",
+      "version": "2.0.0",
+      "sha256": "180654004f4c865080b34f8414a9c0fbe9d460600641f995714db67be1385393",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w1_phone_out_alt",
+      "version": "2.0.0",
+      "sha256": "f3aded7e1052a8775e347cd638acb668c639832eb7830c61905b71c4b832571f",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w1_single_window_base",
+      "version": "2.0.0",
+      "sha256": "ad8513b02b98354525a29741a4aae814cf77f8c91cc95f0a3fad9696c690a632",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w2_capture_then_do_alt",
+      "version": "2.0.0",
+      "sha256": "2e14667ba11a14d68c994295221a32b1f3b264f9f2ba346415df24d1eadc2e86",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w2_soft_return_base",
+      "version": "2.0.0",
+      "sha256": "c6742416c9d9493ee7f47e1e03aeb88d1bdf2610f29aea5ad316796fa22f695c",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w3_env_shield_base",
+      "version": "2.0.0",
+      "sha256": "0e82bf6e32ffb6c16965134ec70d46ddf668463c2a496567d8ebbb4d83645b8e",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w3_return_no_punish_alt",
+      "version": "2.0.0",
+      "sha256": "2d911d5c24e87f1617c0e0d6ba1f8464b258303aa2bfa5c68555cca4084f90c6",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w4_focus_block_20_base",
+      "version": "2.0.0",
+      "sha256": "16f27cc6ec8f5f6ad387c243b23217329b8f0fa9f53850c188da37e0fde88295",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "d_w4_weekly_review_alt",
+      "version": "2.0.0",
+      "sha256": "834d482b27455d51ef54cbfe9cee5103edc3451c7d82e1fcd42e5f027cf7a39e",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "dep_1_timer",
+      "version": "2.0.0",
+      "sha256": "2d72d37119b0567e425f9469f23231601647fa0a2fcf404e971f2060c437de5c",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "dep_2_micro_task",
+      "version": "2.0.0",
+      "sha256": "fc8700528a67db1aab0b207be5c2194208f87b557fc228dc86cd0770f11038e7",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "dep_3_behavior_activation",
+      "version": "2.0.0",
+      "sha256": "ff538515a32d374b0f7ce4b920acdb27ffe8d6f4c753080d8d76684e530cdee2",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w1_resistance_timer_base",
+      "version": "2.0.0",
+      "sha256": "6553ca109028090f60c0c80e3e45c8b9ff82698cff736179d98256deb6beb33e",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w1_restore_one_alt",
+      "version": "2.0.0",
+      "sha256": "ed15f251af933ab5cfa4c6d2fa9e0d08683a60fdb659ba6c0c297a5757ba0dff",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w2_micro_start_base",
+      "version": "2.0.0",
+      "sha256": "e36292c5a4f919d61575d42047f41170539d6a25504713e444f65ddfb132d443",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w2_not_to_do_alt",
+      "version": "2.0.0",
+      "sha256": "e9fac2787b1efb8995a9a5466a61831c20d587f42fbcc4bdfafd45b67371adf7",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w3_return_no_punish_base",
+      "version": "2.0.0",
+      "sha256": "0b86c988b134936cce7e8e4b749a91593613ec518f66df40dd104aa661f931bd",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w3_support_alt",
+      "version": "2.0.0",
+      "sha256": "2e8cac7fe750b9cb6e65158750a5ee9f07228bade759c489da23a305c6b84047",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w4_env_shield_base",
+      "version": "2.0.0",
+      "sha256": "5bf9047ec062970bd50f3ee29f1f97afcf8b4f8d9534a3d6154ceecb98e8819a",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "e_w4_weekly_review_alt",
+      "version": "2.0.0",
+      "sha256": "b2a407f12e02ab4f712e9f971bade31cb2cc3ddc41810c8576d98c63125fd194",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "external_start",
+      "version": "2.0.0",
+      "sha256": "3677fe6f90b882cf6949c2363bf47fb0808ba8a241e96fb757af2309c91bcc79",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "if_then_plan",
+      "version": "2.0.0",
+      "sha256": "6394ef28c889e934af73e1efd5c8932da2a3da3ecffe44d9dd3e00a5898b0c49",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w1_clarity_1line_alt",
+      "version": "2.0.0",
+      "sha256": "7a7e1c4956b90448fdd16f769ef9c5b6a525eea102a567f7b7b6f7109435bb2b",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w1_not_to_do_base",
+      "version": "2.0.0",
+      "sha256": "ab329d2c8d999f566948dcca524abe00f90c323c83fdcbcabaa8cfc00e9a07c8",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w2_micro_start_alt",
+      "version": "2.0.0",
+      "sha256": "d6edc5272344c76cd308169c899adb3152a5aaf596e4176e804aacdc67941316",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w2_notice_thought_base",
+      "version": "2.0.0",
+      "sha256": "b9fe8ffa6320c11287b8000cd4d494fbb1438363fa436904304862d3636a31a0",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w3_separate_critic_base",
+      "version": "2.0.0",
+      "sha256": "d2a54a3d303ad0156e1540cb60c4b69462459f7713e780221e67b510bd291500",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w3_support_alt",
+      "version": "2.0.0",
+      "sha256": "935707d35bd70bdbc8a42e45c328ead9ede79fe458f2a18e026a588f2a67a051",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w4_env_shield_base",
+      "version": "2.0.0",
+      "sha256": "1759cf46815eac4bff97c21e6b8d74f7c6df92e82268c712f15522142d9a2d81",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "m_w4_weekly_review_alt",
+      "version": "2.0.0",
+      "sha256": "bad5f87639b2975b2135ee4264663cad6941492c6eb6d04fa329e3ec23c6314c",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "micro_start",
+      "version": "2.0.0",
+      "sha256": "61db90ca62c4ce90b039038e8b46681b6fca814006a81182fce20cac218a118c",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "minimum_viable_day",
+      "version": "2.0.0",
+      "sha256": "ba2d2d574629e0cf7f7a2594b2802d916a70e070336befbf7c0bc56ba764d938",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "mix_1_anchor_start",
+      "version": "2.0.0",
+      "sha256": "accf43e265620b64887c449e05f79c3a00a5e239d03a9385c28208286be80003",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "mix_2_no_self_attack",
+      "version": "2.0.0",
+      "sha256": "45d10f046c0f53f7c1bea247d44b845ad475540972ceef218b84a5a9755066ea",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "name_task_one_word",
+      "version": "2.0.0",
+      "sha256": "63e97aefa8941e15151523728e53f16a28ea83e27ce3bc17067ba57a43ec8b3f",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "ninety_sec_start",
+      "version": "2.0.0",
+      "sha256": "c601df1e674ba681e0009eda71b1e3fbda889e2cc6e1e4d5083dea357f9cacdf",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "notice_thought",
+      "version": "2.0.0",
+      "sha256": "ece2cc0f81f8789fa8e6d478cafe5eaa46dcc4f7472d2b29f3cd575c72fb2e55",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "one_tab_focus",
+      "version": "2.0.0",
+      "sha256": "a2169e054afcd696074a35e6c356dc12961731322791bb09862d8657ddc5803f",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "one_visible_step",
+      "version": "2.0.0",
+      "sha256": "197db775735b02f2b9091ff757e972621d02fb79494b2838e7d97f09cda9cede",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "open_only",
+      "version": "2.0.0",
+      "sha256": "cb406ce6cca966769006662e813a4fa80f33065b0005705a5221b23057fb1b52",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "open_without_timer",
+      "version": "2.0.0",
+      "sha256": "49108768e37398def324fa1984b654edc03215000162497df97a8262bfabccb3",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "phone_away_3_min",
+      "version": "2.0.0",
+      "sha256": "17d3774de3879e7d7736659d4a412463a10c2e38869450a986a6cc163a6da42b",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "phone_far_3min",
+      "version": "2.0.0",
+      "sha256": "014b9858f3bc62d2a366bda91aa9de5769669e6e5b45a71a4da8dcff8099ef3d",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "restart_after_break",
+      "version": "2.0.0",
+      "sha256": "20013b8d0d3518e9606ab25b0eb5d21f604900ce5207292f06b0487b5f44864a",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "restart_after_slip",
+      "version": "2.0.0",
+      "sha256": "74b4b80c4d0aeff7b9a7d1cccd6885d1df120920ac30e812b8ec60611c92c680",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "return_no_punish",
+      "version": "2.0.0",
+      "sha256": "10ce2876f435845da27ccc577da87a2525d60c11808f37de8d111e159811ab3e",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "self_criticism_to_instruction",
+      "version": "2.0.0",
+      "sha256": "aea889650355a45b6126eb49e253e307586b797261fc4908af2dc1a4ddb17a64",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "task_naming",
+      "version": "2.0.0",
+      "sha256": "a94fafd0582ac85e43e515703ebd5ce27e6277105916e5fcc96098e14d541901",
+      "status": "production",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "two_min_start",
+      "version": "2.0.0",
+      "sha256": "507a3850653bfc4ca468a9c652aed2c9b8040664d4bd4fa96b9589c5631a691b",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "urge_surf_60",
+      "version": "2.0.0",
+      "sha256": "cb5bd7d741fc92da8b9c47e8dee79a0ff0c589c38f0a087adcd8e71cf9b0b2e0",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    },
+    {
+      "skill_id": "visible_next_step",
+      "version": "2.0.0",
+      "sha256": "6db0646dc6ae2ffffff0d88d89db89daa8a94895b2de4e997715d7aec4b2c6f4",
+      "status": "reviewed",
+      "source": "legacy-registry-adapter"
+    }
+  ]
+}

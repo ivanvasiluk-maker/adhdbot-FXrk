@@ -807,6 +807,11 @@ def can_show_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) 
             int(u.get("crisis_mode") or 0) == 1 or str(u.get("stage") or "").startswith("safety")
         ),
         current_day=current_day,
+        confirmed_working_skill_exists=bool(
+            _profile_list(profile.get("successful_skills"))
+            or profile.get("last_successful_skill")
+            or int(profile.get("skill_helpful_confirmation_count") or 0) > 0
+        ),
     )
     return (
         evaluate_value_proof(proof).eligible
@@ -6560,7 +6565,8 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
     text = trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer")
     if is_preview:
         text = (
-            "Это можно посмотреть заранее. Автоматически мы предложим полный режим после 3-го дня. "
+            "Это можно посмотреть заранее. Автоматически варианты появятся после 3-го дня "
+            "или после первого подтверждённого рабочего навыка. "
             "Сейчас можно изучить варианты или вернуться к тренировке.\n\n"
             + text
         )
@@ -6640,6 +6646,11 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
         bool(profile["personalized_insight_exists"]), bool(profile.get("value_report_seen_at")),
         bool(int(u.get("crisis_mode") or 0) or str(u.get("stage") or "").startswith("safety")),
         int(u.get("day") or 1),
+        bool(
+            _profile_list(profile.get("successful_skills"))
+            or profile.get("last_successful_skill")
+            or int(profile.get("skill_helpful_confirmation_count") or 0) > 0
+        ),
     )
     eligibility = evaluate_value_proof(pre_report)
     if eligibility.reason_codes == ("VALUE_REPORT_NOT_SEEN",):
@@ -6691,7 +6702,7 @@ async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
 
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
-    """Strict offer gate: never on days 1-2 or via test/force-day shortcuts."""
+    """Value-proof gate: day three or the first confirmed working skill."""
     if int(u.get("full_mode") or 0) == 1 or int(u.get("free_mode") or 0) == 1:
         return False
     has_payment_url = bool(PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)
@@ -6953,6 +6964,7 @@ OFFER_CALLBACKS = {
     "bot": "offer:bot",
     "live": "offer:live_review",
     "guided": "offer:guided",
+    "group": "offer:group",
     "compare": "offer:compare",
     "stay_free": "offer:stay_free",
     "paid_test": "offer:paid_test",
@@ -6961,6 +6973,7 @@ OFFER_CALLBACKS = {
     "choose_later": "offer:choose_later",
     "request_live": "offer:request_live",
     "request_guided": "offer:request_guided",
+    "request_group": "offer:request_group",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -6995,9 +7008,10 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(text=f"🤖 Продолжить — €{BASE_OFFER_EUR_LABEL}", callback_data=OFFER_CALLBACKS["bot"])],
-        [InlineKeyboardButton(text="📚 Другие форматы поддержки", callback_data=OFFER_CALLBACKS["compare"])],
-        [InlineKeyboardButton(text="🤔 Остаться в коротком режиме", callback_data=OFFER_CALLBACKS["stay_free"])],
+        [InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
+        [InlineKeyboardButton(text=f"🔵 Подписка — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])],
+        [InlineKeyboardButton(text="🟠 Группа КПТ — подробнее", callback_data=OFFER_CALLBACKS["group"])],
+        [InlineKeyboardButton(text="🔴 Консультация — €59", callback_data=OFFER_CALLBACKS["live"])],
     ]
     if PAYMENT_ACCEPT_ANY:
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
@@ -7008,9 +7022,10 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 Выбрать бот", callback_data=OFFER_CALLBACKS["bot"])],
-        [InlineKeyboardButton(text="👤 Выбрать живой разбор", callback_data=OFFER_CALLBACKS["live"])],
-        [InlineKeyboardButton(text="⭐ Выбрать бот + специалист", callback_data=OFFER_CALLBACKS["guided"])],
+        [InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
+        [InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])],
+        [InlineKeyboardButton(text="🟠 Группа КПТ", callback_data=OFFER_CALLBACKS["group"])],
+        [InlineKeyboardButton(text="🔴 Индивидуальная консультация", callback_data=OFFER_CALLBACKS["live"])],
         [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
     ])
 
@@ -7065,28 +7080,45 @@ def offer_disclaimer_text() -> str:
 
 def tariff_bot_text() -> str:
     return (
-        "🤖 SKILLER Бот — €9.99 / месяц\n\n"
-        "Подходит, если хочешь тренироваться самостоятельно.\n\n"
+        f"🔵 Подписка SKILLER Бот — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
+        "Founding Member: эта цена сохранится для тебя, пока подписка остаётся активной.\n"
+        "Ты сможешь влиять на развитие продукта и первым получать новые функции.\n\n"
+        "Если SKILLER уже помог сделать первые шаги, подписка поможет продолжить строить персональную систему навыков.\n\n"
         "Внутри:\n"
-        "— навыки на каждый день;\n"
-        "— карта твоих стопоров;\n"
-        "— история попыток;\n"
-        "— подбор следующего шага;\n"
-        "— недельный маршрут.\n\n"
+        "— персональная карта навыков;\n"
+        "— Learning Engine;\n"
+        "— неограниченное количество экспериментов;\n"
+        "— персональные напоминания;\n"
+        "— журнал экспериментов и поведенческие цепочки;\n"
+        "— все новые навыки, тренеры и обновления.\n\n"
         "Это тренажёр навыков, не психотерапия.\n"
     )
 
 
 def tariff_live_text() -> str:
     return (
-        "👤 Живой разбор — €59\n\n"
-        "Разовый созвон со специалистом до 45 минут.\n\n"
-        "Что будет:\n"
-        "— посмотрим твою карту в боте;\n"
-        "— найдём главный механизм стопора;\n"
-        "— выберем 2–3 рабочих навыка;\n"
-        "— соберём маршрут на 7–14 дней.\n\n"
+        "🔴 Индивидуальная консультация — Живой разбор — €59\n\n"
+        "Для тех, кто хочет быстрее разобраться именно со своей ситуацией.\n\n"
+        "Во время встречи:\n"
+        "— анализ механизмов;\n"
+        "— построение персонального плана;\n"
+        "— выбор наиболее подходящих навыков;\n"
+        "— интеграция SKILLER в ежедневную жизнь.\n\n"
         "Это не терапия и не кризисная помощь.\n"
+    )
+
+
+def tariff_group_text() -> str:
+    return (
+        "🟠 Группа КПТ — 12 недель\n\n"
+        "Ведущий — Иван Василюк. Программа основана на КПТ и ДБТ.\n\n"
+        "Что получает участник:\n"
+        "— еженедельные занятия;\n"
+        "— домашние поведенческие эксперименты;\n"
+        "— поддержку группы;\n"
+        "— использование SKILLER между встречами.\n\n"
+        "Цена: €360 — по €120 в месяц.\n"
+        "Перед участием — короткое собеседование."
     )
 
 
@@ -7109,15 +7141,24 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = []
     pay_url = payment_bot_999_url()
     if pay_url:
-        rows.append([InlineKeyboardButton(text="💳 Оплатить €9.99", url=pay_url)])
+        rows.append([InlineKeyboardButton(text=f"💳 Оформить за €{BASE_OFFER_EUR_LABEL}", url=pay_url)])
     else:
-        rows.append([InlineKeyboardButton(text="💳 Оплатить €9.99", callback_data="pay:bot_999")])
+        rows.append([InlineKeyboardButton(text=f"💳 Оформить за €{BASE_OFFER_EUR_LABEL}", callback_data="pay:bot_999")])
     rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return offer_variant_inline_keyboard(user_id, OFFER_CALLBACKS["request_live"])
+
+
+def tariff_group_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="✍️ Записаться на собеседование", callback_data=OFFER_CALLBACKS["request_group"])],
+        [InlineKeyboardButton(text="💬 Написать Ивану", url="https://t.me/Ivan_Vasiliuk")],
+    ]
+    rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def tariff_specialist_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -7134,15 +7175,13 @@ def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 def offer_details_full_mode_text() -> str:
     return (
         "📚 Форматы SKILLER\n\n"
-        "🤖 Бот — €9.99 / месяц\n"
-        "Для самостоятельной тренировки.\n"
-        "Бот даёт навыки, хранит попытки и собирает личный маршрут.\n\n"
-        "👤 Живой разбор — €59 разово\n"
-        "Для тех, кто хочет быстрее понять свой паттерн.\n"
-        "Специалист смотрит карту и даёт маршрут на 7–14 дней.\n\n"
-        "⭐ Бот + специалист — €149 / месяц\n"
-        "Для тех, кому трудно держать темп одному.\n"
-        "Бот работает каждый день, а специалист раз в неделю смотрит прогресс и помогает скорректировать маршрут."
+        "🟢 Бесплатно — базовая версия для самостоятельного движения.\n\n"
+        f"🔵 Подписка — €{BASE_OFFER_EUR_LABEL} / месяц\n"
+        "Карта навыков, Learning Engine, неограниченные эксперименты, напоминания и журнал.\n\n"
+        "🟠 Группа КПТ — 12 недель, €360\n"
+        "Еженедельные занятия, эксперименты, поддержка и SKILLER между встречами.\n\n"
+        "🔴 Индивидуальная консультация — €59\n"
+        "Анализ механизмов и персональный план применения навыков."
     )
 
 
@@ -10377,7 +10416,7 @@ async def handle_successful_payment(m: Message):
         u,
         "telegram_successful_payment",
         {
-            "amount": 9.99 if amount_total in {None, 999} else amount_total,
+            "amount": float(BASE_OFFER_EUR) if amount_total is None else round(float(amount_total) / 100, 2),
             "currency": currency,
             "payload": payload,
             "days": 30,
@@ -13629,8 +13668,12 @@ async def on_offer_callbacks(c: CallbackQuery):
         await c.answer()
         return
 
-    if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"]}:
-        format_label = "Живой разбор" if data == OFFER_CALLBACKS["request_live"] else "Бот + специалист"
+    if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"], OFFER_CALLBACKS["request_group"]}:
+        format_label = {
+            OFFER_CALLBACKS["request_live"]: "Живой разбор",
+            OFFER_CALLBACKS["request_guided"]: "Бот + специалист",
+            OFFER_CALLBACKS["request_group"]: "Группа КПТ — собеседование",
+        }[data]
         set_legacy_stage(u, "offer_request_form")
         u["pending_offer_request_format"] = format_label
         u["last_offer_action"] = data
@@ -13641,8 +13684,14 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {OFFER_CALLBACKS["bot"], "offer_bot"}:
-        await log_event(uid, "offer", "tariff_details_opened", {"format": "bot", "amount": 9.99}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "tariff_details_opened", {"format": "subscription_founding", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, tariff_bot_text(), tariff_bot_inline_keyboard(uid), "offer")
+        await c.answer()
+        return
+
+    if data == OFFER_CALLBACKS["group"]:
+        await log_event(uid, "offer", "tariff_details_opened", {"format": "cbt_group", "amount": 360, "installment": 120}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(c.message, u, tariff_group_text(), tariff_group_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
@@ -13674,6 +13723,11 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {OFFER_CALLBACKS["stay_free"], "stay_free"}:
         await log_event(uid, "offer", "payment_declined_soft", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "free_mode_started", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        u["free_mode"] = 1
+        u["payment_status"] = "free_mode"
+        await save_user(u, DB_PATH)
+        await c.message.answer(stay_free_text())
         await leave_offer_menu(c.message, u, "offer_stay_free")
         await c.answer()
         return
@@ -13690,7 +13744,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {"pay:bot_999", "pay:live_59", "pay:guided_149"}:
         pay_url = payment_bot_999_url() if data == "pay:bot_999" else configured_payment_url()
-        amount_label = {"pay:bot_999": "€9.99", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
+        amount_label = {"pay:bot_999": f"€{BASE_OFFER_EUR_LABEL}", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
         if pay_url:
             u["payment_status"] = "pending_bot_999" if data == "pay:bot_999" else "pending_payment"
             u["last_payment_click"] = data
@@ -14208,6 +14262,7 @@ async def main() -> int:
             from core.skill_registry import FileSkillRegistry
             ACTIVE_FILE_SKILL_REGISTRY = FileSkillRegistry.load(
                 SKILL_LIBRARY_PATH, fail_closed=SKILL_LIBRARY_FAIL_CLOSED,
+                baseline_skills=SKILL_REGISTRY.all(),
             )
             if SKILL_LIBRARY_FAIL_CLOSED and not ACTIVE_FILE_SKILL_REGISTRY.manifest()["cards"]:
                 raise RuntimeError("SKILL_REGISTRY_ENABLED but the file skill library is empty")

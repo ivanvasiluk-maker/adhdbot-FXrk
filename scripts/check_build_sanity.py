@@ -54,16 +54,16 @@ CRISIS_ENTRY_MARKERS = (
 )
 
 OFFER_REQUIRED_BUTTONS = (
-    "🤖 Продолжить — €",
-    "👤 Живой разбор — €59",
-    "⭐ Бот + специалист",
-    "📚 Другие форматы поддержки",
-    "🤔 Остаться в коротком режиме",
+    "🟢 Продолжить бесплатно",
+    "🔵 Подписка — €",
+    "🟠 Группа КПТ — подробнее",
+    "🔴 Консультация — €59",
 )
 OFFER_REQUIRED_CALLBACKS = (
     "offer:bot",
     "offer:live_review",
     "offer:guided",
+    "offer:group",
     "offer:compare",
     "offer:stay_free",
 )

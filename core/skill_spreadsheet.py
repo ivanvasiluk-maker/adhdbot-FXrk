@@ -93,3 +93,22 @@ def read_csv(content: bytes) -> tuple[SpreadsheetTable, ...]:
 
 def flatten(tables: Iterable[SpreadsheetTable]) -> tuple[dict[str, str], ...]:
     return tuple({"_sheet": table.name, **row} for table in tables for row in table.rows)
+
+
+def skill_tables(tables: Iterable[SpreadsheetTable]) -> tuple[SpreadsheetTable, ...]:
+    """Keep worksheets that contain both a user title and an instruction.
+
+    Workbooks commonly include source indexes, summaries, and review checklists
+    alongside the actual cards. Those support sheets must not be interpreted as
+    incomplete skill rows merely because they also contain an ID column.
+    """
+    title_headers = {"title", "title_user", "название", "название навыка", "навык"}
+    instruction_headers = {
+        "standard_variant", "instruction", "how", "инструкция", "обычная версия", "алгоритм",
+    }
+    selected = []
+    for table in tables:
+        headers = {re.sub(r"\s+", " ", value.strip().lower()) for value in table.headers}
+        if headers & title_headers and headers & instruction_headers:
+            selected.append(table)
+    return tuple(selected)

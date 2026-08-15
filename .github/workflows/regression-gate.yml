@@ -10,9 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Commit-discipline validation needs the recorded rollout baseline.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      - run: python scripts/check_patch_sequence.py
+      - run: python scripts/check_patch_commits.py
       - run: python scripts/regression_gate.py

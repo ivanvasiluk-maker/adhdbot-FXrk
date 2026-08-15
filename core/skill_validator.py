@@ -6,8 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-from core.mechanism_model import MECHANISM_CODES
-from core.skill_schema import ACTION_PHASES, CONTEXTS, QUALITY_STATUSES, Skill
+from core.skill_schema import ACTION_PHASES, APPROACHES, CONTEXTS, QUALITY_STATUSES, Skill
+from core.skill_taxonomy import MECHANISM_CODES
 
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 FORBIDDEN_PROMISES = ("гарантированно вылеч", "лечит сдвг", "поставит диагноз")
@@ -30,6 +30,12 @@ def validate_skill(skill: Skill, *, source_version: str | None = None) -> list[V
 
     if source_version is not None and not SEMVER.fullmatch(source_version):
         add("INVALID_SEMVER", f"version must be semver, got {source_version!r}")
+    if not skill.id.strip() or not skill.title_user.strip() or not skill.title_internal.strip():
+        add("MISSING_IDENTITY", "id and titles are required", always_fatal=True)
+    if skill.approach not in APPROACHES:
+        add("UNKNOWN_APPROACH", skill.approach, always_fatal=True)
+    if not skill.mechanisms:
+        add("MISSING_MECHANISM", "at least one mechanism is required")
     unknown_mechanisms = sorted(set(skill.mechanisms) - MECHANISM_CODES)
     if unknown_mechanisms:
         add("UNKNOWN_MECHANISM", ", ".join(unknown_mechanisms))
@@ -45,6 +51,10 @@ def validate_skill(skill: Skill, *, source_version: str | None = None) -> list[V
         add("MISSING_SOURCE", "source reference is required")
     if not skill.feedback_questions:
         add("MISSING_FEEDBACK", "at least one feedback question is required")
+    if not skill.min_variant.strip() or not skill.standard_variant.strip():
+        add("MISSING_INSTRUCTION", "minimum and standard instructions are required", always_fatal=True)
+    if not skill.completion_criterion.strip():
+        add("MISSING_COMPLETION", "completion criterion is required")
     if skill.quality_status == "production" and not skill.fallback_skills:
         add("MISSING_FALLBACK", "fallback_skills or an explicit fallback policy is required")
     if skill.quality_status == "production" and not skill.contraindications:
@@ -71,8 +81,8 @@ def validate_references(skills: Iterable[Skill]) -> list[ValidationIssue]:
     return issues
 
 
-def fallback_cycles(skills: Iterable[Skill]) -> tuple[tuple[str, ...], ...]:
-    graph = {skill.id: tuple(skill.fallback_skills) for skill in skills}
+def graph_cycles(skills: Iterable[Skill], relation: str) -> tuple[tuple[str, ...], ...]:
+    graph = {skill.id: tuple(getattr(skill, relation)) for skill in skills}
     cycles: set[tuple[str, ...]] = set()
 
     def visit(node: str, path: tuple[str, ...]) -> None:
@@ -86,3 +96,15 @@ def fallback_cycles(skills: Iterable[Skill]) -> tuple[tuple[str, ...], ...]:
     for node in graph:
         visit(node, ())
     return tuple(sorted(cycles))
+
+
+def fallback_cycles(skills: Iterable[Skill]) -> tuple[tuple[str, ...], ...]:
+    return graph_cycles(skills, "fallback_skills")
+
+
+def prerequisite_cycles(skills: Iterable[Skill]) -> tuple[tuple[str, ...], ...]:
+    return graph_cycles(skills, "prerequisites")
+
+
+def next_skill_cycles(skills: Iterable[Skill]) -> tuple[tuple[str, ...], ...]:
+    return graph_cycles(skills, "next_skills")

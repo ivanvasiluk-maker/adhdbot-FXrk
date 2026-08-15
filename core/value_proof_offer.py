@@ -16,6 +16,7 @@ class ValueProof:
     user_has_seen_value_report: bool
     safety_active: bool
     current_day: int
+    confirmed_working_skill_exists: bool = False
 
 
 @dataclass(frozen=True)
@@ -34,9 +35,9 @@ class PersonalValueReport:
 
 def evaluate_value_proof(proof: ValueProof, *, earliest_day: int = OFFER_EARLIEST_DAY) -> OfferEligibility:
     missing = []
-    if proof.completed_experiments < 2:
+    if proof.completed_experiments < 2 and not proof.confirmed_working_skill_exists:
         missing.append("NEEDS_TWO_COMPLETED_EXPERIMENTS")
-    if proof.successful_or_partial < 1:
+    if proof.successful_or_partial < 1 and not proof.confirmed_working_skill_exists:
         missing.append("NO_MEASURED_BENEFIT_YET")
     if not proof.personalized_insight_exists:
         missing.append("NO_PERSONALIZED_INSIGHT")
@@ -44,7 +45,7 @@ def evaluate_value_proof(proof: ValueProof, *, earliest_day: int = OFFER_EARLIES
         missing.append("VALUE_REPORT_NOT_SEEN")
     if proof.safety_active:
         missing.append("SAFETY_ACTIVE")
-    if proof.current_day < earliest_day:
+    if proof.current_day < earliest_day and not proof.confirmed_working_skill_exists:
         missing.append("TOO_EARLY")
     return OfferEligibility(not missing, tuple(missing) if missing else ("VALUE_PROOF_CONFIRMED",))
 
@@ -62,8 +63,10 @@ def render_personal_value_report(report: PersonalValueReport) -> str:
 
 def render_base_unlock_offer(*, price: Decimal = BASE_OFFER_EUR) -> str:
     return (
-        f"Продолжить персональный маршрут — €{format_eur(price)}.\n"
-        "Базовый unlock включает новые эксперименты, закрепление работающих навыков и журнал результатов."
+        f"Подписка SKILLER Founding Member — €{format_eur(price)} / месяц.\n"
+        "Цена сохраняется, пока подписка остаётся активной. Внутри: персональная карта навыков, "
+        "Learning Engine, неограниченные эксперименты, напоминания, журнал, поведенческие цепочки, "
+        "новые навыки и тренеры."
     )
 
 

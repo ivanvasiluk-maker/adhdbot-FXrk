@@ -64,7 +64,7 @@ TEST_CHEAT_CODE=SKILLER_TEST_1498
 LEARNING_ENGINE_ENABLED=false
 RANKING_ENGINE_ENABLED=false
 ACTIVE_SKILL_QUALITY_LEVEL=validated
-BASE_OFFER_EUR=5.00
+BASE_OFFER_EUR=4.99
 OFFER_EARLIEST_DAY=3
 NEW_ARCHITECTURE_ENABLED=false
 NEW_ARCHITECTURE_TEST_COHORT_ENABLED=true
@@ -83,6 +83,11 @@ Notes:
 - User state is stored in the `users` table and migrated additively. The durable resume columns are `telegram_id`, `day_number`, `current_step`, `access_status`, `trainer`, `mode`, `created_at`, `updated_at`, and `schema_version`; legacy bot fields are kept in sync for compatibility.
 
 ## Mandatory regression gate
+
+PATCH-00 through PATCH-17 follow the ordered, one-patch-per-commit rollout contract in
+[`docs/PATCH_ROLLOUT.md`](docs/PATCH_ROLLOUT.md). Run a patch's dedicated acceptance command before
+the complete gate; CI rejects missing/out-of-order contracts and post-baseline commits without one
+`PATCH-XX:` owner.
 
 Run the offline merge gate for every patch:
 

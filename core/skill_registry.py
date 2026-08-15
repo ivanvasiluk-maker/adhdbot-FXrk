@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 from core.skill_index import SkillIndex
 from core.skill_schema import Skill
-from core.skill_validator import ValidationIssue, fallback_cycles, validate_references, validate_skill
+from core.skill_validator import (
+    ValidationIssue, fallback_cycles, next_skill_cycles, prerequisite_cycles,
+    validate_references, validate_skill,
+)
 
 
 class SkillLibraryError(RuntimeError):
@@ -69,7 +72,11 @@ def _card(raw: dict[str, Any], source: Path) -> LoadedCard:
         trainer_variants={key: str(value).strip() for key, value in trainers.items()},
     )
     canonical = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    return LoadedCard(skill, semver, str(source), hashlib.sha256(canonical).hexdigest())
+    try:
+        source_path = str(source.relative_to(Path.cwd()))
+    except ValueError:
+        source_path = str(source)
+    return LoadedCard(skill, semver, source_path, hashlib.sha256(canonical).hexdigest())
 
 
 class FileSkillRegistry:
@@ -87,9 +94,18 @@ class FileSkillRegistry:
         self.index = SkillIndex.build(card.skill for card in latest.values())
 
     @classmethod
-    def load(cls, path: str | Path, *, fail_closed: bool = True) -> "FileSkillRegistry":
+    def load(
+        cls, path: str | Path, *, fail_closed: bool = True,
+        baseline_skills: Iterable[Skill] = (),
+    ) -> "FileSkillRegistry":
         root = Path(path)
         parsed: list[LoadedCard] = []
+        for skill in baseline_skills:
+            payload = json.dumps(asdict(skill), ensure_ascii=False, sort_keys=True, default=list).encode()
+            parsed.append(LoadedCard(
+                skill, f"{skill.version}.0.0", "legacy-registry-adapter",
+                hashlib.sha256(payload).hexdigest(),
+            ))
         parse_issues: list[ValidationIssue] = []
         for source in sorted(root.glob("*.json")):
             payload = json.loads(source.read_text(encoding="utf-8"))
@@ -112,11 +128,16 @@ class FileSkillRegistry:
                 parsed.append(card)
         graph_issues = validate_references(card.skill for card in parsed)
         fatal_graph = [issue for issue in graph_issues if issue.fatal]
-        cycles = fallback_cycles(card.skill for card in parsed)
-        if fatal_graph or cycles:
+        cycles = {
+            "fallback": fallback_cycles(card.skill for card in parsed),
+            "prerequisite": prerequisite_cycles(card.skill for card in parsed),
+            "next_skill": next_skill_cycles(card.skill for card in parsed),
+        }
+        found_cycles = {name: value for name, value in cycles.items() if value}
+        if fatal_graph or found_cycles:
             detail = _format_issues(fatal_graph)
-            if cycles:
-                detail += " fallback cycles: " + ", ".join(" -> ".join(cycle) for cycle in cycles)
+            for name, values in found_cycles.items():
+                detail += f" {name} cycles: " + ", ".join(" -> ".join(cycle) for cycle in values)
             if fail_closed:
                 raise SkillLibraryError(detail.strip())
         return cls(parsed, (*parse_issues, *graph_issues))
@@ -182,7 +203,8 @@ class FileSkillRegistry:
         return tuple(f"{issue.code}: {issue.message}" for issue in self._issues if issue.skill_id == skill_id)
 
     def manifest(self) -> dict[str, Any]:
-        return {"schema_version": 1, "cards": [
+        counts = self.contour_counts()
+        return {"schema_version": 2, "skills": sum(counts.values()), **counts, "cards": [
             {"skill_id": card.skill.id, "version": card.semver, "sha256": card.content_hash,
              "status": card.skill.quality_status, "source": card.source_path}
             for card in sorted(self._cards.values(), key=lambda item: (item.skill.id, _semver_key(item.semver)))

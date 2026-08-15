@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from core.skill_registry import FileSkillRegistry, SkillLibraryError
+from core.skill_schema import Skill
 
 
 def card(skill_id, *, status="production", mechanism="evaluation_avoidance", fallback=("safe_fallback",)):
@@ -57,7 +58,19 @@ class FileSkillRegistryTests(unittest.TestCase):
         first = card("safe_fallback", status="experimental", fallback=())
         second = dict(first, version="1.1.0")
         registry = self.load([first, second])
-        self.assertEqual(len(registry.manifest()["cards"]), 2)
+        manifest = registry.manifest()
+        self.assertEqual(len(manifest["cards"]), 2)
+        self.assertEqual(manifest["skills"], 1)
+        self.assertEqual(manifest["experimental"], 1)
+
+    def test_prerequisite_and_next_cycles_fail_closed(self):
+        first = card("first", status="experimental", fallback=())
+        second = card("second", status="experimental", fallback=())
+        for relation in ("prerequisites", "next_skills"):
+            left = dict(first, **{relation: ["second"]})
+            right = dict(second, **{relation: ["first"]})
+            with self.subTest(relation=relation), self.assertRaisesRegex(SkillLibraryError, "cycles"):
+                self.load([left, right])
 
     def test_three_hundred_experimental_cards_load_without_duplicates(self):
         rows = [card(f"draft_{number:03d}", status="experimental", fallback=()) for number in range(300)]
@@ -68,6 +81,19 @@ class FileSkillRegistryTests(unittest.TestCase):
         self.assertEqual(registry.get_candidates("evaluation_avoidance", "work", "start"), ())
         self.assertEqual(registry.contour_counts()["experimental"], 300)
         self.assertEqual(registry.contour_counts()["production"], 0)
+
+    def test_validated_baseline_can_back_feature_gated_registry(self):
+        baseline = Skill(
+            "baseline", 2, "Baseline", "baseline", "CBT", ("overwhelm",), ("start",), ("work",),
+            ("acute_crisis",), (), (), (), (), (1, 2), "min", "standard", "done", ("result",),
+            "twice", 2, "repeat", (), "legacy review", "reviewed",
+            {"marsha": "a", "skinny": "b", "beck": "c"},
+        )
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        registry = FileSkillRegistry.load(directory.name, baseline_skills=(baseline,))
+        self.assertIsNotNone(registry.get("baseline"))
+        self.assertEqual(registry.manifest()["reviewed"], 1)
 
 
 if __name__ == "__main__":

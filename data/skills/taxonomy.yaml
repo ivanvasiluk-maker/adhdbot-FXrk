@@ -1,0 +1,14 @@
+{
+  "approaches": ["CBT", "DBT", "ACT", "BA", "ERP", "MBCT", "RO_DBT", "CBT_I", "OTHER"],
+  "statuses": ["production", "reviewed", "experimental", "disabled"],
+  "mechanisms": [
+    "evaluation_avoidance", "executive_start_deficit", "choice_overload", "low_activation",
+    "rumination", "emotional_avoidance", "perfectionism_error_fear", "attention_drift",
+    "unclear_next_action", "low_reward", "overwhelm", "recovery_after_lapse"
+  ],
+  "contexts": ["work", "study", "relationships", "health", "home", "finance", "communication", "other"],
+  "action_phases": ["start", "continue", "return", "choose", "finish", "rest", "stabilize"],
+  "emotions": ["anxiety", "shame", "anger", "sadness", "frustration", "boredom", "overwhelm", "neutral", "other"],
+  "task_types": ["planning", "prioritization", "initiation", "focus", "completion", "communication", "self_care", "other"],
+  "barrier_types": ["avoidance", "uncertainty", "low_energy", "distraction", "perfectionism", "overload", "emotion", "other"]
+}

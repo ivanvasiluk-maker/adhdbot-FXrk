@@ -34,7 +34,7 @@ SKILL_LIBRARY_SOURCE_URL = os.getenv(
     "SKILL_LIBRARY_SOURCE_URL",
     "https://docs.google.com/spreadsheets/d/19A4NkJzZJj7mVCqSq5jmY5t1pqD8BrDb/edit",
 ).strip()
-BASE_OFFER_EUR = _env_decimal("BASE_OFFER_EUR", "5.00")
+BASE_OFFER_EUR = _env_decimal("BASE_OFFER_EUR", "4.99")
 OFFER_EARLIEST_DAY = _env_int("OFFER_EARLIEST_DAY", 3)
 APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 NEW_ARCHITECTURE_ENABLED = _env_bool("NEW_ARCHITECTURE_ENABLED", False)

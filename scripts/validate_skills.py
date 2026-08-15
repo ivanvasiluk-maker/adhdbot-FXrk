@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.skill_registry import FileSkillRegistry, SkillLibraryError  # noqa: E402
+from skills import SKILL_REGISTRY  # noqa: E402
 
 
 def main() -> int:
@@ -21,7 +22,9 @@ def main() -> int:
     parser.add_argument("--write-manifest", action="store_true")
     args = parser.parse_args()
     try:
-        registry = FileSkillRegistry.load(ROOT / args.path, fail_closed=True)
+        registry = FileSkillRegistry.load(
+            ROOT / args.path, fail_closed=True, baseline_skills=SKILL_REGISTRY.all(),
+        )
     except (OSError, ValueError, SkillLibraryError) as exc:
         print(f"Skill validation failed: {exc}", file=sys.stderr)
         return 1
