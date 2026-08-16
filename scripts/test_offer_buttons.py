@@ -14,9 +14,11 @@ def callback_is_registered(callback: str) -> bool:
         "offer:bot": "bot",
         "offer:live_review": "live",
         "offer:guided": "guided",
+        "offer:group": "group",
         "offer:compare": "compare",
         "offer:stay_free": "stay_free",
         "offer:back": "back",
+        "offer:request_group": "request_group",
     }
     key = callback_to_key[callback]
     return (
@@ -31,9 +33,11 @@ def test_offer_buttons_have_handlers() -> None:
         "offer:bot",
         "offer:live_review",
         "offer:guided",
+        "offer:group",
         "offer:compare",
         "offer:stay_free",
         "offer:back",
+        "offer:request_group",
     ]
 
     for cb in required_callbacks:

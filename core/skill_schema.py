@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections.abc import Iterator
 from typing import Any, Iterable, Literal, Mapping
 
-Approach = Literal["CBT", "DBT", "ACT", "BA", "ERP", "CBT_I", "OTHER"]
-QualityStatus = Literal["production", "reviewed", "experimental", "disabled"]
+from core.skill_taxonomy import ACTION_PHASES, APPROACHES, CONTEXTS, QUALITY_STATUSES
 
-APPROACHES = frozenset({"CBT", "DBT", "ACT", "BA", "ERP", "CBT_I", "OTHER"})
-QUALITY_STATUSES = frozenset({"production", "reviewed", "experimental", "disabled"})
-ACTION_PHASES = ("start", "continue", "return", "choose", "finish", "rest", "stabilize")
-CONTEXTS = ("work", "study", "relationships", "health", "home", "finance", "other")
+Approach = Literal["CBT", "DBT", "ACT", "BA", "ERP", "MBCT", "RO_DBT", "CBT_I", "OTHER"]
+QualityStatus = Literal["production", "reviewed", "experimental", "disabled"]
 
 
 @dataclass(frozen=True)
@@ -115,6 +113,32 @@ class SkillRegistry:
         }
 
 
+class SkillAdapter(Mapping[str, dict[str, Any]]):
+    """Read-only V1 mapping backed by the Registry as the source of identity.
+
+    Existing flows can keep their dictionary-shaped contract while all lookup,
+    membership and iteration are resolved through the validated Registry.
+    """
+
+    def __init__(self, registry: SkillRegistry, legacy: Mapping[str, Mapping[str, Any]] | None = None):
+        self.registry = registry
+        self._legacy = legacy or {}
+
+    def __getitem__(self, skill_id: str) -> dict[str, Any]:
+        skill = self.registry.get(skill_id)
+        if skill is None:
+            raise KeyError(skill_id)
+        value = dict(self._legacy.get(skill_id, {}))
+        value.update(self.registry.legacy_view()[skill_id])
+        return value
+
+    def __iter__(self) -> Iterator[str]:
+        return (skill.id for skill in self.registry.all())
+
+    def __len__(self) -> int:
+        return len(self.registry.all())
+
+
 def adapt_legacy_skills(
     legacy: Mapping[str, Mapping[str, Any]], *, production_limit: int = 40,
 ) -> list[Skill]:
@@ -122,20 +146,21 @@ def adapt_legacy_skills(
     ids = list(legacy)
     simplify_anchor = "open_only" if "open_only" in legacy else ids[0]
     alternate_anchor = "task_naming" if "task_naming" in legacy else simplify_anchor
+    fallback_sink = ids[-1]
     result: list[Skill] = []
-    production_ids = set(ids[:max(0, production_limit - 2)]) | {simplify_anchor, alternate_anchor}
+    production_ids = (set(ids[:max(0, production_limit - 2)]) | {simplify_anchor, alternate_anchor}) - {fallback_sink}
     for index, (skill_id, raw) in enumerate(legacy.items()):
         title = str(raw.get("name") or raw.get("title") or skill_id).strip()
         standard = str(raw.get("how") or raw.get("steps") or raw.get("goal") or title).strip()
         minimum = str(raw.get("minimum") or standard).strip()
         mechanism = str(raw.get("mechanism") or "executive_start_deficit")
         quality: QualityStatus = "production" if skill_id in production_ids else "reviewed"
-        fallback = alternate_anchor if skill_id == simplify_anchor else simplify_anchor
+        fallback = "" if skill_id == fallback_sink else fallback_sink
         result.append(Skill(
             id=skill_id, version=2, title_user=title, title_internal=skill_id,
             approach="OTHER", mechanisms=(mechanism,), action_phases=("start",), contexts=CONTEXTS,
             contraindications=(), safety_tags=(), prerequisites=(), next_skills=(),
-            fallback_skills=(fallback,), difficulty_levels=(1, 2, 3), min_variant=minimum,
+            fallback_skills=(fallback,) if fallback else (), difficulty_levels=(1, 2, 3), min_variant=minimum,
             standard_variant=standard, completion_criterion=minimum,
             feedback_questions=("Что изменилось после попытки?",),
             mastery_criteria="Навык успешно применён самостоятельно в нескольких ситуациях",

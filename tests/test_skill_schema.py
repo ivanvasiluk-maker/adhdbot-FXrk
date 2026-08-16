@@ -1,7 +1,8 @@
 import unittest
 
-from core.skill_schema import Skill, SkillRegistry, SkillRegistryError
-from skills import PRODUCTION_SKILL_IDS, SKILL_REGISTRY, rankable_skill_ids
+from core.skill_schema import Skill, SkillAdapter, SkillRegistry, SkillRegistryError
+from core.skill_taxonomy import TAXONOMY, load_taxonomy
+from skills import PRODUCTION_SKILL_IDS, SKILLS_DB, SKILL_REGISTRY, rankable_skill_ids
 
 
 class SkillSchemaTests(unittest.TestCase):
@@ -43,6 +44,15 @@ class SkillSchemaTests(unittest.TestCase):
         self.assertIn("name", card)
         self.assertIn("how", card)
         self.assertIn("minimum", card)
+
+    def test_runtime_legacy_mapping_is_registry_backed(self):
+        self.assertIsInstance(SKILLS_DB, SkillAdapter)
+        self.assertEqual(set(SKILLS_DB), {skill.id for skill in SKILL_REGISTRY.all()})
+
+    def test_taxonomy_has_all_patch_18_dimensions(self):
+        self.assertEqual(load_taxonomy(), TAXONOMY)
+        self.assertTrue({"emotions", "task_types", "barrier_types"} <= set(TAXONOMY))
+        self.assertTrue({"MBCT", "RO_DBT"} <= TAXONOMY["approaches"])
 
 
 if __name__ == "__main__":

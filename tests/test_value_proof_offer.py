@@ -29,6 +29,13 @@ class ValueProofOfferTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertFalse(evaluate_value_proof(self.proof(**change)).eligible)
 
+    def test_confirmed_working_skill_unlocks_paths_before_day_three(self):
+        eligibility = evaluate_value_proof(self.proof(
+            completed_experiments=1, successful_or_partial=0, current_day=1,
+            confirmed_working_skill_exists=True,
+        ))
+        self.assertTrue(eligibility.eligible)
+
     def test_day_three_alone_does_not_trigger_engine_offer(self):
         self.assertFalse(should_show_offer({"day": 3}))
         self.assertTrue(should_show_offer({
@@ -48,6 +55,12 @@ class ValueProofOfferTests(unittest.TestCase):
 
     def test_price_is_injected_without_code_change(self):
         self.assertIn("€7.25", render_base_unlock_offer(price=Decimal("7.25")))
+
+    def test_subscription_offer_names_founding_member_benefit(self):
+        text = render_base_unlock_offer(price=Decimal("4.99"))
+        self.assertIn("Founding Member", text)
+        self.assertIn("€4.99 / месяц", text)
+        self.assertIn("Learning Engine", text)
 
     def test_no_value_path_offers_free_review_not_sale(self):
         text = render_no_value_review()

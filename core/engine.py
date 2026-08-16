@@ -373,10 +373,15 @@ def build_day3_summary(user_state: UserState) -> Screen:
 
 def should_show_offer(user_state: UserState) -> bool:
     day = _safe_int(user_state.get("day"), 0)
+    confirmed_working_skill = bool(
+        user_state.get("confirmed_working_skill_exists")
+        or user_state.get("last_successful_skill")
+        or user_state.get("successful_skills")
+    )
     return (
-        day >= _safe_int(user_state.get("offer_earliest_day"), 3)
-        and _safe_int(user_state.get("completed_experiments"), 0) >= 2
-        and _safe_int(user_state.get("successful_or_partial"), 0) >= 1
+        (day >= _safe_int(user_state.get("offer_earliest_day"), 3) or confirmed_working_skill)
+        and (_safe_int(user_state.get("completed_experiments"), 0) >= 2 or confirmed_working_skill)
+        and (_safe_int(user_state.get("successful_or_partial"), 0) >= 1 or confirmed_working_skill)
         and bool(user_state.get("personalized_insight_exists"))
         and bool(user_state.get("value_report_seen_at"))
         and not bool(user_state.get("safety_active"))

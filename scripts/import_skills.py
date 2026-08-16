@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from skills import SKILLS_DB  # noqa: E402
 from core.product_config import SKILL_LIBRARY_SOURCE_URL  # noqa: E402
 from core.skill_importer import map_rows  # noqa: E402
-from core.skill_spreadsheet import flatten, read_csv, read_xlsx  # noqa: E402
+from core.skill_spreadsheet import flatten, read_csv, read_xlsx, skill_tables  # noqa: E402
 
 
 def export_rows() -> list[dict]:
@@ -68,7 +68,11 @@ def main() -> int:
             for table in tables:
                 print(f"{table.name}: {', '.join(table.headers)} ({len(table.rows)} rows)")
             return 0
-        rows, problems = map_rows(flatten(tables), source_ref=source)
+        import_tables = skill_tables(tables)
+        if not import_tables:
+            print("Import stopped: no worksheet with skill titles and instructions found", file=sys.stderr)
+            return 1
+        rows, problems = map_rows(flatten(import_tables), source_ref=source)
         for problem in problems:
             print(f"row {problem.row_number} [{problem.skill_id or '?'}]: {problem.message}", file=sys.stderr)
         if problems:

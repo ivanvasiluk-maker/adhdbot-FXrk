@@ -576,9 +576,10 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     assert "Базовый режим остаётся доступным." in text
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
-    assert "🤖 Продолжить" in keyboard_text
-    assert "📚 Другие форматы поддержки" in keyboard_text
-    assert "🤔 Остаться в коротком режиме" in keyboard_text
+    assert "🟢 Продолжить бесплатно" in keyboard_text
+    assert "🔵 Подписка" in keyboard_text
+    assert "🟠 Группа КПТ" in keyboard_text
+    assert "🔴 Консультация" in keyboard_text
 
     map_text = render_short_user_map({
         "attention_pattern": "scroll_autopilot",
@@ -1251,7 +1252,7 @@ def run():
 def test_bot_tariff_has_payment_link_button():
     kb = bot.tariff_bot_inline_keyboard(94023)
     buttons = [button for row in kb.inline_keyboard for button in row]
-    pay_buttons = [button for button in buttons if getattr(button, "text", "") == "💳 Оплатить €9.99"]
+    pay_buttons = [button for button in buttons if getattr(button, "text", "") == f"💳 Оформить за €{bot.BASE_OFFER_EUR_LABEL}"]
     assert pay_buttons
     assert getattr(pay_buttons[0], "url", None) or getattr(pay_buttons[0], "callback_data", None) == "pay:bot_999"
 

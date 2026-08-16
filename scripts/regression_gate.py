@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
 
 CHECKS = (
+    (PYTHON, "scripts/check_patch_sequence.py"),
+    (PYTHON, "scripts/check_patch_commits.py"),
     (PYTHON, "-m", "unittest", "discover", "-s", "tests"),
     (PYTHON, "scripts/required_regression_tests.py"),
     (PYTHON, "scripts/test_state_machine.py"),
