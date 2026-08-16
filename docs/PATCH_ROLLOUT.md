@@ -17,6 +17,8 @@ PATCH-07: add deterministic ranking reasons
 
 Do not combine multiple PATCH owners in one commit. Merge and revert commits are exempt. The
 historical combined rollout is recorded by `enforced_after_commit`; all later commits are checked.
+The baseline resolves from the commit that introduced the ledger path, so PR squash/rebase does not
+invalidate CI with a repository-specific commit hash.
 PATCH ownership must move forward monotonically; later extensions such as PATCH-18 and PATCH-20 use
 the same two-digit prefix contract. CI checks out full history so the baseline can always be verified.
 

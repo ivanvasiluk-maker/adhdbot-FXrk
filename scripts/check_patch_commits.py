@@ -37,6 +37,17 @@ def validate_commits(rows: list[tuple[str, str]]) -> list[str]:
 def main() -> int:
     data = json.loads(LEDGER.read_text(encoding="utf-8"))
     baseline = str(data["enforced_after_commit"])
+    if baseline.startswith("path-introduction:"):
+        tracked_path = baseline.partition(":")[2]
+        introduced = subprocess.run(
+            ["git", "log", "--diff-filter=A", "--format=%H", "--", tracked_path],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        candidates = introduced.stdout.splitlines()
+        if introduced.returncode != 0 or not candidates:
+            print(f"PATCH COMMIT ERROR: cannot find introduction commit for {tracked_path}")
+            return 1
+        baseline = candidates[-1]
     result = subprocess.run(
         ["git", "log", "--reverse", "--format=%H%x09%s", f"{baseline}..HEAD"],
         cwd=ROOT, text=True, capture_output=True,
