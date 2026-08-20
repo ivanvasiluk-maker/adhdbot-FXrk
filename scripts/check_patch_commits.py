@@ -34,6 +34,19 @@ def validate_commits(rows: list[tuple[str, str]]) -> list[str]:
     return errors
 
 
+def validate_history(
+    rows: list[tuple[str, str]], *, allow_final_squash: bool = False,
+) -> tuple[list[str], bool]:
+    """Validate history, optionally accepting only its final PR-squash subject."""
+    non_merge = [row for row in rows if not row[1].startswith(("Merge ", "Revert "))]
+    final_is_squash = bool(
+        allow_final_squash and non_merge
+        and not SUBJECT.match(non_merge[-1][1])
+        and not validate_commits(non_merge[:-1])
+    )
+    return ([] if final_is_squash else validate_commits(rows), final_is_squash)
+
+
 def main() -> int:
     data = json.loads(LEDGER.read_text(encoding="utf-8"))
     baseline = str(data["enforced_after_commit"])
@@ -60,13 +73,9 @@ def main() -> int:
     # into one commit and replace its subject with the PR title. In that exact
     # case there is no cross-commit ordering left to validate. Multi-commit
     # series remain subject to the strict PATCH-XX ownership contract.
-    non_merge = [row for row in rows if not row[1].startswith(("Merge ", "Revert "))]
-    final_is_squash = bool(
-        data.get("allow_single_squash_commit") and non_merge
-        and not SUBJECT.match(non_merge[-1][1])
-        and not validate_commits(non_merge[:-1])
+    errors, final_is_squash = validate_history(
+        rows, allow_final_squash=bool(data.get("allow_single_squash_commit")),
     )
-    errors = [] if final_is_squash else validate_commits(rows)
     if errors:
         for error in errors:
             print(f"PATCH COMMIT ERROR: {error}")
