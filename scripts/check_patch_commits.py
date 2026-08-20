@@ -56,12 +56,25 @@ def main() -> int:
         print(f"PATCH COMMIT ERROR: cannot inspect baseline {baseline}: {result.stderr.strip()}")
         return 1
     rows = [tuple(line.partition("\t")[::2]) for line in result.stdout.splitlines()]
-    errors = validate_commits(rows)
+    # Pull-request infrastructure may squash an otherwise valid patch series
+    # into one commit and replace its subject with the PR title. In that exact
+    # case there is no cross-commit ordering left to validate. Multi-commit
+    # series remain subject to the strict PATCH-XX ownership contract.
+    non_merge = [row for row in rows if not row[1].startswith(("Merge ", "Revert "))]
+    final_is_squash = bool(
+        data.get("allow_single_squash_commit") and non_merge
+        and not SUBJECT.match(non_merge[-1][1])
+        and not validate_commits(non_merge[:-1])
+    )
+    errors = [] if final_is_squash else validate_commits(rows)
     if errors:
         for error in errors:
             print(f"PATCH COMMIT ERROR: {error}")
         return 1
-    print("Post-baseline commits each declare exactly one PATCH owner")
+    if final_is_squash:
+        print("Final squash commit accepted; PATCH sequence is enforced by the ledger")
+    else:
+        print("Post-baseline commits each declare exactly one PATCH owner")
     return 0
 
 

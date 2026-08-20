@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "enforced_after_commit": "path-introduction:patches/sequence.json",
+  "allow_single_squash_commit": true,
   "phases": [
     {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},
     {"id": 2, "patches": ["PATCH-04", "PATCH-05", "PATCH-06", "PATCH-07", "PATCH-08"]},

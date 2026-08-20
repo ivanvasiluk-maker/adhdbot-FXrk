@@ -26,6 +26,7 @@ class PatchRolloutTests(unittest.TestCase):
         self.assertTrue(all(item["tests"] for item in data["patches"]))
         self.assertEqual(data["patches"][-1]["tests"], ["python scripts/regression_gate.py"])
         self.assertEqual(data["enforced_after_commit"], "path-introduction:patches/sequence.json")
+        self.assertTrue(data["allow_single_squash_commit"])
 
     def test_commit_checker_rejects_multiple_owners_and_backwards_order(self):
         self.assertTrue(validate_commits([("a" * 40, "PATCH-07: change PATCH-08 too")]))
