@@ -4547,7 +4547,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     await save_user(u, DB_PATH)
     await answer_with_keyboard(
         m, u, (
-            voice.text
+            "Сегодня заметили:\n" + voice.text
             + f"\n\nЗапомнить: {reflection.memory_anchor}"
         ),
         kb_post_action_reflection, "post_action_reflection",
