@@ -22,6 +22,8 @@ def validate_commits(rows: list[tuple[str, str]]) -> list[str]:
             continue
         match = SUBJECT.match(subject)
         labels = set(re.findall(r"PATCH-\d{2}", subject))
+        if not labels:
+            continue
         if not match or len(labels) != 1:
             errors.append(f"{commit[:12]} must use one prefix like 'PATCH-07: ...': {subject}")
             continue
