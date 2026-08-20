@@ -105,6 +105,10 @@ from core.trainer_voice import experiment_result_content, render_message
 from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
 from core.personal_working_model import render_working_model, update_working_model
+from core.conclusion_engine import (
+    model_from_analysis, model_from_dict, render_evidence, render_full_working_model,
+    render_short_conclusion, update_next_untested_prediction,
+)
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
 from core.session_continuity import render_return_continuity, render_session_closure
 from core.ranking_engine import PersonalSkillState, RankingInput, choose_skill
@@ -4450,8 +4454,28 @@ async def persist_personal_working_model(
         evidence_ref=evidence_ref,
         step_size=str(attempt.get("current_step") or u.get("current_next_physical_step") or ""),
     )
+    patch: Dict[str, Any] = {"personal_working_model": model.as_dict()}
+    conclusion_data = profile.get("conclusion_model")
+    if isinstance(conclusion_data, dict):
+        try:
+            conclusion = model_from_dict(conclusion_data)
+            experiment_name = str(skill.get("name") or sid or "короткий вход")
+            detail = {
+                "STRONG_SUCCESS": "После микрошага пользователь продолжил исходную задачу.",
+                "WEAK_SUCCESS": "Микрошаг немного помог, но продолжение задачи не подтверждено.",
+                "EXECUTED_ONLY": "Инструкция выполнена, но продолжение исходной задачи не наблюдалось.",
+                "FAILED": "Эксперимент не был выполнен полностью.",
+                "UNKNOWN": "Пока недостаточно данных о поведенческом результате.",
+            }[result]
+            conclusion = update_next_untested_prediction(
+                conclusion, result, experiment_name=experiment_name, result_detail=detail,
+            )
+            patch["conclusion_model"] = conclusion.as_dict()
+            patch["primary_hypothesis"] = conclusion.primary.hypothesis_id
+        except (KeyError, TypeError, ValueError):
+            log.exception("Could not update persisted conclusion model")
     return await update_user_profile(
-        u["user_id"], {"personal_working_model": model.as_dict()}, DB_PATH,
+        u["user_id"], patch, DB_PATH,
         source="personal_working_model_evidence",
     )
 
@@ -8467,7 +8491,19 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
     if text == "🧠 Что я сегодня понял":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         anchor = str(profile.get("last_memory_anchor") or "Пока нет конкретного вывода — сначала нужна одна проверенная попытка.")
-        model_text = render_working_model(profile.get("personal_working_model") or {})
+        try:
+            conclusion = model_from_dict(profile.get("conclusion_model") or {})
+            intro = {
+                "skinny": "Вот что уже видно. Не диагноз — рабочая схема.",
+                "beck": "Данных ещё немного, но уже можно собрать первую рабочую модель и отметить поддержку гипотез.",
+                "marsha": "Мы не пытаемся объяснить тебя целиком. Собираем карту того, где именно становится трудно.",
+            }.get(str(u.get("trainer_key") or "marsha"), "Не диагноз — рабочая схема.")
+            model_text = render_full_working_model(conclusion, trainer_intro=intro)
+            await log_event(u["user_id"], "analysis", "full_model_opened", {
+                "primary_hypothesis": conclusion.primary.hypothesis_id,
+            }, DB_PATH, SHEETS_WEBHOOK_URL)
+        except (KeyError, TypeError, ValueError):
+            model_text = render_working_model(profile.get("personal_working_model") or {})
         await answer_with_keyboard(m, u, f"{model_text}\n\nЗапомнить: {anchor}", kb_completed_day_open, "day_core_stop")
         return True
     if text == "✏️ Исправить вывод":
@@ -12206,8 +12242,12 @@ async def main_flow(m: Message):
             return
         if "подробнее" in low or text == "📚 Подробнее":
             await log_event(u["user_id"], "analysis", "analysis_details_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-            comp = _analysis_details_comp_from_user(u)
-            details = render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            try:
+                details = render_evidence(model_from_dict(profile.get("conclusion_model") or {}))
+            except (KeyError, TypeError, ValueError):
+                comp = _analysis_details_comp_from_user(u)
+                details = render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
             set_legacy_stage(u, "analysis_details")
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, details, kb_analysis_detail_next, "analysis_details")
@@ -13990,6 +14030,15 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "analysis", "diagnosis_completed", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     diagnosis_profile_patch = {**profile_patch_from_diagnosis(comp), **live_analysis_profile_patch(str(comp.get("live_pattern") or ""))}
+    conclusion_model = model_from_analysis(
+        situation=user_text,
+        blockage_point=str(comp.get("specific_pattern") or comp.get("live_pattern") or "точка стопора уточняется"),
+        pattern=str(analysis_result.get("pattern") or comp.get("live_pattern") or comp.get("specific_pattern") or ""),
+        evidence=[str(item) for item in (analysis_result.get("evidence_signals") or []) if item],
+        next_experiment=str(analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or "первый микроэксперимент"),
+    )
+    diagnosis_profile_patch["conclusion_model"] = conclusion_model.as_dict()
+    diagnosis_profile_patch["primary_hypothesis"] = conclusion_model.primary.hypothesis_id
     updated_profile = await update_user_profile(u["user_id"], diagnosis_profile_patch, DB_PATH, source="initial_map")
     u["profile_json"] = updated_profile
     await log_event(
@@ -14011,13 +14060,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     await log_event(u["user_id"], "analysis", "recommended_track_shown", {"recommended_track": "procrastination"}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "analysis", "analysis_shown", {"bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
     comp_for_message = dict(comp)
-    preliminary_conclusion = preliminary_diagnosis_conclusion_text(
-        comp_for_message.get("specific_pattern") or comp_for_message.get("live_pattern") or "",
-        comp_for_message.get("useful_signal") or "",
-        comp_for_message.get("skills_focus") if isinstance(comp_for_message.get("skills_focus"), list) else [],
-        (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
-        (analysis_result.get("recommended_skill_reason") or ""),
-    )
+    preliminary_conclusion = render_short_conclusion(conclusion_model)
     set_last_explanation_context(
         u,
         "hypothesis",
@@ -14027,6 +14070,9 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
         "Подтверди, похоже ли это на тебя, или нажми «Подробнее», чтобы разобрать гипотезу."
     )
     await save_user(u, DB_PATH)
+    await log_event(u["user_id"], "analysis", "short_conclusion_viewed", {
+        "primary_hypothesis": conclusion_model.primary.hypothesis_id,
+    }, DB_PATH, SHEETS_WEBHOOK_URL)
     msg = f"{preliminary_conclusion}\n\nЭто похоже на тебя?"
     await answer_with_keyboard(m, u, msg, kb_analysis_confirm, "analysis")
 

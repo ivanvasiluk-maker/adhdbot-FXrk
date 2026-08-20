@@ -12,6 +12,10 @@ EVENT_NAMES = frozenset({
     "skill_replaced", "skill_advanced", "skill_transferred", "independent_use",
     "skill_mastered", "skill_regressed", "value_report_viewed", "offer_shown",
     "purchase_confirmed",
+    "short_conclusion_viewed", "hypothesis_test_started", "full_model_generated",
+    "full_model_opened", "prediction_created", "prediction_tested",
+    "prediction_supported", "prediction_not_supported", "primary_hypothesis_day1",
+    "primary_hypothesis_day3", "hypothesis_changed",
 })
 OUTCOME_LABELS = frozenset({"", "yes", "partial", "no", "better", "same", "worse", "unknown"})
 
@@ -95,4 +99,6 @@ def build_kpis(counts: Mapping[str, int | float]) -> dict[str, float | int | Non
         ),
         "time_to_practicing_seconds": counts.get("time_to_practicing_seconds"),
         "time_to_mastered_seconds": counts.get("time_to_mastered_seconds"),
+        "model_return_rate": rate(int(counts.get("returned_to_model", 0)), int(counts.get("model_viewers", 0))),
+        "prediction_return_rate": rate(int(counts.get("returned_after_prediction", 0)), int(counts.get("prediction_viewers", 0))),
     }
