@@ -21,6 +21,7 @@ import logging
 import threading
 import uuid
 import datetime as dt
+from dataclasses import replace
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
 
@@ -97,11 +98,23 @@ from core.state_machine import (
     get_state as get_flow_state,
 )
 from core.legacy_flow_adapter import set_legacy_day, set_legacy_stage
-from core.mechanism_model import MechanismHypothesis, SituationSnapshot, select_skill_for_mechanism
+from core.mechanism_model import (
+    MECHANISM_SKILL_MAP, MechanismHypothesis, SituationSnapshot, select_skill_for_mechanism,
+)
 from core.experiment_core import BehavioralExperiment
 from core.outcome_model import ExperimentOutcome
 from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
+from core.trainer_voice import VoiceContent, render_message
+from core.day1_experience import (
+    build_day1_insight, build_day1_map, build_day1_result_insight, day1_insight_is_complete,
+    day1_tomorrow_teaser, personalize_skill_instruction, render_day1_map,
+    select_first_experiment, extract_day1_context,
+)
+from core.learning_engine import (
+    choose_next_skill, classify_experiment_result, prioritize_mechanisms,
+    recommended_target_function, target_function_for_skill,
+)
 from core.personal_working_model import render_working_model, update_working_model
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
 from core.session_continuity import render_return_continuity, render_session_closure
@@ -1588,6 +1601,11 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
             "stuck_count": 0,
             "effect_rating": 0,
             "helpful_count": 0,
+            "strong_successes": 0,
+            "weak_successes": 0,
+            "executed_only": 0,
+            "failures": 0,
+            "unknown": 0,
             "started_count": 0,
             "last_result": "proposed",
         })
@@ -1624,6 +1642,14 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
         rating = int(meta.get("effect_rating") or meta.get("rating") or 0) if isinstance(meta, dict) else 0
         item["effect_rating"] = max(int(item.get("effect_rating") or 0), rating)
         if event_type == "skill_result_reported" and isinstance(meta, dict):
+            classified = str(meta.get("experiment_result") or "")
+            counter = {
+                "STRONG_SUCCESS": "strong_successes", "WEAK_SUCCESS": "weak_successes",
+                "EXECUTED_ONLY": "executed_only", "FAILED": "failures", "UNKNOWN": "unknown",
+            }.get(classified)
+            if counter:
+                item[counter] = int(item.get(counter) or 0) + 1
+                item["last_result"] = classified.lower()
             result_status = str(meta.get("result_status") or "")
             effect_status = str(meta.get("effect_status") or "")
             attempt_status = str(meta.get("attempt_status") or "")
@@ -1632,7 +1658,13 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
             if str(meta.get("status") or "") == "not_fit_today":
                 item["last_result"] = "not_fit_today"
                 item["status"] = "not_fit_today"
+            elif classified == "STRONG_SUCCESS":
+                item["helpful_count"] = int(item.get("helpful_count") or 0) + 1
+                item["last_result"] = "helpful"
+            elif classified in {"WEAK_SUCCESS", "EXECUTED_ONLY", "UNKNOWN", "FAILED"}:
+                pass
             elif effect_status in {"helped_start", "felt_easier"} or rating > 0 or result_status == "done_relief":
+                # Compatibility for records captured before result classification existed.
                 item["helpful_count"] = int(item.get("helpful_count") or 0) + 1
                 item["last_result"] = "helpful"
             elif result_status == "done_started_task":
@@ -3620,13 +3652,21 @@ def should_block_skill_for_repetition(u: Dict[str, Any], skill_id: str, *, repea
     if repeat_requested:
         return False
     family = skill_family_id(skill_id)
+    attempts = user_skill_attempts(u)
+    for index, attempt in enumerate(attempts):
+        if str(attempt.get("skill_id") or "") != str(skill_id):
+            continue
+        gap = len(attempts) - index - 1
+        classified = str(attempt.get("experiment_result") or "")
+        explicit_no = str(attempt.get("effect") or "") in {"not_helped", "did_not_help", "worse", "harder"}
+        cooldown = 5 if classified == "FAILED" or explicit_no else 3 if classified == "EXECUTED_ONLY" else 1
+        if gap < cooldown:
+            return True
     if last_skill_family(u) == family:
         return True
     if skill_family_used_today(u, skill_id):
         return True
     if skill_family_count_last_days(u, skill_id, 3) >= 2:
-        return True
-    if skill_family_no_change_count(u, skill_id) > 0:
         return True
     if family in LAUNCH_SKILL_FAMILIES and skill_family_success_count(u, skill_id) >= 2:
         return True
@@ -3649,12 +3689,16 @@ def record_skill_attempt_start(u: Dict[str, Any], skill_id: str, *, source: str 
         "effect": "unknown",
         "action_id": action_id,
         "source": source,
+        "target_function": target_function_for_skill(sid),
         "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     })
     u["skill_attempts"] = attempts[-50:]
 
 
-def update_latest_skill_attempt_result(u: Dict[str, Any], *, result: str, effect: str) -> None:
+def update_latest_skill_attempt_result(
+    u: Dict[str, Any], *, result: str, effect: str,
+    experiment_result: str = "", after_action: str = "",
+) -> None:
     attempts = user_skill_attempts(u)
     if not attempts:
         sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
@@ -3663,6 +3707,10 @@ def update_latest_skill_attempt_result(u: Dict[str, Any], *, result: str, effect
     if attempts:
         attempts[-1]["result"] = result
         attempts[-1]["effect"] = effect
+        if experiment_result:
+            attempts[-1]["experiment_result"] = experiment_result
+        if after_action:
+            attempts[-1]["after_action"] = after_action
         attempts[-1]["completed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         u["skill_attempts"] = attempts[-50:]
 
@@ -4224,6 +4272,58 @@ SKILL_OBSTACLE_BY_BUTTON = {
 
 CONTEXT_NOT_COMPLETED_REASONS = {"too_hard", "no_energy", "anxiety", "unclear_instruction", "distracted", "task_irrelevant", "other_context"}
 
+
+async def log_day1_first_experiment_started(u: Dict[str, Any], *, source: str) -> None:
+    if int(u.get("day") or u.get("day_number") or 1) != 1 or u.get("day1_first_experiment_started"):
+        return
+    u["day1_first_experiment_started"] = True
+    await log_event(u["user_id"], "day1", "first_experiment_started", {
+        "skill_id": current_skill_id(u),
+        "task": str(u.get("current_task_title") or u.get("today_target") or "")[:160],
+        "source": source,
+        "answers_before_action": int(u.get("day1_answers_before_action") or 0),
+    }, DB_PATH, SHEETS_WEBHOOK_URL)
+
+
+async def send_day1_completion_artifact(
+    m: Message, u: Dict[str, Any], feedback: Dict[str, Any], reflection: Any,
+    *, experiment_result: str, completed: bool, partial: bool, continued: bool | None,
+) -> None:
+    if int(u.get("day") or u.get("day_number") or 1) != 1 or u.get("day1_finished"):
+        return
+    mechanism = str(u.get("primary_mechanism") or feedback.get("mechanism") or "гипотеза о барьере входа")
+    result_insight = build_day1_result_insight(
+        before=str(u.get("day1_user_input") or u.get("current_task_title") or "задача не двигалась"),
+        intervention=str(u.get("day1_intervention") or reflection.tested_principle),
+        result=experiment_result, mechanism=mechanism,
+    )
+    map_data = {
+        "task": u.get("current_task_title") or u.get("today_target"),
+        "break_point": u.get("day1_break_point"),
+        "trigger": u.get("day1_trigger"),
+        "alternative_behavior": u.get("day1_alternative_behavior"),
+        "hypothesis": u.get("day1_grounded_hypothesis") or mechanism,
+        "intervention": u.get("day1_intervention") or reflection.tested_principle,
+        "experiment_result": experiment_result,
+    }
+    day1_map = build_day1_map(map_data)
+    await m.answer(
+        f"{result_insight}\n\n{render_day1_map(day1_map)}\n\n"
+        f"{day1_tomorrow_teaser(str(u.get('trainer_key') or 'marsha'), experiment_result)}"
+    )
+    behavioral_win = continued is True
+    insight_complete = day1_insight_is_complete(map_data, experiment_result)
+    if completed or partial:
+        await log_event(u["user_id"], "day1", "first_experiment_completed", {"completed": True}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "day1", "first_experiment_result", {"result": experiment_result}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if continued is True:
+        await log_event(u["user_id"], "day1", "continued_target_task", {"day1_behavioral_win": True}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "day1", "day1_map_viewed", {"day1_insight_complete": insight_complete}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "day1", "day1_finished", {"day1_behavioral_win": behavioral_win, "day1_insight_complete": insight_complete}, DB_PATH, SHEETS_WEBHOOK_URL)
+    u.update({"day1_map_viewed": True, "day1_finished": True,
+              "day1_behavioral_win": behavioral_win, "day1_insight_complete": insight_complete})
+    await save_user(u, DB_PATH)
+
 def not_done_reason_text(code: str, u: Dict[str, Any]) -> str:
     if code == "too_hard":
         return f"Понял. Это не плохой навык — версия была слишком крупной. Уменьшаем тот же механизм:\n{truly_smaller_step(u)}"
@@ -4286,6 +4386,12 @@ async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: st
             "distracted": "external_blocker", "anxiety": "unknown", "other": "unknown",
         }.get(code, "unknown"),
     })
+    feedback["experiment_result"] = "FAILED"
+    feedback["after_action"] = "not_executed"
+    update_latest_skill_attempt_result(
+        u, result="not_completed", effect="not_helped",
+        experiment_result="FAILED", after_action="not_executed",
+    )
     await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "result_status": "not_completed_context", "reason": code, "context_not_failure": True, "do_not_mark_skill_as_failed": True, "minimal_feedback": True})
     sync_active_attempt(u, bump=True, attempt_status="failed", effect_status="unknown", is_closed=True)
     await _process_normalized_feedback(u, feedback)
@@ -4306,6 +4412,10 @@ async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: st
     )
     await answer_with_keyboard(
         m, u, reflection.render(), kb_post_action_reflection, "post_action_reflection",
+    )
+    await send_day1_completion_artifact(
+        m, u, feedback, reflection, experiment_result="FAILED",
+        completed=False, partial=False, continued=False,
     )
     return True
 
@@ -4396,7 +4506,7 @@ def build_user_post_action_reflection(
     known_pattern = str(profile.get("main_pattern") or profile.get("avoidance_pattern") or "")
     if "_" in known_pattern and " " not in known_pattern:
         known_pattern = ""
-    return build_post_action_reflection(ReflectionContext(
+    reflection = build_post_action_reflection(ReflectionContext(
         situation=str(
             attempt.get("task_title") or u.get("current_task_title")
             or u.get("today_target") or "текущая задача"
@@ -4410,9 +4520,40 @@ def build_user_post_action_reflection(
         completed=bool(feedback.get("completed")), partial=bool(feedback.get("partial")),
         helpfulness=str(feedback.get("helpfulness") or "unknown"),
         continued=feedback.get("continued_after_skill"),
+        after_action=str(feedback.get("after_action") or feedback.get("next_after_skill") or ""),
         previous_successes=int(profile.get("skill_helpful_confirmation_count") or 0),
         known_pattern=known_pattern,
     ))
+    result = str(feedback.get("experiment_result") or classify_experiment_result(
+        completed=bool(feedback.get("completed") or feedback.get("partial")),
+        subjective_effect=str(feedback.get("helpfulness") or "unknown"),
+        after_action=feedback.get("after_action") or feedback.get("continued_after_skill"),
+    ))
+    recent = u.get("voice_variant_history") or []
+    if isinstance(recent, str):
+        try:
+            recent = json.loads(recent)
+        except Exception:
+            recent = []
+    rendered = render_message(
+        str(u.get("trainer_key") or "marsha"),
+        VoiceContent(
+            message_type="experiment_result" if result != "FAILED" else "failure",
+            result=result,
+            target_function=target_function_for_skill(sid),
+            skill_name=str(skill.get("name") or sid),
+            facts={
+                "completed": bool(feedback.get("completed") or feedback.get("partial")),
+                "effect": str(feedback.get("helpfulness") or "unknown"),
+                "after_action": str(feedback.get("after_action") or "unknown"),
+            },
+            core_message=reflection.reaction,
+            next_action=reflection.memory_anchor,
+        ),
+        recent_variant_ids=recent if isinstance(recent, list) else (),
+    )
+    u["voice_variant_history"] = [*(recent[-4:] if isinstance(recent, list) else []), rendered.variant_id]
+    return replace(reflection, reaction=rendered.text)
 
 
 async def persist_personal_working_model(
@@ -4433,7 +4574,7 @@ async def persist_personal_working_model(
         barrier=str(feedback.get("barrier") or profile.get("last_not_completed_reason") or "барьер уточняется"),
         skill_title=str(skill.get("name") or sid or "короткий вход"),
         context=str(attempt.get("context_domain") or "general"),
-        successful=bool(feedback.get("completed") or feedback.get("partial")),
+        successful=str(feedback.get("experiment_result") or "") == "STRONG_SUCCESS",
         evidence_ref=evidence_ref,
         step_size=str(attempt.get("current_step") or u.get("current_next_physical_step") or ""),
     )
@@ -4464,11 +4605,20 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     partial = bool(feedback.get("partial"))
     helpfulness = str(feedback.get("helpfulness") or "unknown")
     continued = feedback.get("continued_after_skill")
-    effect_status = "helped_start" if continued is True else "felt_easier" if helpfulness in {"helped", "some"} else "neutral" if helpfulness == "not_helped" else "unknown"
+    experiment_result = classify_experiment_result(
+        completed=completed or partial, subjective_effect=helpfulness,
+        after_action=feedback.get("after_action") or feedback.get("next_after_skill") or continued,
+    )
+    feedback["experiment_result"] = experiment_result
+    effect_status = "helped_start" if experiment_result == "STRONG_SUCCESS" else "neutral" if experiment_result in {"WEAK_SUCCESS", "EXECUTED_ONLY"} else "unknown"
     if helpfulness == "worse":
         effect_status = "unknown"
     sync_active_attempt(u, bump=True, attempt_status="completed" if completed else "failed", effect_status=effect_status, is_closed=True)
-    update_latest_skill_attempt_result(u, result="completed" if completed else "partial" if partial else "not_completed", effect=helpfulness)
+    update_latest_skill_attempt_result(
+        u, result="completed" if completed else "partial" if partial else "not_completed",
+        effect=helpfulness, experiment_result=experiment_result,
+        after_action=str(feedback.get("after_action") or ""),
+    )
     await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "minimal_feedback": True})
     profile = await get_user_profile(u["user_id"], DB_PATH)
     patch = {
@@ -4477,8 +4627,12 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         "last_skill_effect": helpfulness,
         "last_continued_after_skill": continued,
     }
-    if completed and helpfulness in {"helped", "some"}:
+    if experiment_result == "STRONG_SUCCESS":
         patch.update({"last_successful_skill": sid, "best_skill": sid})
+    patch[f"skill_result_{experiment_result.lower()}_count"] = int(
+        profile.get(f"skill_result_{experiment_result.lower()}_count") or 0
+    ) + 1
+    patch["last_experiment_result"] = experiment_result
     if helpfulness == "worse":
         patch.update({"skill_unhelpful_count": int(profile.get("skill_unhelpful_count") or 0) + 1, "last_unhelpful_skill": sid})
     if continued is True:
@@ -4503,6 +4657,10 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     await answer_with_keyboard(
         m, u, reflection.render(), kb_post_action_reflection, "post_action_reflection",
     )
+    await send_day1_completion_artifact(
+        m, u, feedback, reflection, experiment_result=experiment_result,
+        completed=completed, partial=partial, continued=continued,
+    )
     return True
 
 
@@ -4524,7 +4682,9 @@ async def _process_normalized_feedback(u: Dict[str, Any], feedback: Dict[str, An
     action_started = "yes" if completed else "partial" if partial else "no"
     action_persisted = "yes" if continued is True else "no" if continued is False else "not_applicable"
     emotional_change = "better" if helpfulness in {"helped", "some"} else "worse" if helpfulness == "worse" else "same"
-    failure_reason = None if completed else str(feedback.get("failure_reason_code") or "unknown")
+    experiment_result = str(feedback.get("experiment_result") or "UNKNOWN")
+    criterion_met = experiment_result == "STRONG_SUCCESS"
+    failure_reason = None if criterion_met else str(feedback.get("failure_reason_code") or "unknown")
     expected_flow_revision = None
     if emotional_change == "worse":
         try:
@@ -4536,7 +4696,7 @@ async def _process_normalized_feedback(u: Dict[str, Any], feedback: Dict[str, An
             DB_PATH,
             outcome=ExperimentOutcome(
                 experiment_id, action_started, action_persisted, emotional_change,
-                None, None, completed, bool(continued is True), None,
+                None, None, criterion_met, bool(continued is True), None,
                 "safety_deterioration" if emotional_change == "worse" else failure_reason,
             ),
             skill=card, expected_revision=int(revision),
@@ -4564,34 +4724,25 @@ async def ask_skill_result_feedback(m: Message, u: Dict[str, Any], *, source: st
 async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: str, result_status: str, effect: str, effect_rating: int, *, completed: bool, send_menu: bool = True) -> bool:
     sid = current_skill_id(u)
     profile = await get_user_profile(u["user_id"], DB_PATH)
-    success_count = await count_distinct_skill_successes(u, sid, include_current=completed and effect in {"easier", "started_task"})
+    experiment_result = "EXECUTED_ONLY" if completed else "FAILED"
     patch = {"last_skill_result_status": result_status, "last_skill_effect": effect, "last_skill_completed": completed}
     not_fit = (not completed and result_status in {"not_completed", "too_hard", "needs_other_entry", "phone_distracted", "stuck_unclear", "not_my_skill"})
-    if completed and effect in {"easier", "started_task"}:
-        patch.update({"best_skill": sid, "last_successful_skill": sid, "skill_helpful_confirmation_count": success_count})
-    elif not_fit:
+    if not_fit:
         patch.update({"failed_skill": sid, "worst_skill": sid, "skill_status": "not_fit_today", **_not_fit_today_patch(u, profile, sid)})
         u["daily_skill_status"] = "not_fit_today"
     set_legacy_stage(u, "success_menu")
-    effect_status = "felt_easier" if effect == "easier" else "helped_start" if effect == "started_task" else "neutral" if completed else "unknown"
+    effect_status = "neutral" if completed else "unknown"
     attempt_status = "completed" if completed else ("skipped" if result_status == "not_tried" else "failed")
     sync_active_attempt(u, bump=True, attempt_status=attempt_status, effect_status=effect_status, is_closed=True)
-    update_latest_skill_attempt_result(u, result=result_status, effect=effect)
+    update_latest_skill_attempt_result(
+        u, result=result_status, effect=effect, experiment_result=experiment_result,
+        after_action="legacy_not_captured" if completed else "not_executed",
+    )
     await save_user(u, DB_PATH)
-    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": result_status, "effect": effect, "effect_rating": effect_rating, "button": text, "completed": completed, "attempt_status": attempt_status, "effect_status": effect_status, "status": "not_fit_today" if not_fit else "", "daily_session_id": u.get("daily_session_id"), "local_date": local_date_for_user(u), "action_id": u.get("current_action_id"), "source": u.get("last_day_source") or ""})
+    await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={"result_status": result_status, "effect": effect, "effect_rating": effect_rating, "button": text, "completed": completed, "attempt_status": attempt_status, "effect_status": effect_status, "experiment_result": experiment_result, "after_action": "legacy_not_captured" if completed else "not_executed", "status": "not_fit_today" if not_fit else "", "daily_session_id": u.get("daily_session_id"), "local_date": local_date_for_user(u), "action_id": u.get("current_action_id"), "source": u.get("last_day_source") or ""})
     await record_profile_signal(u["user_id"], "training", patch, source="skill_result_feedback")
-    if effect == "started_task":
-        await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
-        msg = (
-            "Записал: после маленького шага ты смог начать задачу.\n"
-            f"Это {skill_confidence_text(success_count)}."
-        )
-    elif effect_rating > 0:
-        await record_working_map_skill_result(u["user_id"], "successful_skills", sid)
-        msg = (
-            "Записал: после маленького шага стало легче.\n"
-            f"Это {skill_confidence_text(success_count)}."
-        )
+    if completed and effect in {"started_task", "easier"}:
+        msg = "Записал выполнение, но в этом старом формате нет данных о продолжении целевой задачи. Не считаю навык подтверждённо рабочим."
     elif effect == "harder":
         await update_user_profile(u["user_id"], {"skill_unhelpful_count": int(profile.get("skill_unhelpful_count") or 0) + 1, "last_unhelpful_skill": sid}, DB_PATH, source="skill_attempted_unhelpful")
         msg = "Записал: после шага стало тяжелее. Не усиливаем давление — в следующий раз уменьшим вход."
@@ -4611,7 +4762,9 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
         feedback = {
             "skill_id": sid, "completed": completed, "partial": False,
             "helpfulness": "helped" if effect in {"easier", "started_task"} else "worse" if effect == "harder" else "not_helped",
-            "continued_after_skill": effect == "started_task",
+            "continued_after_skill": None,
+            "after_action": "legacy_not_captured" if completed else "not_executed",
+            "experiment_result": experiment_result,
             "barrier": result_status if not completed else "",
         }
         reflection = build_user_post_action_reflection(u, feedback, profile)
@@ -4625,6 +4778,10 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
         await save_user(u, DB_PATH)
         await answer_with_keyboard(
             m, u, reflection.render(), kb_post_action_reflection, "post_action_reflection",
+        )
+        await send_day1_completion_artifact(
+            m, u, feedback, reflection, experiment_result=experiment_result,
+            completed=completed, partial=False, continued=None,
         )
     return True
 
@@ -4667,12 +4824,12 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
         await answer_with_keyboard(m, u, "Что произошло дальше?", kb_minimal_feedback_next, "minimal_feedback_next")
         return True
     if stage == "minimal_feedback_next":
-        next_map = {"Продолжил задачу": True, "Остановился после шага": False, "Сделал что-то другое": False, "Пока не знаю": None}
+        next_map = {"Продолжил задачу": (True, "continued_target_task"), "Остановился после шага": (False, "stopped_after_step"), "Сделал что-то другое": (False, "did_something_else"), "Пока не знаю": (None, "unknown")}
         if text not in next_map:
             await answer_with_keyboard(m, u, "Что произошло дальше?", kb_minimal_feedback_next, "minimal_feedback_next")
             return True
         feedback = get_minimal_feedback(u)
-        feedback["continued_after_skill"] = next_map[text]
+        feedback["continued_after_skill"], feedback["after_action"] = next_map[text]
         feedback["next_after_skill"] = text
         set_minimal_feedback(u, feedback)
         return await persist_minimal_skill_feedback(m, u)
@@ -5237,6 +5394,18 @@ async def start_stuck_text_validation(m: Message, u: Dict[str, Any], text: str):
     text_for_analysis = combined_text or text
     kind = classify_free_stuck_text(text_for_analysis)
     response, keyboard = stuck_validation_response(kind, text_for_analysis)
+    if kind == "self_attack":
+        voice = render_message(
+            str(u.get("trainer_key") or "marsha"),
+            VoiceContent(
+                message_type="stuck", facts={"reported_text": text_for_analysis[:240]},
+                core_message=response, next_action="уточнить наблюдаемое поведение",
+            ),
+            recent_variant_ids=u.get("voice_variant_history") if isinstance(u.get("voice_variant_history"), list) else (),
+        )
+        response = f"{voice.text}\n\n{response}"
+        history = u.get("voice_variant_history") if isinstance(u.get("voice_variant_history"), list) else []
+        u["voice_variant_history"] = [*history[-4:], voice.variant_id]
     set_legacy_stage(u, "stuck_validation_choice")
     u["pending_feedback_json"] = json.dumps({"type": "stuck_validation", "kind": kind, "text": text_for_analysis[:500]}, ensure_ascii=False)
     set_current_state(u, STATE_AWAITING_STUCK_REASON)
@@ -6397,26 +6566,26 @@ def _offer_skill_fact(summary: Dict[str, Any], *, helpful: bool) -> str:
         ranked = sorted(
             (
                 item for item in skill_rows
-                if int(item.get("helpful_count") or 0) > 0 or int(item.get("completed_count") or 0) > 0
+                if int(item.get("strong_successes") or item.get("helpful_count") or 0) > 0
             ),
-            key=lambda item: (-int(item.get("helpful_count") or 0), -int(item.get("completed_count") or 0), item.get("title") or ""),
+            key=lambda item: (-int(item.get("strong_successes") or item.get("helpful_count") or 0), item.get("title") or ""),
         )
         if ranked:
             top = ranked[0]
-            count = max(int(top.get("helpful_count") or 0), int(top.get("completed_count") or 0), 1)
-            return f"{top.get('title') or _skill_label(top.get('skill_id'))} ({count} раз)"
+            count = max(int(top.get("strong_successes") or top.get("helpful_count") or 0), 1)
+            return f"{top.get('title') or _skill_label(top.get('skill_id'))}: после него ты продолжил задачу {count} раз"
         return "пока явного лидера нет"
     ranked = sorted(
         (
             item for item in skill_rows
-            if int(item.get("stuck_count") or 0) > 0 or str(item.get("status") or "") in {"not_helpful", "not_fit_today"}
+            if int(item.get("executed_only") or 0) > 0 or int(item.get("failures") or 0) > 0
+            or int(item.get("stuck_count") or 0) > 0 or str(item.get("status") or "") in {"not_helpful", "not_fit_today"}
         ),
         key=lambda item: (-int(item.get("stuck_count") or 0), item.get("title") or ""),
     )
     if ranked:
         top = ranked[0]
-        count = max(int(top.get("stuck_count") or 0), 1)
-        return f"{top.get('title') or _skill_label(top.get('skill_id'))} ({count} раз)"
+        return f"{top.get('title') or _skill_label(top.get('skill_id'))}: стабильное продолжение задачи пока не подтвердилось"
     return "пока нет уверенного анти-примера"
 
 
@@ -6452,8 +6621,8 @@ def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -
         evidence = (
             f"\n\nФакты по твоим попыткам:\n"
             f"— попыток уже было: {attempts}\n"
-            f"— что выглядит полезным: {_offer_skill_fact(summary, helpful=True)}\n"
-            f"— пока неясно: {_offer_skill_fact(summary, helpful=False)}, "
+            f"— что пока выглядит перспективно: {_offer_skill_fact(summary, helpful=True)}\n"
+            f"— что пока не подтвердилось: {_offer_skill_fact(summary, helpful=False)}, "
             f"следующий тест — {_offer_next_experiment(summary, profile)}.\n\n"
             "Базовый режим остаётся доступным."
         )
@@ -7779,6 +7948,18 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
     blocked_today = not_fit_today_skills(u, profile)
     raw_mechanism = str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or "")
     mechanism = legacy_mechanism_code(raw_mechanism) or "unclear_next_action"
+    if (
+        int(u.get("day") or u.get("day_number") or 1) == 1 and not user_skill_attempts(u)
+        and not (product_config.RANKING_ENGINE_ENABLED and product_config.use_new_architecture(
+            int(u.get("user_id") or 0), is_test_user=bool(u.get("test_access")),
+        ))
+    ):
+        available_ids = [sid for sid in SKILLS_DB if sid not in blocked_today]
+        sid = select_first_experiment(mechanism, available_ids)
+        skill = dict(SKILLS_DB[sid])
+        skill.update({"skill_id": sid, "id": sid, "variant": skill.get("variant") or sid,
+                      "target_function": target_function_for_skill(sid), "first_experiment": True})
+        return skill
     if product_config.RANKING_ENGINE_ENABLED and product_config.use_new_architecture(
         int(u.get("user_id") or 0), is_test_user=bool(u.get("test_access")),
     ):
@@ -7794,14 +7975,30 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
         sid for sid in SKILLS_DB
         if sid not in blocked_today and not should_block_skill_for_repetition(u, sid)
     }
+    mechanism_order = list(MECHANISM_SKILL_MAP.get(mechanism, ()))
+    ordered_ids = mechanism_order + [sid for sid in SKILLS_DB if sid not in mechanism_order]
+    candidates = [
+        {"skill_id": sid, "target_function": target_function_for_skill(sid)}
+        for sid in ordered_ids if sid in available
+    ]
+    history = user_skill_attempts(u)
     try:
-        sid = select_skill_for_mechanism(hypothesis, available)
+        selected = choose_next_skill(
+            candidates, history,
+            wants_return=str(attempt.get("action_phase") or "") == "return",
+        )
+        sid = str(selected["skill_id"])
     except LookupError:
+        # Only an exhausted library may relax cooldowns; the UI can explain it.
         sid = select_skill_for_mechanism(hypothesis, set(SKILLS_DB))
+        selected = {"repeat_explanation_required": True}
     skill = dict(SKILLS_DB[sid])
     skill.setdefault("skill_id", sid)
     skill.setdefault("id", sid)
     skill.setdefault("variant", skill.get("variant") or sid)
+    skill["target_function"] = target_function_for_skill(sid)
+    if selected.get("repeat_explanation_required"):
+        skill["repeat_explanation_required"] = True
     return skill
 
 
@@ -7813,14 +8010,41 @@ def _select_daily_skill_with_ranking(
     context = str(attempt.get("context_domain") or profile.get("context_domain") or "other")
     if context not in {"work", "study", "relationships", "health", "home", "finance", "other"}:
         context = "other"
+    target_function = recommended_target_function(
+        user_skill_attempts(u),
+        wants_return=str(attempt.get("action_phase") or "") == "return",
+    )
+    action_phase = {"START": "start", "STAY": "continue", "RETURN": "return",
+                    "EMOTION_REGULATION": "stabilize"}[target_function]
     if ACTIVE_FILE_SKILL_REGISTRY is not None:
         candidates = ACTIVE_FILE_SKILL_REGISTRY.get_candidates(
-            mechanism, context, "start", product_config.SKILL_LIBRARY_ALLOWED_STATUSES,
+            mechanism, context, action_phase, product_config.SKILL_LIBRARY_ALLOWED_STATUSES,
         )
+        if not candidates and action_phase != "start":
+            candidates = ACTIVE_FILE_SKILL_REGISTRY.get_candidates(
+                mechanism, context, "start", product_config.SKILL_LIBRARY_ALLOWED_STATUSES,
+            )
     else:
         candidates = tuple(skill for skill in SKILL_REGISTRY.rankable() if skill.id in SKILLS_DB)
     if not candidates:
         return None
+    if int(u.get("day") or u.get("day_number") or 1) == 1 and not user_skill_attempts(u):
+        selected_id = select_first_experiment(mechanism, [skill.id for skill in candidates])
+        selected_card = next(skill for skill in candidates if skill.id == selected_id)
+        first = dict(SKILLS_DB.get(selected_id) or {
+            "name": selected_card.title_user, "how": selected_card.standard_variant,
+            "minimum": selected_card.min_variant,
+        })
+        first.update({
+            "skill_id": selected_id, "id": selected_id,
+            "variant": first.get("variant") or selected_id,
+            "target_function": target_function_for_skill(selected_id),
+            "first_experiment": True, "selected_difficulty": 1,
+            "progression_type": "first",
+            "ranking_reason_codes": ["DAY1_PRIMARY_MECHANISM_TEST"],
+            "ranking_policy_version": "ranking-v1",
+        })
+        return first
     completed = set(_profile_list(profile.get("working_skills"))) | set(
         _profile_list(profile.get("completed_skills_effect_helped"))
     )
@@ -7834,14 +8058,16 @@ def _select_daily_skill_with_ranking(
             successes_count=1 if skill.id in completed else 0,
             last_result_successful=skill.id in completed,
             recent_failed_exact_variant=skill.id == current and skill.id in failed,
-            recommendation_disabled=skill.id in blocked_today,
+            recommendation_disabled=(
+                skill.id in blocked_today or should_block_skill_for_repetition(u, skill.id)
+            ),
             preferred_trainer_style=str(u.get("trainer_key") or ""),
         ) for skill in candidates
     }
     plan = tuple(_canonical_daily_skill_id(item) for item in (get_current_plan(u) or ()))
     try:
         decision, _ = choose_skill(candidates, RankingInput(
-            {mechanism: 1.0}, "start", context, 1, str(u.get("trainer_key") or "marsha"),
+            {mechanism: 1.0}, action_phase, context, 1, str(u.get("trainer_key") or "marsha"),
             personal_states=states, curriculum_skill_ids=plan,
             active_contraindications=frozenset({"acute_crisis"}) if str(u.get("safety_mode")) not in {"", "none", "inactive"} else frozenset(),
             consolidation_required=bool(completed),
@@ -7875,9 +8101,13 @@ def build_new_day_intro(
     *,
     include_context: bool = True,
 ) -> str:
+    repeat_note = (
+        "Доступные альтернативы сейчас на cooldown, поэтому повторим знакомый навык как отдельную проверку воспроизводимости.\n\n"
+        if skill.get("repeat_explanation_required") else ""
+    )
     if include_context:
-        return new_day_skill_text(skill, profile or {}, u)
-    return new_day_skill_card_text(skill, u)
+        return repeat_note + new_day_skill_text(skill, profile or {}, u)
+    return repeat_note + new_day_skill_card_text(skill, u)
 
 
 def should_send_day_intro(u: Dict[str, Any]) -> bool:
@@ -8047,6 +8277,11 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     )
     await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": source, "day": day})
     await log_event(u["user_id"], "training", "new_day_skill_opened", {"day": day, "skill_id": sid, "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if day == 1:
+        await log_day1_first_experiment_started(u, source="new_day_skill")
+        await save_user(u, DB_PATH)
+    if day == 2 and u.get("day1_finished"):
+        await log_event(u["user_id"], "day2", "returned_day2", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
     include_context = should_send_day_intro(u) and source != "admin_force_next_day"
     if include_context:
         u["day_intro_sent"] = 1
@@ -10203,9 +10438,36 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
     screen = engine_get_next_screen(u, {"type": "target_submitted", "text": target})
     apply_engine_updates(u, screen)
     u["today_target"] = target
+    if int(u.get("day") or u.get("day_number") or 1) == 1:
+        attempt = active_attempt(u)
+        selected_mechanism = str(u.get("user_selected_mechanism") or attempt.get("last_user_mechanism") or "")
+        inferred_mechanism = str(u.get("model_inferred_mechanism") or attempt.get("current_mechanism") or "")
+        source_text = str(u.get("day1_user_input") or target)
+        insight = build_day1_insight(source_text, selected_mechanism, inferred_mechanism)
+        grounded = extract_day1_context(source_text, selected_mechanism, inferred_mechanism)
+        sid = str(current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or "")
+        skill = dict(SKILLS_DB.get(sid) or {"skill_id": sid})
+        skill.setdefault("skill_id", sid)
+        distress = int(u.get("emotion_intensity_0_100") or u.get("distress_level") or 40)
+        instruction = personalize_skill_instruction(skill, target, distress=distress)
+        u.update({
+            "day1_user_input": source_text, "day1_insight": insight,
+            "day1_intervention": instruction, "day1_break_point": grounded["break_point"],
+            "day1_trigger": grounded["trigger"],
+            "day1_alternative_behavior": grounded["alternative_behavior"],
+            "day1_grounded_hypothesis": grounded["hypothesis"],
+            "day1_flow_variant": "insight_first",
+        })
+        screen["text"] = f"{insight}\n\nПервый эксперимент\n\n{instruction}"
     mark_action_card_active(u)
     await save_user(u, DB_PATH)
     await log_engine_events(u, screen)
+    if int(u.get("day") or u.get("day_number") or 1) == 1:
+        await log_event(u["user_id"], "day1", "day1_diagnosis_completed", {
+            "answers_before_action": int(u.get("day1_answers_before_action") or 0),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_day1_first_experiment_started(u, source="task_specific_skill")
+        await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, screen["text"], action_keyboard(), "skill_card")
     await maybe_show_micro_habit(m, u, "day_start")
     if int(u.get("day") or 1) > 1:
@@ -10496,7 +10758,7 @@ async def main_flow(m: Message):
 
     mechanism = detect_user_mechanism(text)
     if mechanism:
-        await remember_user_mechanism(u, mechanism)
+        await remember_user_mechanism(u, mechanism, user_selected=is_known_reply_button(text))
 
     # Global safety gate: every text/voice transcript is checked before any normal flow.
     if text and has_crisis_safety_signal(text, u.get("stage") or ""):
@@ -11315,6 +11577,9 @@ async def main_flow(m: Message):
     if u.get("stage") == "await_training_target":
         target_text = (text or "").strip()
         if target_text.lower() != "пропустить":
+            if int(u.get("day") or u.get("day_number") or 1) == 1:
+                u["day1_user_input"] = target_text[:1000]
+                u["day1_answers_before_action"] = min(5, int(u.get("day1_answers_before_action") or 0) + 1)
             await save_current_task(u, DB_PATH, title=target_text)
             await save_user(u, DB_PATH)
             if task_needs_physical_step(target_text) and not u.get("current_next_physical_step"):
@@ -11334,6 +11599,8 @@ async def main_flow(m: Message):
             await m.answer("Напиши один физический шаг: что открыть / написать / проверить первым?")
             return
         await update_current_task_step(u, DB_PATH, step)
+        if int(u.get("day") or u.get("day_number") or 1) == 1:
+            u["day1_answers_before_action"] = min(5, int(u.get("day1_answers_before_action") or 0) + 1)
         await save_user(u, DB_PATH)
         await m.answer(returning_to_task_text(u))
         await show_skill_for_current_task(m, u)
@@ -13369,12 +13636,25 @@ def legacy_mechanism_code(mechanism: str) -> str:
     } else "")
 
 
-async def remember_user_mechanism(u: Dict[str, Any], mechanism: str) -> None:
+async def remember_user_mechanism(
+    u: Dict[str, Any], mechanism: str, *, user_selected: bool = True,
+) -> None:
     if not mechanism:
         return
-    sync_active_attempt(u, current_mechanism=mechanism)
-    u["active_attempt"]["last_user_mechanism"] = mechanism
-    u["active_attempt"]["current_mechanism"] = mechanism
+    if user_selected:
+        u["user_selected_mechanism"] = mechanism
+    else:
+        u["model_inferred_mechanism"] = mechanism
+    primary, secondary = prioritize_mechanisms(
+        str(u.get("user_selected_mechanism") or ""),
+        str(u.get("model_inferred_mechanism") or ""),
+    )
+    u["primary_mechanism"] = primary
+    u["secondary_mechanism"] = secondary
+    sync_active_attempt(u, current_mechanism=primary)
+    u["active_attempt"]["last_user_mechanism"] = str(u.get("user_selected_mechanism") or primary)
+    u["active_attempt"]["current_mechanism"] = primary
+    u["active_attempt"]["model_inferred_mechanism"] = u.get("model_inferred_mechanism")
     await save_user(u, DB_PATH)
 
 

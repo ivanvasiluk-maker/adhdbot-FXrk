@@ -471,8 +471,8 @@ def test_day3_offer_after_three_attempts_uses_real_facts():
     text = bot.day3_personal_offer_text(summary, profile)
     assert "Полный режим — это не давление" in text
     assert "— попыток уже было: 4" in text
-    assert "— что выглядит полезным: Открыть задачу (2 раз)" in text
-    assert "— пока неясно: Плохой черновик (2 раз), следующий тест — проверить вход через плохой черновик." in text
+    assert "— что пока выглядит перспективно: Открыть задачу: после него ты продолжил задачу 2 раз" in text
+    assert "— что пока не подтвердилось: Плохой черновик: стабильное продолжение задачи пока не подтвердилось, следующий тест — проверить вход через плохой черновик." in text
     assert "Базовый режим остаётся доступным." in text
     assert "путь с куратором" not in text.lower()
     assert "не потерять темп" not in text.lower()
