@@ -11,6 +11,21 @@ ContextDomain = Literal["work", "study", "relationships", "health", "home", "fin
 ActionPhase = Literal["start", "continue", "return", "choose", "finish", "rest", "stabilize"]
 Confidence = Literal["low", "medium", "high"]
 
+
+@dataclass(frozen=True)
+class MechanismPriority:
+    """Keeps an explicit user choice separate from a model inference."""
+
+    primary: str
+    secondary: str | None
+
+
+def prioritize_mechanisms(*, user_selected_mechanism: str, model_inferred_mechanism: str | None) -> MechanismPriority:
+    if not user_selected_mechanism:
+        raise ValueError("user_selected_mechanism is required")
+    secondary = model_inferred_mechanism if model_inferred_mechanism != user_selected_mechanism else None
+    return MechanismPriority(primary=user_selected_mechanism, secondary=secondary)
+
 DIAGNOSIS_FIELDS = frozenset({"diagnosis", "diagnostic_label", "disorder", "adhd_type"})
 
 # Mechanism is the primary key. Values are deliberately short candidate classes,

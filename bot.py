@@ -100,6 +100,8 @@ from core.legacy_flow_adapter import set_legacy_day, set_legacy_stage
 from core.mechanism_model import MechanismHypothesis, SituationSnapshot, select_skill_for_mechanism
 from core.experiment_core import BehavioralExperiment
 from core.outcome_model import ExperimentOutcome
+from core.learning_engine import classify_experiment_result
+from core.trainer_voice import experiment_result_content, render_message
 from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
 from core.personal_working_model import render_working_model, update_working_model
@@ -4428,12 +4430,23 @@ async def persist_personal_working_model(
         return profile
     sid = str(feedback.get("skill_id") or current_skill_for_action(u) or "")
     skill = SKILLS_DB.get(sid) or {}
+    result = classify_experiment_result(
+        completed=feedback.get("completed") is True,
+        subjective_effect={"helped": "helped", "some": "a_little", "not_helped": "did_not_help"}.get(
+            str(feedback.get("helpfulness") or ""), "unknown"),
+        after_action={
+            "Продолжил задачу": "continued_target_task",
+            "Остановился после шага": "stopped_after_step",
+            "Сделал что-то другое": "did_something_else",
+            "Пока не знаю": "unknown",
+        }.get(str(feedback.get("next_after_skill") or ""), "unknown"),
+    )
     model = update_working_model(
         profile.get("personal_working_model"),
         barrier=str(feedback.get("barrier") or profile.get("last_not_completed_reason") or "барьер уточняется"),
         skill_title=str(skill.get("name") or sid or "короткий вход"),
         context=str(attempt.get("context_domain") or "general"),
-        successful=bool(feedback.get("completed") or feedback.get("partial")),
+        successful=result == "STRONG_SUCCESS",
         evidence_ref=evidence_ref,
         step_size=str(attempt.get("current_step") or u.get("current_next_physical_step") or ""),
     )
@@ -4464,6 +4477,20 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     partial = bool(feedback.get("partial"))
     helpfulness = str(feedback.get("helpfulness") or "unknown")
     continued = feedback.get("continued_after_skill")
+    after_action = {
+        "Продолжил задачу": "continued_target_task",
+        "Остановился после шага": "stopped_after_step",
+        "Сделал что-то другое": "did_something_else",
+        "Пока не знаю": "unknown",
+    }.get(str(feedback.get("next_after_skill") or ""), "unknown")
+    subjective_effect = {
+        "helped": "helped", "some": "a_little", "not_helped": "did_not_help",
+    }.get(helpfulness, "unknown")
+    experiment_result = classify_experiment_result(
+        completed=completed, subjective_effect=subjective_effect, after_action=after_action,
+    )
+    feedback.update({"experiment_result": experiment_result, "subjective_effect": subjective_effect,
+                     "after_action": after_action})
     effect_status = "helped_start" if continued is True else "felt_easier" if helpfulness in {"helped", "some"} else "neutral" if helpfulness == "not_helped" else "unknown"
     if helpfulness == "worse":
         effect_status = "unknown"
@@ -4477,7 +4504,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         "last_skill_effect": helpfulness,
         "last_continued_after_skill": continued,
     }
-    if completed and helpfulness in {"helped", "some"}:
+    if experiment_result == "STRONG_SUCCESS":
         patch.update({"last_successful_skill": sid, "best_skill": sid})
     if helpfulness == "worse":
         patch.update({"skill_unhelpful_count": int(profile.get("skill_unhelpful_count") or 0) + 1, "last_unhelpful_skill": sid})
@@ -4500,8 +4527,30 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         u["user_id"], "post_action_reflection", "post_action_reflection_shown",
         {"completed": completed, "partial": partial, "skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL,
     )
+    raw_target_function = str(active_attempt(u).get("target_function") or "START").upper()
+    voice_target_function = {
+        "START": "START", "CONTINUE": "STAY", "STAY": "STAY", "RETURN": "RETURN",
+        "STABILIZE": "EMOTION_REGULATION", "EMOTION_REGULATION": "EMOTION_REGULATION",
+    }.get(raw_target_function, "START")
+    voice_content = experiment_result_content(
+        result=experiment_result,
+        target_function=voice_target_function,
+        skill_name=str((SKILLS_DB.get(sid) or {}).get("name") or sid),
+        completed=completed, effect=subjective_effect, after_action=after_action,
+    )
+    recent_voice_templates = list(u.get("trainer_voice_template_history") or [])
+    voice = render_message(
+        str(u.get("trainer_key") or "marsha"), voice_content,
+        recent_template_ids=recent_voice_templates,
+    )
+    u["trainer_voice_template_history"] = (recent_voice_templates + [voice.template_id])[-5:]
+    await save_user(u, DB_PATH)
     await answer_with_keyboard(
-        m, u, reflection.render(), kb_post_action_reflection, "post_action_reflection",
+        m, u, (
+            voice.text
+            + f"\n\nЗапомнить: {reflection.memory_anchor}"
+        ),
+        kb_post_action_reflection, "post_action_reflection",
     )
     return True
 
@@ -4521,6 +4570,7 @@ async def _process_normalized_feedback(u: Dict[str, Any], feedback: Dict[str, An
     partial = bool(feedback.get("partial"))
     helpfulness = str(feedback.get("helpfulness") or "unknown")
     continued = feedback.get("continued_after_skill")
+    experiment_result = str(feedback.get("experiment_result") or "UNKNOWN")
     action_started = "yes" if completed else "partial" if partial else "no"
     action_persisted = "yes" if continued is True else "no" if continued is False else "not_applicable"
     emotional_change = "better" if helpfulness in {"helped", "some"} else "worse" if helpfulness == "worse" else "same"
@@ -4536,8 +4586,9 @@ async def _process_normalized_feedback(u: Dict[str, Any], feedback: Dict[str, An
             DB_PATH,
             outcome=ExperimentOutcome(
                 experiment_id, action_started, action_persisted, emotional_change,
-                None, None, completed, bool(continued is True), None,
-                "safety_deterioration" if emotional_change == "worse" else failure_reason,
+                None, None, experiment_result == "STRONG_SUCCESS", bool(continued is True), None,
+                "safety_deterioration" if emotional_change == "worse" else (
+                    failure_reason or "unknown" if experiment_result != "STRONG_SUCCESS" else None),
             ),
             skill=card, expected_revision=int(revision),
             expected_flow_revision=expected_flow_revision,

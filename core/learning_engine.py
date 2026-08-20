@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Iterable, Literal, Mapping, Sequence
 
 from core.skill_schema import Skill
 
 MasteryStatus = Literal["NEW", "LEARNING", "PRACTICING", "GENERALIZING", "MASTERED"]
 ScaffoldingLevel = Literal["full", "reduced", "minimal", "none"]
+ExperimentResult = Literal["STRONG_SUCCESS", "WEAK_SUCCESS", "EXECUTED_ONLY", "FAILED", "UNKNOWN"]
+TargetFunction = Literal["START", "STAY", "RETURN", "EMOTION_REGULATION"]
+SubjectiveEffect = Literal["helped", "a_little", "did_not_help", "unknown"]
+AfterAction = Literal["continued_target_task", "stopped_after_step", "did_something_else", "unknown"]
 MasteryEventType = Literal[
     "first_use", "success", "independent_use", "difficulty_up", "transfer", "mastered", "regression",
 ]
@@ -68,6 +72,138 @@ class MasteryEvent:
 class LearningUpdate:
     state: SkillMasteryState
     events: tuple[MasteryEvent, ...]
+
+
+@dataclass(frozen=True)
+class ExperimentEvidence:
+    """The minimum evidence used for learning and recommendation decisions."""
+
+    skill_id: str
+    completed: bool | None
+    subjective_effect: SubjectiveEffect | None = None
+    after_action: AfterAction | None = None
+    target_function: TargetFunction = "START"
+
+    @property
+    def result(self) -> ExperimentResult:
+        return classify_experiment_result(
+            completed=self.completed,
+            subjective_effect=self.subjective_effect,
+            after_action=self.after_action,
+        )
+
+
+@dataclass(frozen=True)
+class SkillEffectiveness:
+    skill_id: str
+    attempts: int = 0
+    strong_successes: int = 0
+    weak_successes: int = 0
+    executed_only: int = 0
+    failures: int = 0
+    unknown: int = 0
+
+
+def classify_experiment_result(
+    *, completed: bool | None, subjective_effect: str | None = None, after_action: str | None = None,
+) -> ExperimentResult:
+    """Classify evidence conservatively: execution alone is never success."""
+    if completed is False:
+        return "FAILED"
+    if completed is not True:
+        return "UNKNOWN"
+    if after_action in {None, "unknown"}:
+        return "UNKNOWN"
+    positive_effect = subjective_effect in {"helped", "a_little"}
+    if after_action == "continued_target_task" and positive_effect:
+        return "STRONG_SUCCESS"
+    if after_action == "stopped_after_step" and positive_effect:
+        return "WEAK_SUCCESS"
+    if after_action == "did_something_else" or subjective_effect == "did_not_help":
+        return "EXECUTED_ONLY"
+    # Completion without positive evidence of target-task continuation is not success.
+    return "EXECUTED_ONLY"
+
+
+def experiment_feedback(result: ExperimentResult, *, subjective_effect: str | None = None,
+                        after_action: str | None = None) -> str:
+    if result == "STRONG_SUCCESS":
+        return ("Похоже, этот вход сработал: после микрошага ты продолжил задачу.\n"
+                "Запишем это как положительный сигнал, но проверим ещё раз позже.")
+    if result == "WEAK_SUCCESS":
+        return ("Сам микро-шаг дал некоторый эффект, но дальше ты остановился.\n"
+                "Значит, запуск стал легче, но удержание в задаче пока остаётся отдельной проблемой.")
+    if result == "FAILED":
+        return "Этот вариант сейчас не зашёл.\nНе будем давить тем же способом — попробуем другой вход."
+    if result == "UNKNOWN":
+        return ("Эксперимент выполнен, но пока мало данных, чтобы понять эффект.\n"
+                "Оставим результат неопределённым.")
+    if subjective_effect == "did_not_help":
+        return "Действие выполнено, но заметного эффекта не было.\nНе будем объявлять этот навык рабочим."
+    if after_action == "did_something_else":
+        return ("Начать действие получилось, но после него ты переключился на другую задачу.\n"
+                "Значит, проблема сейчас может быть не только во входе, но и в удержании внимания.")
+    return ("Эксперимент выполнен, но пока нет признака, что он помог продолжить нужную задачу.\n"
+            "Не считаем навык рабочим — просто сохраняем результат.")
+
+
+def skill_effectiveness(history: Iterable[ExperimentEvidence], skill_id: str) -> SkillEffectiveness:
+    counts = {key: 0 for key in ("strong_successes", "weak_successes", "executed_only", "failures", "unknown")}
+    attempts = 0
+    for evidence in history:
+        if evidence.skill_id != skill_id:
+            continue
+        attempts += 1
+        key = {
+            "STRONG_SUCCESS": "strong_successes", "WEAK_SUCCESS": "weak_successes",
+            "EXECUTED_ONLY": "executed_only", "FAILED": "failures", "UNKNOWN": "unknown",
+        }[evidence.result]
+        counts[key] += 1
+    return SkillEffectiveness(skill_id=skill_id, attempts=attempts, **counts)
+
+
+def recommended_target_function(history: Sequence[ExperimentEvidence], *, wants_to_return: bool = False) -> TargetFunction:
+    if wants_to_return:
+        return "RETURN"
+    start_successes = sum(item.target_function == "START" and item.result == "STRONG_SUCCESS" for item in history)
+    lost_after_start = sum(
+        item.target_function == "START" and item.completed is True
+        and item.after_action in {"stopped_after_step", "did_something_else"}
+        for item in history
+    )
+    return "STAY" if start_successes >= 1 and lost_after_start >= 2 else "START"
+
+
+def skill_cooldown_remaining(history: Sequence[ExperimentEvidence], skill_id: str) -> int:
+    """Return how many *other* experiments must happen before this skill may repeat."""
+    for offset, item in enumerate(reversed(history)):
+        if item.skill_id != skill_id:
+            continue
+        required = 5 if item.result == "FAILED" or item.subjective_effect == "did_not_help" else 3
+        if item.result == "STRONG_SUCCESS":
+            required = 3
+        return max(0, required - offset)
+    return 0
+
+
+def choose_next_skill(
+    available_skills: Mapping[str, TargetFunction], history: Sequence[ExperimentEvidence],
+    *, wants_to_return: bool = False,
+) -> str:
+    """Choose by target function, recent-use window, and result-dependent cooldown."""
+    if not available_skills:
+        raise LookupError("No available skills")
+    target = recommended_target_function(history, wants_to_return=wants_to_return)
+    recent = {item.skill_id for item in history[-3:]}
+    eligible = [sid for sid, function in available_skills.items()
+                if function == target and sid not in recent and skill_cooldown_remaining(history, sid) == 0]
+    if not eligible:
+        eligible = [sid for sid in available_skills
+                    if sid not in recent and skill_cooldown_remaining(history, sid) == 0]
+    if not eligible:  # Exhausted libraries may repeat, but never the immediately previous skill when alternatives exist.
+        previous = history[-1].skill_id if history else None
+        eligible = [sid for sid in available_skills if sid != previous] or list(available_skills)
+    return eligible[0]
 
 
 def initial_mastery(user_id: int, skill_id: str, *, difficulty: int = 1) -> SkillMasteryState:
