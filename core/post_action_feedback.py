@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.learning_engine import classify_experiment_result, experiment_feedback
+
 
 @dataclass(frozen=True)
 class ReflectionContext:
@@ -15,6 +17,7 @@ class ReflectionContext:
     partial: bool
     helpfulness: str
     continued: bool | None
+    after_action: str = ""
     previous_successes: int = 0
     known_pattern: str = ""
 
@@ -31,7 +34,7 @@ class PostActionReflection:
         return (
             f"{self.reaction}\n\n{self.interpretation}\n\n"
             f"Сегодня заметили: {self.personal_pattern}\n\n"
-            f"Сработало / проверяли: {self.tested_principle}\n\n"
+            f"Что проверяли: {self.tested_principle}\n\n"
             f"Запомнить: {self.memory_anchor}"
         )
 
@@ -52,7 +55,33 @@ def build_post_action_reflection(context: ReflectionContext) -> PostActionReflec
     action = _short(context.tested_action, context.skill_title or "первого действия", 100)
     skill = _short(context.skill_title, "короткий вход", 70)
     barrier = BARRIER_TEXT.get(context.barrier, _short(context.barrier, "барьер нужно уточнить", 90))
-    successful = context.completed or context.partial
+    completed = context.completed or context.partial
+    result = classify_experiment_result(
+        completed=completed, subjective_effect=context.helpfulness,
+        after_action=context.after_action or context.continued,
+    )
+    if result in {"STRONG_SUCCESS", "WEAK_SUCCESS", "EXECUTED_ONLY", "UNKNOWN"}:
+        reaction = experiment_feedback(
+            result, subjective_effect=context.helpfulness, after_action=context.after_action,
+        )
+        if context.partial:
+            reaction = "Получилось выполнить часть эксперимента.\n" + reaction
+        interpretation = {
+            "STRONG_SUCCESS": "Фиксируем продолжение именно целевой задачи, а не только выполнение микрошага.",
+            "WEAK_SUCCESS": "Следующую проверку лучше направить на удержание в задаче.",
+            "EXECUTED_ONLY": "Выполнение и полезность остаются разными сигналами.",
+            "UNKNOWN": "Не делаем вывод о полезности до следующего наблюдения.",
+        }[result]
+        pattern = {
+            "STRONG_SUCCESS": f"в ситуации «{situation}» после микрошага получилось продолжить целевую задачу",
+            "WEAK_SUCCESS": f"в ситуации «{situation}» микрошаг состоялся, но удержаться в задаче пока не получилось",
+            "EXECUTED_ONLY": f"в ситуации «{situation}» действие выполнено без подтверждённого продолжения задачи",
+            "UNKNOWN": f"по ситуации «{situation}» пока недостаточно данных для вывода",
+        }[result]
+        principle = f"проверяли «{skill}» — {action}"
+        anchor = f"Запомнить проверенное действие «{action}»; следующий эксперимент выберем по продолжению целевой задачи."
+        return PostActionReflection(reaction, interpretation, pattern, principle, anchor)
+    successful = completed
 
     if successful:
         reaction = f"Получилось: ты сделал конкретный вход — {action}. Заканчивать всю задачу для этого не понадобилось."

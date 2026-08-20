@@ -56,7 +56,7 @@ async def process_experiment_outcome(
     )
     signal = LearningSignal(
         outcome.experiment_id, str(experiment["context_domain"]),
-        successful=bool(outcome.success_criterion_met or outcome.action_started in {"yes", "partial"}),
+        successful=bool(outcome.success_criterion_met),
         independent=outcome.independent_use, used_without_prompt=outcome.independent_use,
         is_new_context=str(experiment["context_domain"]) not in snapshot["known_contexts"],
         failure_reason_code=outcome.failure_reason_code,
@@ -113,7 +113,7 @@ async def _policy_snapshot(db_path: str, *, user_id: int, skill: Skill, context_
         counts = await (await db.execute(
             """SELECT COUNT(*) AS repetitions,
                       COALESCE(SUM(CASE WHEN b.context_domain=? AND
-                        (o.success_criterion_met=1 OR o.action_started IN ('yes','partial')) THEN 1 ELSE 0 END),0)
+                        o.success_criterion_met=1 THEN 1 ELSE 0 END),0)
                       AS same_context_successes
                FROM behavioral_experiments b LEFT JOIN experiment_outcomes o ON o.experiment_id=b.id
                WHERE b.user_id=? AND b.skill_id=?""",
