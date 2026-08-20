@@ -107,9 +107,9 @@ from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
 from core.trainer_voice import VoiceContent, render_message
 from core.day1_experience import (
-    build_day1_insight, build_day1_map, build_day1_result_insight,
+    build_day1_insight, build_day1_map, build_day1_result_insight, day1_insight_is_complete,
     day1_tomorrow_teaser, personalize_skill_instruction, render_day1_map,
-    select_first_experiment,
+    select_first_experiment, extract_day1_context,
 )
 from core.learning_engine import (
     choose_next_skill, classify_experiment_result, prioritize_mechanisms,
@@ -4273,6 +4273,18 @@ SKILL_OBSTACLE_BY_BUTTON = {
 CONTEXT_NOT_COMPLETED_REASONS = {"too_hard", "no_energy", "anxiety", "unclear_instruction", "distracted", "task_irrelevant", "other_context"}
 
 
+async def log_day1_first_experiment_started(u: Dict[str, Any], *, source: str) -> None:
+    if int(u.get("day") or u.get("day_number") or 1) != 1 or u.get("day1_first_experiment_started"):
+        return
+    u["day1_first_experiment_started"] = True
+    await log_event(u["user_id"], "day1", "first_experiment_started", {
+        "skill_id": current_skill_id(u),
+        "task": str(u.get("current_task_title") or u.get("today_target") or "")[:160],
+        "source": source,
+        "answers_before_action": int(u.get("day1_answers_before_action") or 0),
+    }, DB_PATH, SHEETS_WEBHOOK_URL)
+
+
 async def send_day1_completion_artifact(
     m: Message, u: Dict[str, Any], feedback: Dict[str, Any], reflection: Any,
     *, experiment_result: str, completed: bool, partial: bool, continued: bool | None,
@@ -4285,22 +4297,24 @@ async def send_day1_completion_artifact(
         intervention=str(u.get("day1_intervention") or reflection.tested_principle),
         result=experiment_result, mechanism=mechanism,
     )
-    day1_map = build_day1_map({
+    map_data = {
         "task": u.get("current_task_title") or u.get("today_target"),
         "break_point": u.get("day1_break_point"),
-        "trigger": u.get("day1_insight") or "на входе возрастает требование к результату",
-        "alternative_behavior": "подготовка или переключение вместо создания результата",
-        "hypothesis": mechanism,
+        "trigger": u.get("day1_trigger"),
+        "alternative_behavior": u.get("day1_alternative_behavior"),
+        "hypothesis": u.get("day1_grounded_hypothesis") or mechanism,
         "intervention": u.get("day1_intervention") or reflection.tested_principle,
         "experiment_result": experiment_result,
-    })
+    }
+    day1_map = build_day1_map(map_data)
     await m.answer(
         f"{result_insight}\n\n{render_day1_map(day1_map)}\n\n"
         f"{day1_tomorrow_teaser(str(u.get('trainer_key') or 'marsha'), experiment_result)}"
     )
-    behavioral_win = experiment_result == "STRONG_SUCCESS"
-    insight_complete = bool(day1_map.task and day1_map.hypothesis and experiment_result != "UNKNOWN")
-    await log_event(u["user_id"], "day1", "first_experiment_completed", {"completed": completed or partial}, DB_PATH, SHEETS_WEBHOOK_URL)
+    behavioral_win = continued is True
+    insight_complete = day1_insight_is_complete(map_data, experiment_result)
+    if completed or partial:
+        await log_event(u["user_id"], "day1", "first_experiment_completed", {"completed": True}, DB_PATH, SHEETS_WEBHOOK_URL)
     await log_event(u["user_id"], "day1", "first_experiment_result", {"result": experiment_result}, DB_PATH, SHEETS_WEBHOOK_URL)
     if continued is True:
         await log_event(u["user_id"], "day1", "continued_target_task", {"day1_behavioral_win": True}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -4764,6 +4778,10 @@ async def finalize_skill_result_feedback(m: Message, u: Dict[str, Any], text: st
         await save_user(u, DB_PATH)
         await answer_with_keyboard(
             m, u, reflection.render(), kb_post_action_reflection, "post_action_reflection",
+        )
+        await send_day1_completion_artifact(
+            m, u, feedback, reflection, experiment_result=experiment_result,
+            completed=completed, partial=False, continued=None,
         )
     return True
 
@@ -8010,6 +8028,23 @@ def _select_daily_skill_with_ranking(
         candidates = tuple(skill for skill in SKILL_REGISTRY.rankable() if skill.id in SKILLS_DB)
     if not candidates:
         return None
+    if int(u.get("day") or u.get("day_number") or 1) == 1 and not user_skill_attempts(u):
+        selected_id = select_first_experiment(mechanism, [skill.id for skill in candidates])
+        selected_card = next(skill for skill in candidates if skill.id == selected_id)
+        first = dict(SKILLS_DB.get(selected_id) or {
+            "name": selected_card.title_user, "how": selected_card.standard_variant,
+            "minimum": selected_card.min_variant,
+        })
+        first.update({
+            "skill_id": selected_id, "id": selected_id,
+            "variant": first.get("variant") or selected_id,
+            "target_function": target_function_for_skill(selected_id),
+            "first_experiment": True, "selected_difficulty": 1,
+            "progression_type": "first",
+            "ranking_reason_codes": ["DAY1_PRIMARY_MECHANISM_TEST"],
+            "ranking_policy_version": "ranking-v1",
+        })
+        return first
     completed = set(_profile_list(profile.get("working_skills"))) | set(
         _profile_list(profile.get("completed_skills_effect_helped"))
     )
@@ -8242,6 +8277,9 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     )
     await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": source, "day": day})
     await log_event(u["user_id"], "training", "new_day_skill_opened", {"day": day, "skill_id": sid, "source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
+    if day == 1:
+        await log_day1_first_experiment_started(u, source="new_day_skill")
+        await save_user(u, DB_PATH)
     if day == 2 and u.get("day1_finished"):
         await log_event(u["user_id"], "day2", "returned_day2", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
     include_context = should_send_day_intro(u) and source != "admin_force_next_day"
@@ -10406,6 +10444,7 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
         inferred_mechanism = str(u.get("model_inferred_mechanism") or attempt.get("current_mechanism") or "")
         source_text = str(u.get("day1_user_input") or target)
         insight = build_day1_insight(source_text, selected_mechanism, inferred_mechanism)
+        grounded = extract_day1_context(source_text, selected_mechanism, inferred_mechanism)
         sid = str(current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or "")
         skill = dict(SKILLS_DB.get(sid) or {"skill_id": sid})
         skill.setdefault("skill_id", sid)
@@ -10413,15 +10452,22 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
         instruction = personalize_skill_instruction(skill, target, distress=distress)
         u.update({
             "day1_user_input": source_text, "day1_insight": insight,
-            "day1_intervention": instruction, "day1_break_point": "момент перехода к первому видимому результату",
+            "day1_intervention": instruction, "day1_break_point": grounded["break_point"],
+            "day1_trigger": grounded["trigger"],
+            "day1_alternative_behavior": grounded["alternative_behavior"],
+            "day1_grounded_hypothesis": grounded["hypothesis"],
+            "day1_flow_variant": "insight_first",
         })
         screen["text"] = f"{insight}\n\nПервый эксперимент\n\n{instruction}"
     mark_action_card_active(u)
     await save_user(u, DB_PATH)
     await log_engine_events(u, screen)
     if int(u.get("day") or u.get("day_number") or 1) == 1:
-        await log_event(u["user_id"], "day1", "day1_diagnosis_completed", {"answers_before_action_max": 5}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(u["user_id"], "day1", "first_experiment_started", {"skill_id": current_skill_id(u), "task": target[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(u["user_id"], "day1", "day1_diagnosis_completed", {
+            "answers_before_action": int(u.get("day1_answers_before_action") or 0),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_day1_first_experiment_started(u, source="task_specific_skill")
+        await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, screen["text"], action_keyboard(), "skill_card")
     await maybe_show_micro_habit(m, u, "day_start")
     if int(u.get("day") or 1) > 1:
@@ -11533,6 +11579,7 @@ async def main_flow(m: Message):
         if target_text.lower() != "пропустить":
             if int(u.get("day") or u.get("day_number") or 1) == 1:
                 u["day1_user_input"] = target_text[:1000]
+                u["day1_answers_before_action"] = min(5, int(u.get("day1_answers_before_action") or 0) + 1)
             await save_current_task(u, DB_PATH, title=target_text)
             await save_user(u, DB_PATH)
             if task_needs_physical_step(target_text) and not u.get("current_next_physical_step"):
@@ -11552,6 +11599,8 @@ async def main_flow(m: Message):
             await m.answer("Напиши один физический шаг: что открыть / написать / проверить первым?")
             return
         await update_current_task_step(u, DB_PATH, step)
+        if int(u.get("day") or u.get("day_number") or 1) == 1:
+            u["day1_answers_before_action"] = min(5, int(u.get("day1_answers_before_action") or 0) + 1)
         await save_user(u, DB_PATH)
         await m.answer(returning_to_task_text(u))
         await show_skill_for_current_task(m, u)

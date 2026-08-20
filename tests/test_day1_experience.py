@@ -1,9 +1,13 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import bot
 
 from core.day1_experience import (
-    DAY1_ANALYTICS_EVENTS, build_day1_insight, build_day1_map,
+    DAY1_ANALYTICS_EVENTS, build_day1_insight, build_day1_map, day1_insight_is_complete,
     build_day1_result_insight, day1_tomorrow_teaser,
-    personalize_skill_instruction, render_day1_map, select_first_experiment,
+    extract_day1_context, personalize_skill_instruction, render_day1_map, select_first_experiment,
 )
 
 
@@ -62,6 +66,20 @@ class Day1ExperienceTests(unittest.TestCase):
         self.assertNotIn("первая подтверждающая", text)
         self.assertIn("Ещё не знаем", text)
 
+    def test_map_fields_are_grounded_and_completeness_requires_evidence(self):
+        context = extract_day1_context(PRESENTATION, "fear_of_evaluation", "perfectionism")
+        self.assertIn("могут оценивать", context["break_point"])
+        self.assertIn("поиск информации", context["alternative_behavior"])
+        data = {**context, "task": "презентация"}
+        self.assertTrue(day1_insight_is_complete(data, "STRONG_SUCCESS"))
+        self.assertFalse(day1_insight_is_complete({"task": "презентация", "hypothesis": "версия"}, "FAILED"))
+
+    def test_missing_behavior_is_rendered_as_unknown_not_invented(self):
+        value = build_day1_map({"task": "письмо", "experiment_result": "EXECUTED_ONLY"})
+        text = render_day1_map(value)
+        self.assertIn("пока недостаточно данных", text)
+        self.assertNotIn("подготовка или переключение", text)
+
     def test_success_map_and_teasers_create_start_to_stay_curiosity(self):
         value = build_day1_map({"task": "презентация", "hypothesis": "страх оценки",
                                 "intervention": "плохой слайд", "experiment_result": "STRONG_SUCCESS"})
@@ -79,6 +97,48 @@ class Day1ExperienceTests(unittest.TestCase):
             "first_experiment_result", "continued_target_task", "day1_map_viewed",
             "day1_finished", "returned_day2",
         ))
+
+
+class Day1AnalyticsIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_behavioral_win_uses_continuation_not_subjective_success(self):
+        user = {
+            "user_id": 1, "day": 1, "trainer_key": "marsha", "current_task_title": "презентация",
+            "day1_user_input": PRESENTATION, "day1_break_point": "первая версия",
+            "day1_trigger": "оценка", "day1_alternative_behavior": "поиск информации",
+            "day1_grounded_hypothesis": "оценка повышает требования", "day1_intervention": "плохой слайд",
+        }
+        message = SimpleNamespace(answer=AsyncMock())
+        reflection = SimpleNamespace(tested_principle="плохой слайд")
+        logged = []
+
+        async def capture(_uid, _stage, event, metadata, *_args):
+            logged.append((event, metadata))
+
+        with patch.object(bot, "log_event", side_effect=capture), patch.object(bot, "save_user", new=AsyncMock()):
+            await bot.send_day1_completion_artifact(
+                message, user, {"mechanism": "evaluation_avoidance"}, reflection,
+                experiment_result="EXECUTED_ONLY", completed=True, partial=False, continued=True,
+            )
+        self.assertTrue(user["day1_behavioral_win"])
+        self.assertIn("continued_target_task", [event for event, _ in logged])
+        self.assertIn("first_experiment_completed", [event for event, _ in logged])
+
+    async def test_unexecuted_attempt_does_not_log_completed_event(self):
+        user = {"user_id": 1, "day": 1, "current_task_title": "письмо"}
+        message = SimpleNamespace(answer=AsyncMock())
+        reflection = SimpleNamespace(tested_principle="открыть письмо")
+        logged = []
+
+        async def capture(_uid, _stage, event, metadata, *_args):
+            logged.append(event)
+
+        with patch.object(bot, "log_event", side_effect=capture), patch.object(bot, "save_user", new=AsyncMock()):
+            await bot.send_day1_completion_artifact(
+                message, user, {}, reflection, experiment_result="FAILED",
+                completed=False, partial=False, continued=False,
+            )
+        self.assertNotIn("first_experiment_completed", logged)
+        self.assertIn("first_experiment_result", logged)
 
 
 if __name__ == "__main__":

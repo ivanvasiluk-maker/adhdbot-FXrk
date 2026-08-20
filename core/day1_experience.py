@@ -27,6 +27,7 @@ DAY1_ANALYTICS_EVENTS = (
     "first_experiment_result", "continued_target_task", "day1_map_viewed",
     "day1_finished", "returned_day2",
 )
+DAY1_FLOW_VARIANT = "insight_first"
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,49 @@ def build_day1_insight(user_input: str, selected_mechanism: str, inferred_mechan
         sentences.append("Вместо целевого действия внимание переключается на более доступное занятие.")
     sentences.append("Это пока гипотеза — проверим её действием.")
     return " ".join(sentences[:5])
+
+
+def extract_day1_context(user_input: str, selected_mechanism: str, inferred_mechanism: str) -> dict[str, str]:
+    """Extract only grounded map fields; empty means the user did not provide that fact."""
+    text = _clean(user_input, 600)
+    signals = _signals(text)
+    mechanism = selected_mechanism or inferred_mechanism
+    if signals["evaluation"]:
+        break_point = "момент создания первой версии, которую могут оценивать"
+        trigger = "нужно сделать достаточно хорошо перед возможной оценкой"
+    elif signals["overload"]:
+        break_point = "момент выбора одного следующего действия из большой задачи"
+        trigger = "задача воспринимается сразу целиком"
+    else:
+        break_point = "момент перехода от намерения к первому видимому результату"
+        trigger = ""
+    if signals["preparation"]:
+        alternative = "поиск информации или структуры вместо создания первой версии"
+    elif signals["switching"]:
+        alternative = "переключение на другое занятие вместо целевого действия"
+    else:
+        alternative = ""
+    hypothesis = {
+        "fear_of_evaluation": "риск оценки может повышать требования к первой версии и откладывать запуск",
+        "evaluation_avoidance": "риск оценки может повышать требования к первой версии и откладывать запуск",
+        "perfectionism": "требование качества может повышать барьер первого черновика",
+        "perfectionism_error_fear": "требование качества может повышать барьер первого черновика",
+        "overload": "масштаб задачи может скрывать один выполнимый следующий шаг",
+        "overwhelm": "масштаб задачи может скрывать один выполнимый следующий шаг",
+        "attention_drift": "доступное отвлечение может перехватывать внимание на входе",
+    }.get(mechanism, "первый барьер может находиться в моменте входа в задачу")
+    return {"break_point": break_point, "trigger": trigger, "alternative_behavior": alternative,
+            "hypothesis": hypothesis, "source_text": text}
+
+
+def day1_insight_is_complete(data: Mapping[str, Any], experiment_result: str) -> bool:
+    return bool(
+        _clean(str(data.get("task") or ""))
+        and _clean(str(data.get("break_point") or ""))
+        and _clean(str(data.get("hypothesis") or ""))
+        and (_clean(str(data.get("trigger") or "")) or _clean(str(data.get("alternative_behavior") or "")))
+        and experiment_result != "UNKNOWN"
+    )
 
 
 def select_first_experiment(mechanism: str, available_skill_ids: Sequence[str]) -> str:
@@ -143,10 +187,10 @@ def build_day1_map(data: Mapping[str, Any]) -> Day1Map:
     }.get(result_code, "данных для вывода пока недостаточно")
     return Day1Map(
         task=_clean(str(data.get("task") or "текущая задача")),
-        break_point=_clean(str(data.get("break_point") or "момент перехода к первому видимому результату")),
-        trigger=_clean(str(data.get("trigger") or "требование начать и получить результат")),
-        alternative_behavior=_clean(str(data.get("alternative_behavior") or "подготовка или переключение вместо действия")),
-        hypothesis=_clean(str(data.get("hypothesis") or "первый барьер связан с входом в задачу")),
+        break_point=_clean(str(data.get("break_point") or "пока уточняем точный момент стопора")),
+        trigger=_clean(str(data.get("trigger") or "пока недостаточно данных")),
+        alternative_behavior=_clean(str(data.get("alternative_behavior") or "пока недостаточно данных")),
+        hypothesis=_clean(str(data.get("hypothesis") or "рабочая гипотеза пока не сформирована")),
         intervention=_clean(str(data.get("intervention") or "один конкретный проверяемый вход")),
         result=result, confidence=confidence,
         next_question="что поможет удержаться в задаче после первоначального входа?",
