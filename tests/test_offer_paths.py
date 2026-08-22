@@ -27,11 +27,12 @@ class OfferPathTests(unittest.TestCase):
         self.assertIn("€360", group)
         self.assertIn("€120 в месяц", group)
         self.assertIn("Иван Василюк", group)
-        self.assertIn("€59", tariff_live_text())
+        self.assertIn("от €39", tariff_live_text())
+        self.assertIn("45–60 минут", tariff_live_text())
 
     def test_comparison_names_all_four_paths(self):
         text = offer_details_full_mode_text()
-        for label in ("Бесплатно", "Подписка", "Группа КПТ", "Индивидуальная консультация"):
+        for label in ("Бесплатно", "Подписка", "Группа навыков", "Потренировать навык с человеком"):
             self.assertIn(label, text)
 
 

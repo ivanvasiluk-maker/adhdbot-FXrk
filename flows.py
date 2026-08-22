@@ -9,9 +9,10 @@ import random
 import logging
 import os
 import re
+import uuid
 from typing import Dict, Any, Optional, List
 import aiosqlite
-from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram import Bot
 
 from texts import (
@@ -37,6 +38,38 @@ log = logging.getLogger("bot")
 def begin_flow_experiment(user_id: int, experiment_id: int, state_revision: int) -> FlowState:
     """Canonical flow entry: an experiment always gets a fresh persisted id."""
     return start_experiment(user_id, experiment_id, state_revision)
+
+
+def barrier_choice_keyboard(analysis_id: str) -> InlineKeyboardMarkup:
+    choices = (
+        ("😵 Перегруз", "overload"), ("😬 Страх ошибки", "fear_of_error"),
+        ("📱 Отвлечения", "attention_escape"), ("🌀 Слишком много вариантов", "too_many_options"),
+        ("😶 Не вижу смысла", "low_reward"),
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=f"barrier:{analysis_id}:{code}")]
+        for label, code in choices
+    ])
+
+
+def analysis_routing_memory(comp: Dict[str, Any], analysis_id: str) -> Dict[str, Any]:
+    """Persist only safe, already-derived fields needed by deterministic buttons."""
+    summary = comp.get("input_signal_summary") if isinstance(comp.get("input_signal_summary"), dict) else {}
+    hypothesis = str(comp.get("specific_pattern") or summary.get("specific_pattern") or comp.get("live_pattern") or "")
+    situation = ". ".join(str(x).strip() for x in (
+        hypothesis,
+        comp.get("avoidance_behavior") or summary.get("avoidance_behavior"),
+        comp.get("useful_signal") or summary.get("useful_signal"),
+    ) if x)
+    return {
+        "analysis_id": analysis_id,
+        "situation_text": situation[:700],  # safe categorical summary, never the raw message/transcript
+        "hypothesis": hypothesis[:240],
+        "barrier_candidates": list(comp.get("barrier_candidates") or []),
+        "selected_barrier": comp.get("selected_barrier"),
+        "recommended_skill": comp.get("selected_skill") or "open_only",
+        "short_conclusion": str(comp.get("short_conclusion") or hypothesis)[:500],
+    }
 
 # ============================================================
 # UTILS
@@ -1335,8 +1368,12 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     )
 
     if analysis_needs_more_input(user_text):
-        u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True), ensure_ascii=False)
-        set_legacy_stage(u, "analysis_need_more")
+        analysis_id = f"analysis_{uuid.uuid4().hex[:12]}"
+        memory = safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True)
+        memory.update(analysis_routing_memory(memory, analysis_id))
+        u["analysis_json"] = json.dumps(memory, ensure_ascii=False)
+        set_legacy_stage(u, "awaiting_barrier_choice")
+        u["current_screen_id"] = analysis_id
         await save_user(u, db_path)
         await log_event(u["user_id"], "analysis", "analysis_needs_more_input", {"len": len(user_text or "")}, db_path, sheets_webhook)
         button_count = keyboard_button_count(kb_analysis_need_more)
@@ -1348,7 +1385,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
             db_path,
             sheets_webhook,
         )
-        await m.answer(analysis_need_more_text(user_text), reply_markup=kb_analysis_need_more if button_count <= MAX_KEYBOARD_BUTTONS else None)
+        await m.answer(analysis_need_more_text(user_text), reply_markup=barrier_choice_keyboard(analysis_id))
         return
 
     # Try quick analysis first (keeps fallback behavior)
@@ -1369,13 +1406,17 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     comp_to_store = dict(comp)
     comp_to_store.pop("user_text", None)
     comp_to_store.update(safe_analysis_memory(user_text, comp_to_store))
+    comp_to_store.update(analysis_routing_memory(comp_to_store, f"analysis_{uuid.uuid4().hex[:12]}"))
     analysis_result = build_analysis_result(comp_to_store, user_text)
     if len(analysis_result.get("evidence_signals") or []) < 3:
+        analysis_id = comp_to_store.get("analysis_id") or f"analysis_{uuid.uuid4().hex[:12]}"
+        comp_to_store["analysis_id"] = analysis_id
         u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
-        set_legacy_stage(u, "analysis_need_more")
+        set_legacy_stage(u, "awaiting_barrier_choice")
+        u["current_screen_id"] = analysis_id
         await save_user(u, db_path)
         await log_event(u["user_id"], "analysis", "analysis_evidence_too_low", {"signals": len(analysis_result.get("evidence_signals") or [])}, db_path, sheets_webhook)
-        await m.answer(analysis_need_more_text(user_text), reply_markup=kb_analysis_need_more)
+        await m.answer(analysis_need_more_text(user_text), reply_markup=barrier_choice_keyboard(analysis_id))
         return
     comp_to_store["analysis_result"] = analysis_result
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
@@ -1415,6 +1456,9 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
         (analysis_result.get("recommended_skill_reason") or ""),
     )
+    comp_to_store["short_conclusion"] = preliminary_conclusion
+    u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
+    await save_user(u, db_path)
     msg = f"{preliminary_conclusion}\n\nЭто похоже на тебя?"
 
     button_count = keyboard_button_count(kb_analysis_confirm)

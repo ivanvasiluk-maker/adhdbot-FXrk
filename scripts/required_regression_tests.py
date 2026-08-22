@@ -318,12 +318,12 @@ async def test_offer_preview_menu_callbacks_do_not_go_stale():
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
         assert "Этот шаг уже закрыт" not in "\n".join(live_cb.message.answers)
-        assert any("Живой разбор" in answer for answer in live_cb.message.answers)
+        assert any("Потренировать навык с человеком" in answer for answer in live_cb.message.answers)
 
         bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
         await bot.on_offer_callbacks(bot_cb)
         assert "Этот шаг уже закрыт" not in "\n".join(bot_cb.message.answers)
-        assert any("SKILLER Бот" in answer for answer in bot_cb.message.answers)
+        assert any("SKILLER Founding Member" in answer for answer in bot_cb.message.answers)
 
         later_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["continue_training"])
         await bot.on_offer_callbacks(later_cb)
@@ -380,8 +380,8 @@ async def test_offer_request_form_sends_application_to_curator():
         await bot.on_offer_callbacks(request_cb)
         opened = await get_user(uid, bot.DB_PATH)
         assert opened["stage"] == "offer_request_form"
-        assert opened.get("pending_offer_request_format") == "Живой разбор"
-        assert "Имя" in "\n".join(request_cb.message.answers)
+        assert opened.get("pending_offer_request_format") == "Тренировка навыка с человеком"
+        assert "Как к тебе обращаться" in "\n".join(request_cb.message.answers)
 
         form_msg = FakeMessage(uid, "Иван\\n@Ivan_Vasiliuk\\nivan.vasiluk@gmail.com\\nХочу разобрать прокрастинацию")
         form_msg.bot = FakeTelegramBot()
@@ -577,9 +577,9 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
     assert "🟢 Продолжить бесплатно" in keyboard_text
-    assert "🔵 Подписка" in keyboard_text
-    assert "🟠 Группа КПТ" in keyboard_text
-    assert "🔴 Консультация" in keyboard_text
+    assert "🔵 SKILLER Full" in keyboard_text
+    assert "👥 Группа навыков" in keyboard_text and "€20–24" in keyboard_text
+    assert "👤 Потренировать навык с человеком" in keyboard_text and "€39" in keyboard_text
 
     map_text = render_short_user_map({
         "attention_pattern": "scroll_autopilot",
