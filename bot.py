@@ -97,6 +97,14 @@ from core.state_machine import (
     parse_callback_data as parse_flow_callback, transition as flow_transition,
     get_state as get_flow_state,
 )
+from core.skiller_router import (
+    ACTIONS as SKILLER_ACTIONS,
+    CLARIFICATION_ANSWERS as SKILLER_CLARIFICATION_ACTIONS,
+    DialogState as SkillerDialogState,
+    new_session as new_skiller_session,
+    route_callback as route_skiller_callback,
+    route_user_input as route_skiller_user_input,
+)
 from core.legacy_flow_adapter import set_legacy_day, set_legacy_stage
 from core.mechanism_model import MechanismHypothesis, SituationSnapshot, select_skill_for_mechanism
 from core.experiment_core import BehavioralExperiment
@@ -11009,6 +11017,21 @@ async def main_flow(m: Message):
         low = text.lower()
         await log_event(u.get("user_id"), u.get("stage", ""), "global_voice_transcribed", {"len": len(text)}, DB_PATH, SHEETS_WEBHOOK_URL)
 
+    # A callback may put the action router into a dedicated text/voice state.
+    # Consume that input here before every legacy intake or story-analysis path.
+    skiller_session = _skiller_session(u)
+    if skiller_session.get("state") in {
+        SkillerDialogState.DAY1_CLARIFY.value,
+        SkillerDialogState.CORRECTION_INPUT.value,
+        SkillerDialogState.NEW_CASE_INTAKE.value,
+        SkillerDialogState.CRISIS_FLOW.value,
+    } and text:
+        routed = route_skiller_user_input(skiller_session, text, kind="voice" if m.voice else "text")
+        _save_skiller_session(u, skiller_session)
+        await save_user(u, DB_PATH)
+        await m.answer(routed["text"], reply_markup=_skiller_markup(routed.get("buttons") or []))
+        return
+
     # Reply-keyboard labels are commands. Consume them before mechanism
     # detection, closed-day handling, or any free-text/voice analysis.
     if text in BARRIER_BUTTONS:
@@ -14239,6 +14262,69 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
 # ============================================================
 # CALLBACKS
 # ============================================================
+
+def _skiller_session(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Load the isolated action-router state without replacing diagnosis data."""
+    try:
+        analysis = json.loads(u.get("analysis_json") or "{}")
+    except (TypeError, ValueError):
+        analysis = {}
+    analysis = analysis if isinstance(analysis, dict) else {}
+    session = analysis.get("_skiller_session")
+    if not isinstance(session, dict):
+        initial = SkillerDialogState.DAY_CLOSED if day_closed_today(u) else SkillerDialogState.DAY_OPEN
+        session = new_skiller_session(initial)
+        facts = stored_analysis_user_text(u)
+        if facts:
+            session["case_facts"] = [facts]
+    return session
+
+
+def _save_skiller_session(u: Dict[str, Any], session: Dict[str, Any]) -> None:
+    try:
+        analysis = json.loads(u.get("analysis_json") or "{}")
+    except (TypeError, ValueError):
+        analysis = {}
+    analysis = analysis if isinstance(analysis, dict) else {}
+    analysis["_skiller_session"] = session
+    u["analysis_json"] = json.dumps(analysis, ensure_ascii=False)
+
+
+def _skiller_markup(buttons: List[tuple[str, str]]) -> InlineKeyboardMarkup | None:
+    if not buttons:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=action)] for label, action in buttons
+    ])
+
+
+def _is_skiller_action(data: str) -> bool:
+    return data in SKILLER_ACTIONS or data in SKILLER_CLARIFICATION_ACTIONS or data.startswith(
+        ("clarify.function.", "experiment.result.")
+    ) or data in {"clarify.other", "experiment.extra.done", "legacy.short_skill", "want_short_skill"}
+
+
+@router.callback_query(lambda c: _is_skiller_action(c.data or ""))
+async def on_skiller_action_callback(c: CallbackQuery) -> None:
+    """Action-first adapter: callback captions can never reach ``main_flow``."""
+    u = await get_user(c.from_user.id, DB_PATH)
+    prepare_calendar_routing(u)
+    session = _skiller_session(u)
+    result = route_skiller_callback(
+        session, c.data or "", callback_id=str(getattr(c, "id", "") or ""),
+        user_id=c.from_user.id, screen_id=str(u.get("current_screen_id") or ""),
+    )
+    _save_skiller_session(u, session)
+    if session.get("state") == SkillerDialogState.DAY_CLOSED.value:
+        u["day_closed"] = 1
+        set_current_state(u, STATE_DAY_CLOSED, close_action=True)
+    await save_user(u, DB_PATH)
+    telemetry = (session.get("telemetry") or [{}])[-1]
+    # Telegram retries and fast double taps must not create duplicate DB events.
+    if not telemetry.get("duplicate"):
+        await log_event(c.from_user.id, "callback_router", "callback_routed", telemetry, DB_PATH, SHEETS_WEBHOOK_URL)
+    await c.message.answer(result["text"], reply_markup=_skiller_markup(result.get("buttons") or []))
+    await c.answer()
 
 @router.callback_query(lambda c: (c.data or "").startswith("prediction:"))
 async def on_prediction_callback(c: CallbackQuery):
