@@ -41,6 +41,12 @@ class PatchRolloutTests(unittest.TestCase):
             ("c" * 40, "PATCH-20: offer paths"),
         ]), [])
 
+    def test_commit_checker_allows_non_patch_commits(self):
+        self.assertEqual(validate_commits([
+            ("a" * 40, "Add trainer voice rendering layer"),
+            ("b" * 40, "PATCH-20: offer paths"),
+        ]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

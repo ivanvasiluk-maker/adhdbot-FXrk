@@ -84,10 +84,10 @@ Notes:
 
 ## Mandatory regression gate
 
-PATCH-00 through PATCH-17 follow the ordered, one-patch-per-commit rollout contract in
+PATCH-00 through PATCH-17 follow the ordered rollout contract in
 [`docs/PATCH_ROLLOUT.md`](docs/PATCH_ROLLOUT.md). Run a patch's dedicated acceptance command before
-the complete gate; CI rejects missing/out-of-order contracts and post-baseline commits without one
-`PATCH-XX:` owner.
+the complete gate; CI rejects missing/out-of-order contracts and commits that declare PATCH ownership
+without exactly one `PATCH-XX:` owner.
 
 Run the offline merge gate for every patch:
 
