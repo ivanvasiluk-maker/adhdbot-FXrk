@@ -9,6 +9,18 @@ from bot import (
 
 
 class OfferPathTests(unittest.TestCase):
+    def test_free_mode_suppresses_manual_and_scheduled_offer_gates(self):
+        user = bot.default_user(123)
+        user.update({"day": 3, "free_mode": 1, "last_active": 1})
+        profile = {
+            "completed_experiments": 3,
+            "successful_or_partial": 2,
+            "personalized_insight_exists": True,
+            "value_report_seen_at": "2026-08-01T00:00:00+00:00",
+        }
+        self.assertFalse(bot.can_show_offer(user, profile))
+        self.assertFalse(bot.scheduled_offer_due(user, profile))
+
     def test_main_offer_has_exactly_four_continuation_paths(self):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
             rows = offer_inline_keyboard(123).inline_keyboard[:4]

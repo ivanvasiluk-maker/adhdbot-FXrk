@@ -822,7 +822,12 @@ def scheduled_offer_due(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = N
     profile = profile or {}
     now = now or dt.datetime.now(dt.timezone.utc)
     safety_active = int(u.get("crisis_mode") or 0) == 1 or str(u.get("stage") or "").startswith("safety")
-    if int(u.get("full_mode") or 0) == 1 or safety_active or has_unfinished_exercise_for_offer(u):
+    if (
+        int(u.get("full_mode") or 0) == 1
+        or int(u.get("free_mode") or 0) == 1
+        or safety_active
+        or has_unfinished_exercise_for_offer(u)
+    ):
         return False
     for raw in (profile.get("offer_suppressed_until"), u.get("offer_suppressed_until")):
         until = _parse_aware_datetime(raw)
@@ -845,6 +850,8 @@ def has_unfinished_exercise_for_offer(u: Dict[str, Any]) -> bool:
 
 def can_show_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> bool:
     profile = profile or {}
+    if int(u.get("free_mode") or 0) == 1:
+        return False
     current_day = int(u.get("day") or u.get("current_day") or 1)
     working_model = profile.get("personal_working_model") if isinstance(profile.get("personal_working_model"), dict) else {}
     day1_completion_signal = bool(
