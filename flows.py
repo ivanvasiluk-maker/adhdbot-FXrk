@@ -1359,8 +1359,6 @@ def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str
 async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
     """Запустить анализ"""
     from texts import (
-        ANALYSIS_ACTION_TRANSITION_TEXT,
-        kb_analysis_action_transition,
         kb_analysis_confirm,
         kb_analysis_need_more,
         preliminary_hypothesis_note,
@@ -1471,21 +1469,6 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         sheets_webhook,
     )
     await m.answer(msg, reply_markup=kb_analysis_confirm if button_count <= MAX_KEYBOARD_BUTTONS else None)
-    if not any([
-        int(u.get("analysis_action_transition_shown") or 0),
-        int(u.get("has_started_training") or 0),
-        u.get("current_skill"),
-        u.get("current_action_id"),
-        str(u.get("daily_skill_status") or "") == "in_progress",
-        str(u.get("day_status") or "").lower() == "closed",
-        int(u.get("day_closed") or u.get("today_closed") or 0),
-        str(u.get("safety_mode") or "none") != "none",
-        int(u.get("crisis_mode") or u.get("crisis_redirected") or 0),
-    ]):
-        u["analysis_action_transition_shown"] = 1
-        await save_user(u, db_path)
-        await log_event(u["user_id"], "analysis", "analysis_action_transition_shown", {"source": "initial_analysis"}, db_path, sheets_webhook)
-        await m.answer(ANALYSIS_ACTION_TRANSITION_TEXT, reply_markup=kb_analysis_action_transition)
 
 # ============================================================
 # PROGRESS & REPORTS

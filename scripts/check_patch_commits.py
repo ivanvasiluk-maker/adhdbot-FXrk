@@ -13,12 +13,21 @@ LEDGER = ROOT / "patches/sequence.json"
 SUBJECT = re.compile(r"^(PATCH-(\d{2})):\s+\S")
 
 
-def validate_commits(rows: list[tuple[str, str]]) -> list[str]:
+def validate_commits(
+    rows: list[tuple[str, str]],
+    legacy_subject_exceptions: dict[str, str] | None = None,
+) -> list[str]:
     """Validate one owner per commit and monotonically ordered PATCH numbers."""
     errors: list[str] = []
     previous_number = -1
+    legacy_subject_exceptions = legacy_subject_exceptions or {}
     for commit, subject in rows:
         if subject.startswith(("Merge ", "Revert ")):
+            continue
+        # Historical mistakes cannot be renamed without rewriting published
+        # history. Only an exact immutable hash+subject pair may be grandfathered;
+        # every new commit remains subject to the normal PATCH rule.
+        if legacy_subject_exceptions.get(commit) == subject:
             continue
         match = SUBJECT.match(subject)
         labels = set(re.findall(r"PATCH-\d{2}", subject))
@@ -36,6 +45,10 @@ def validate_commits(rows: list[tuple[str, str]]) -> list[str]:
 
 def main() -> int:
     data = json.loads(LEDGER.read_text(encoding="utf-8"))
+    legacy_subject_exceptions = {
+        str(item["commit"]): str(item["subject"])
+        for item in data.get("legacy_subject_exceptions") or []
+    }
     baseline = str(data["enforced_after_commit"])
     if baseline.startswith("path-introduction:"):
         tracked_path = baseline.partition(":")[2]
@@ -56,12 +69,12 @@ def main() -> int:
         print(f"PATCH COMMIT ERROR: cannot inspect baseline {baseline}: {result.stderr.strip()}")
         return 1
     rows = [tuple(line.partition("\t")[::2]) for line in result.stdout.splitlines()]
-    errors = validate_commits(rows)
+    errors = validate_commits(rows, legacy_subject_exceptions)
     if errors:
         for error in errors:
             print(f"PATCH COMMIT ERROR: {error}")
         return 1
-    print("Post-baseline commits each declare exactly one PATCH owner")
+    print("Post-baseline commits declare one PATCH owner; exact published-history exceptions are pinned")
     return 0
 
 
