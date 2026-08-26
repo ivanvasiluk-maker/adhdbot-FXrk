@@ -40,7 +40,14 @@ def main() -> int:
     env = dict(os.environ)
     env.update({"OPENAI_API_KEY": "", "TEST_MODE": "0", "PAYMENT_ACCEPT_ANY": "0"})
     for command in CHECKS:
-        run(command, env=env)
+        command_env = env
+        if command[1:] == ("scripts/required_regression_tests.py",):
+            command_env = dict(env)
+            command_env.update({
+                "ENABLE_PAYMENTS": "1",
+                "PAYMENT_URL": "https://pay.stripe.com/skiller-ci",
+            })
+        run(command, env=command_env)
     with tempfile.TemporaryDirectory() as directory:
         startup_env = dict(env)
         startup_env.update({

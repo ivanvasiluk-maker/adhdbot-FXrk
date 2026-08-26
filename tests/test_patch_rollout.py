@@ -41,6 +41,12 @@ class PatchRolloutTests(unittest.TestCase):
             ("c" * 40, "PATCH-20: offer paths"),
         ]), [])
 
+    def test_commit_checker_allows_only_exact_published_history_exception(self):
+        commit = "a" * 40
+        subject = "Published legacy subject"
+        self.assertEqual(validate_commits([(commit, subject)], {commit: subject}), [])
+        self.assertTrue(validate_commits([(commit, subject + " changed")], {commit: subject}))
+
 
 if __name__ == "__main__":
     unittest.main()

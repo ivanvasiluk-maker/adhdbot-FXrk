@@ -1,6 +1,12 @@
 {
   "schema_version": 1,
   "enforced_after_commit": "path-introduction:patches/sequence.json",
+  "legacy_subject_exceptions": [
+    {"commit": "37dc449b468ab7a99ce429d370cfd4681b076d8b", "subject": "Add distinct trainer voice rendering layer"},
+    {"commit": "4b4222d34a2d4b361cbd85b99067f9cc0c0965c0", "subject": "Integrate working conclusions into Day 1 flow"},
+    {"commit": "0185ae73768471cb4334f47e9cd9872cd9c501cb", "subject": "Schedule offers and reminders at requested times"},
+    {"commit": "f9a6facfe4a0f54d491ed49cdb5391b26423be59", "subject": "Complete stable action handlers"}
+  ],
   "phases": [
     {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},
     {"id": 2, "patches": ["PATCH-04", "PATCH-05", "PATCH-06", "PATCH-07", "PATCH-08"]},

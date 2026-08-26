@@ -55,6 +55,18 @@ def validate(ledger: Path = LEDGER) -> list[str]:
         known.add(patch_id)
     if not str(data.get("enforced_after_commit") or "").strip():
         errors.append("enforced_after_commit is required")
+    exceptions = data.get("legacy_subject_exceptions") or []
+    seen_exception_commits: set[str] = set()
+    for item in exceptions:
+        commit = str(item.get("commit") or "")
+        subject = str(item.get("subject") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", commit):
+            errors.append(f"invalid legacy exception commit: {commit!r}")
+        if not subject.strip():
+            errors.append(f"legacy exception {commit!r} requires the exact subject")
+        if commit in seen_exception_commits:
+            errors.append(f"duplicate legacy exception commit: {commit}")
+        seen_exception_commits.add(commit)
     return errors
 
 

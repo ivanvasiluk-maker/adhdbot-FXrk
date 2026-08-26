@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping
 
 ANALYTICS_POLICY_VERSION = "behavioral-kpi-v1"
@@ -18,6 +19,7 @@ EVENT_NAMES = frozenset({
     "primary_hypothesis_day3", "hypothesis_changed",
 })
 OUTCOME_LABELS = frozenset({"", "yes", "partial", "no", "better", "same", "worse", "unknown"})
+TAXONOMY_ID = re.compile(r"^[A-Za-z0-9_.:-]{0,80}$")
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class BehavioralAnalyticsEvent:
             raise ValueError("Only bounded outcome taxonomy is allowed")
         for name in ("skill_id", "mechanism_code", "context_domain"):
             value = getattr(self, name)
-            if len(value) > 80 or any(char in value for char in "\n\r"):
+            if not TAXONOMY_ID.fullmatch(value):
                 raise ValueError(f"{name} must be a short taxonomy id")
         if not self.policy_version or not self.ranking_version or self.skill_version < 1:
             raise ValueError("Policy, ranking, and skill versions are required")

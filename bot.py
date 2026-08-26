@@ -21,6 +21,7 @@ import logging
 import threading
 import uuid
 import datetime as dt
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, Optional, List
 
@@ -139,6 +140,10 @@ from core.product_config import (
     ENABLE_DAY1_WOW, ENABLE_HUMAN_OFFER, ENABLE_GROUP_OFFER, ENABLE_PAID_PLAN,
     SKILL_LIBRARY_PATH, SKILL_REGISTRY_ENABLED, assert_production_payment_safety, format_eur,
 )
+from core.offer_config import (
+    GROUP_SESSION_COUNT, GROUP_SESSION_EUR_MAX, GROUP_SESSION_EUR_MIN,
+    HUMAN_SKILL_SESSION_EUR, SKILLER_ACTION_ROUTER_ENABLED, format_eur_compact,
+)
 from core.value_proof_offer import (
     PersonalValueReport, ValueProof, evaluate_value_proof, render_base_unlock_offer,
     render_no_value_review, render_personal_value_report,
@@ -146,6 +151,13 @@ from core.value_proof_offer import (
 from core.behavioral_analytics import BehavioralAnalyticsEvent
 
 BASE_OFFER_EUR_LABEL = format_eur()
+HUMAN_SKILL_SESSION_EUR_LABEL = format_eur_compact(HUMAN_SKILL_SESSION_EUR)
+GROUP_SESSION_EUR_MIN_LABEL = format_eur_compact(GROUP_SESSION_EUR_MIN)
+GROUP_SESSION_EUR_MAX_LABEL = format_eur_compact(GROUP_SESSION_EUR_MAX)
+GROUP_PROGRAM_TOTAL_MIN_EUR = GROUP_SESSION_EUR_MIN * GROUP_SESSION_COUNT
+GROUP_PROGRAM_TOTAL_MAX_EUR = GROUP_SESSION_EUR_MAX * GROUP_SESSION_COUNT
+GROUP_PROGRAM_MONTH_MIN_EUR = GROUP_PROGRAM_TOTAL_MIN_EUR / 3
+GROUP_PROGRAM_MONTH_MAX_EUR = GROUP_PROGRAM_TOTAL_MAX_EUR / 3
 ACTIVE_FILE_SKILL_REGISTRY = None
 
 # ============================================================
@@ -166,7 +178,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
 OPENAI_WHISPER_MODEL = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1").strip()
 DB_PATH = os.getenv("DB_PATH", "bot.db").strip()
-PAYMENT_URL = os.getenv("PAYMENT_URL", "https://your-payment-link").strip()
+PAYMENT_URL = os.getenv("PAYMENT_URL", "").strip()
 PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
@@ -197,7 +209,7 @@ TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
 STARTUP_CHECK = env_bool("BOT_STARTUP_CHECK")
 MAX_CRISIS_MATCHES_PER_DAY = 3
 CRISIS_WAITING_INPUT = "crisis_waiting_input"
-SAFETY_MODES = {"none", "inactive", "triage", "active", "support"}
+SAFETY_MODES = {"none", "inactive", "triage", "active", "urgent", "bad_but_safe", "support"}
 SAFETY_RISK_VALUES = {"unknown", "no", "yes", "uncertain"}
 SAFETY_CONTACT_VALUES = {"not_asked", "offered", "sent_message", "called", "unavailable", "aftercare"}
 DEFAULT_EMERGENCY_NUMBER_BY_COUNTRY = {}
@@ -810,7 +822,12 @@ def scheduled_offer_due(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = N
     profile = profile or {}
     now = now or dt.datetime.now(dt.timezone.utc)
     safety_active = int(u.get("crisis_mode") or 0) == 1 or str(u.get("stage") or "").startswith("safety")
-    if int(u.get("full_mode") or 0) == 1 or safety_active or has_unfinished_exercise_for_offer(u):
+    if (
+        int(u.get("full_mode") or 0) == 1
+        or int(u.get("free_mode") or 0) == 1
+        or safety_active
+        or has_unfinished_exercise_for_offer(u)
+    ):
         return False
     for raw in (profile.get("offer_suppressed_until"), u.get("offer_suppressed_until")):
         until = _parse_aware_datetime(raw)
@@ -833,6 +850,8 @@ def has_unfinished_exercise_for_offer(u: Dict[str, Any]) -> bool:
 
 def can_show_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> bool:
     profile = profile or {}
+    if int(u.get("free_mode") or 0) == 1:
+        return False
     current_day = int(u.get("day") or u.get("current_day") or 1)
     working_model = profile.get("personal_working_model") if isinstance(profile.get("personal_working_model"), dict) else {}
     day1_completion_signal = bool(
@@ -1159,6 +1178,13 @@ def safety_mode(u: Dict[str, Any]) -> str:
     return mode if mode in SAFETY_MODES else "none"
 
 
+LEGACY_CRISIS_REDIRECT_BUTTONS = {
+    "📞 Позвоню 112",
+    "👤 Напишу близкому",
+    "🧭 Вернуться, когда безопасно",
+}
+
+
 def emergency_number_for_user(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> str:
     return ""
 
@@ -1236,6 +1262,8 @@ async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, sou
     """Open the new 3-button safety check per spec section 8.2."""
     details = safety_signal_details(text, explicit=explicit)
     await log_event(u["user_id"], "safety", "safety_interceptor_opened", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
+    # Preserve the legacy marker for migrated records, reports, and old release checks.
+    u["crisis_redirected"] = 1
     u["safety_mode"] = "triage"
     set_legacy_stage(u, "safety_mode")
     set_current_state(u, STATE_SAFETY_LOCK, close_action=True)
@@ -1303,6 +1331,7 @@ def active_safety_allowed_buttons() -> set[str]:
         "Коллега",
         "Сосед",
         "Родственник",
+        *LEGACY_CRISIS_REDIRECT_BUTTONS,
     }
 
 
@@ -1325,6 +1354,8 @@ async def handle_safety_callback(c: CallbackQuery, u: Dict[str, Any], data: str)
         await repeat_active_safety_screen(c.message, u)
     elif mode == "urgent":
         await show_safety_urgent(c.message, u, "blocked_callback")
+    elif mode == "bad_but_safe":
+        await c.message.answer(SAFETY_BAD_BUT_SAFE_TEXT, reply_markup=kb_safety_bad_but_safe)
     elif mode == "support":
         await c.message.answer("Сейчас ещё режим поддержки, не продуктивности.", reply_markup=kb_safety_aftercare)
     else:
@@ -1345,27 +1376,30 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
     """
     mode = safety_mode(u)
 
-    # Clean up legacy lingering safety state that predates the new flow
-    if mode == "inactive":
-        u["safety_mode"] = "none"
+    # A pre-migration record can have the safety stage without the structured
+    # mode. Recover it into triage instead of silently reopening productivity.
+    if mode == "none" and u.get("stage") == "safety_mode":
+        u["safety_mode"] = "triage"
         await save_user(u, DB_PATH)
-        return False
+        mode = "triage"
     if mode == "none" and u.get("stage") != "safety_mode":
         return False
 
     low = (text or "").lower().strip()
 
     # ---- New spec §8 triage: 3-button safety check ----
-    if mode == "triage" or u.get("stage") == "safety_mode":
+    if mode == "triage":
         # New buttons per spec §8.2
         if text == "🆘 Да, могу быть в опасности":
             u["safety_last_risk"] = "yes"
+            u["safety_mode"] = "active"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "safety", "safety_high_risk_confirmed", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
             return True
         if text == "😟 Не уверен(а)":
             u["safety_last_risk"] = "uncertain"
+            u["safety_mode"] = "active"
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "safety", "safety_uncertain", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
@@ -1379,9 +1413,15 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             return True
         # Legacy triage buttons (old keyboard still in DB for some users)
         if text == "🟥 Да":
+            u["safety_last_risk"] = "yes"
+            u["safety_mode"] = "active"
+            await save_user(u, DB_PATH)
             await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
             return True
         if text == "🟨 Не уверен(а)":
+            u["safety_last_risk"] = "uncertain"
+            u["safety_mode"] = "active"
+            await save_user(u, DB_PATH)
             await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
             return True
         if text == "🟩 Нет":
@@ -1403,11 +1443,16 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             "🌙 Закрыть день без разбора",
         }
         if text in stabilisation_texts:
-            u["safety_mode"] = "none"
-            set_legacy_stage(u, "training")
+            if text == "🌙 Закрыть день без разбора":
+                await log_event(u["user_id"], "safety", "safety_stabilisation_chosen", {"choice": text}, DB_PATH, SHEETS_WEBHOOK_URL)
+                await complete_safety_day(m, u)
+                return True
+            u["safety_mode"] = "support"
+            u["safety_contact_status"] = "aftercare"
+            set_legacy_stage(u, "safety_mode")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "safety", "safety_stabilisation_chosen", {"choice": text}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(SAFETY_BAD_AFTER_STEP_TEXT)
+            await m.answer(SAFETY_BAD_AFTER_STEP_TEXT, reply_markup=kb_safety_aftercare)
             return True
         await m.answer(SAFETY_BAD_BUT_SAFE_TEXT, reply_markup=kb_safety_bad_but_safe)
         return True
@@ -1431,10 +1476,10 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             )
             return True
         if text == "✅ Я в безопасности сейчас" or text == "↩️ Стало безопаснее":
-            u["safety_mode"] = "none"
+            u["safety_mode"] = "support"
             u["safety_last_risk"] = "no"
             u["safety_contact_status"] = "aftercare"
-            set_legacy_stage(u, "training")
+            set_legacy_stage(u, "safety_mode")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "safety", "safety_resolved", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(SAFETY_CONFIRMED_TEXT, reply_markup=kb_safety_aftercare)
@@ -1460,10 +1505,11 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             await save_user(u, DB_PATH)
             await m.answer("Хорошо. Возвращаемся без давления.", reply_markup=kb_training_main)
             return True
-        u["safety_mode"] = "none"
-        set_legacy_stage(u, "training")
-        await save_user(u, DB_PATH)
-        return False
+        if text == "💬 Остаться в поддержке":
+            await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+            return True
+        await m.answer(SAFETY_AFTERCARE_TEXT, reply_markup=kb_safety_aftercare)
+        return True
 
     return False
 
@@ -2330,7 +2376,6 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
             comp = {}
         msg = format_comprehensive_analysis(comp if isinstance(comp, dict) else {}, trainer_key=trainer_key)
         await answer_with_keyboard(m, u, msg + "\n\nЭто похоже на тебя?", kb_analysis_confirm, "analysis")
-        await maybe_show_analysis_action_transition(m, u, "trainer_switch_return")
         return
     if return_stage == "analysis_details":
         try:
@@ -2338,7 +2383,6 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
         except Exception:
             comp = {}
         await answer_with_keyboard(m, u, render_analysis_details_by_trainer(comp if isinstance(comp, dict) else {}, trainer_key), kb_analysis_confirm, "analysis_details")
-        await maybe_show_analysis_action_transition(m, u, "trainer_switch_return")
         return
     if return_stage == "working_map":
         try:
@@ -5537,7 +5581,6 @@ async def handle_analysis_clarification_answer(m: Message, u: Dict[str, Any], te
         u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, _analysis_clarify_summary(kind, answers), kb_analysis_after_clarify, "analysis_clarify_done")
-    await maybe_show_analysis_action_transition(m, u, "analysis_clarify_done")
     return True
 
 
@@ -5845,7 +5888,6 @@ async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text
         msg += f"\n\nНовый навык на сейчас: {SKILLS_DB[new_sid]['name']}"
     markup = kb_analysis_confirm if u["stage"] == "confirm_analysis" else kb_training_main
     await answer_with_keyboard(m, u, msg, markup, "analysis_rebuilt")
-    await maybe_show_analysis_action_transition(m, u, "analysis_rebuilt")
 
 
 def apply_skill_rebuild(u: Dict[str, Any], new_sid: str):
@@ -6626,8 +6668,8 @@ def short_offer_text() -> str:
         "Хочешь продолжить?\n\n"
         "🟢 Бесплатный короткий режим остаётся доступным.\n"
         f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.\n"
-        "👥 Группа навыков — от €20–24 за занятие.\n"
-        "👤 Потренировать навык с человеком — от €39.\n\n"
+        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие.\n"
+        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}.\n\n"
         "Подробности покажу только после выбора варианта."
     )
 
@@ -6870,8 +6912,9 @@ def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
     """Value-proof gate: day three or the first confirmed working skill."""
     if int(u.get("full_mode") or 0) == 1:
         return False
-    has_payment_url = bool(PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)
-    if not (ENABLE_PAYMENTS or has_payment_url):
+    has_payment_url = bool(configured_payment_url())
+    has_offer_path = ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER or (ENABLE_PAYMENTS and ENABLE_PAID_PLAN and has_payment_url)
+    if not has_offer_path:
         return False
     state = dict(u)
     state["day"] = int(day or state.get("day") or 1)
@@ -6895,26 +6938,50 @@ def qa_command_allowed(user_id: int, u: Dict[str, Any]) -> bool:
         or int(u.get("fast_forward_enabled") or 0) == 1
     )
 
+def is_ready_payment_url(value: str) -> bool:
+    """Accept only an explicit HTTPS payment URL; reject examples/placeholders."""
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return False
+    if host.endswith(".example") or host in {"example.com", "localhost"}:
+        return False
+    lowered = raw.lower()
+    return not any(marker in lowered for marker in ("your-payment-link", "placeholder", "replace-me"))
+
+
+def _first_ready_payment_url(*values: str) -> str:
+    return next((str(value).strip() for value in values if is_ready_payment_url(value)), "")
+
+
 def payment_month_url() -> str:
-    if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
+    if PAYMENT_ACCEPT_ANY and is_ready_payment_url(PAYMENT_TEST_URL):
         return PAYMENT_TEST_URL
-    return PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL or "https://your-payment-link"
+    return _first_ready_payment_url(PAYMENT_MONTH_URL, PAYMENT_URL_MONTH_1498, PAYMENT_URL_FULL, PAYMENT_URL)
 
 
 def configured_payment_url() -> str:
-    if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
+    if PAYMENT_ACCEPT_ANY and is_ready_payment_url(PAYMENT_TEST_URL):
         return PAYMENT_TEST_URL
-    return PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL or ""
+    return _first_ready_payment_url(PAYMENT_MONTH_URL, PAYMENT_URL_MONTH_1498, PAYMENT_URL_FULL, PAYMENT_URL)
 
 
 def payment_bot_999_url() -> str:
-    if PAYMENT_ACCEPT_ANY and PAYMENT_TEST_URL:
+    if PAYMENT_ACCEPT_ANY and is_ready_payment_url(PAYMENT_TEST_URL):
         return PAYMENT_TEST_URL
-    return PAYMENT_BOT_999_URL or configured_payment_url()
+    return _first_ready_payment_url(PAYMENT_BOT_999_URL, configured_payment_url())
 
 
 def payment_not_ready_text() -> str:
     return "Оплата скоро будет подключена. Сейчас можно продолжить тест или написать Ивану напрямую."
+
+
+def paid_plan_available() -> bool:
+    """Paid subscription is visible only when a real provider URL is ready."""
+    return bool(ENABLE_PAYMENTS and ENABLE_PAID_PLAN and configured_payment_url())
 
 
 def schedule_not_ready_text() -> str:
@@ -7174,12 +7241,18 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
-    if ENABLE_PAID_PLAN:
+    if paid_plan_available():
         keyboard.append([InlineKeyboardButton(text=f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
     if ENABLE_GROUP_OFFER:
-        keyboard.append([InlineKeyboardButton(text="👥 Группа навыков — от €20–24/занятие", callback_data=OFFER_CALLBACKS["group"])])
+        keyboard.append([InlineKeyboardButton(
+            text=f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL}/занятие",
+            callback_data=OFFER_CALLBACKS["group"],
+        )])
     if ENABLE_HUMAN_OFFER:
-        keyboard.append([InlineKeyboardButton(text="👤 Потренировать навык с человеком — от €39", callback_data=OFFER_CALLBACKS["live"])])
+        keyboard.append([InlineKeyboardButton(
+            text=f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
+            callback_data=OFFER_CALLBACKS["live"],
+        )])
     if PAYMENT_ACCEPT_ANY:
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
@@ -7188,13 +7261,15 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
-        [InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])],
+    rows = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
+    if paid_plan_available():
+        rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
+    rows.extend([
         [InlineKeyboardButton(text="👥 Группа навыков", callback_data=OFFER_CALLBACKS["group"])],
         [InlineKeyboardButton(text="👤 С человеком", callback_data=OFFER_CALLBACKS["live"])],
         [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = None) -> InlineKeyboardMarkup:
@@ -7284,20 +7359,20 @@ def tariff_bot_text() -> str:
 
 def tariff_live_text() -> str:
     return (
-        "👤 Потренировать навык с человеком — от €39\n\n"
+        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n\n"
         "Если хочется не разбираться одному, можно взять одну встречу с человеком.\n\n"
         "За 45–60 минут:\n"
         "— разберём конкретный стопор;\n"
         "— найдём, где ломается цепочка;\n"
         "— выберем 1–2 навыка;\n"
         "— потренируем их прямо на вашей ситуации.\n\n"
-        "От €39 за встречу. Если окажется, что вопрос глубже и нужна терапия — обсудим отдельно.\n"
+        f"От €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу. Если окажется, что вопрос глубже и нужна терапия — обсудим отдельно.\n"
     )
 
 
 def tariff_group_text() -> str:
     return (
-        "👥 Группа навыков — от €20–24 за занятие\n\n"
+        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие\n\n"
         "Полная программа рассчитана на 12 недель.\n"
         "Ведущий — Иван Василюк. Программа основана на КПТ и ДБТ.\n\n"
         "Что получает участник:\n"
@@ -7305,7 +7380,8 @@ def tariff_group_text() -> str:
         "— домашние поведенческие эксперименты;\n"
         "— поддержку группы;\n"
         "— использование SKILLER между встречами.\n\n"
-        "Полная программа: €360 — по €120 в месяц.\n"
+        f"Полная программа: €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_TOTAL_MAX_EUR)} "
+        f"(€{format_eur_compact(GROUP_PROGRAM_MONTH_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_MONTH_MAX_EUR)} в месяц).\n"
         "Перед участием — короткое собеседование."
     )
 
@@ -7354,10 +7430,11 @@ def tariff_specialist_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔁 Продолжить короткий режим", callback_data="continue_free")],
-        [InlineKeyboardButton(text="💳 Всё же подключить полный режим", url=payment_month_url())],
-    ])
+    rows = [[InlineKeyboardButton(text="🔁 Продолжить короткий режим", callback_data="continue_free")]]
+    pay_url = payment_month_url()
+    if pay_url:
+        rows.append([InlineKeyboardButton(text="💳 Всё же подключить полный режим", url=pay_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def offer_details_full_mode_text() -> str:
@@ -7366,9 +7443,9 @@ def offer_details_full_mode_text() -> str:
         "🟢 Бесплатно — базовая версия для самостоятельного движения.\n\n"
         f"🔵 Подписка — €{BASE_OFFER_EUR_LABEL} / месяц\n"
         "Карта навыков, Learning Engine, неограниченные эксперименты, напоминания и журнал.\n\n"
-        "👥 Группа навыков — от €20–24 за занятие\n"
+        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие\n"
         "Еженедельные занятия, эксперименты, поддержка и SKILLER между встречами.\n\n"
-        "👤 Потренировать навык с человеком — от €39\n"
+        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n"
         "Одна встреча 45–60 минут: конкретный стопор и практика 1–2 навыков."
     )
 
@@ -11017,10 +11094,22 @@ async def main_flow(m: Message):
         low = text.lower()
         await log_event(u.get("user_id"), u.get("stage", ""), "global_voice_transcribed", {"len": len(text)}, DB_PATH, SHEETS_WEBHOOK_URL)
 
+    # Safety owns the message before any diagnostic, router, offer, or legacy
+    # branch. This prevents a high-risk phrase or stale crisis button from
+    # being consumed as ordinary product input.
+    if safety_mode(u) != "none" or u.get("stage") == "safety_mode":
+        if await handle_safety_mode(m, u, text):
+            return
+    if await handle_legacy_crisis_redirect_button(m, u, text):
+        return
+    if text and (has_red_crisis_phrase(text) or has_crisis_safety_signal(text, u.get("stage") or "")):
+        await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
+        return
+
     # A callback may put the action router into a dedicated text/voice state.
     # Consume that input here before every legacy intake or story-analysis path.
     skiller_session = _skiller_session(u)
-    if skiller_session.get("state") in {
+    if SKILLER_ACTION_ROUTER_ENABLED and skiller_session.get("state") in {
         SkillerDialogState.DAY1_CLARIFY.value,
         SkillerDialogState.CORRECTION_INPUT.value,
         SkillerDialogState.NEW_CASE_INTAKE.value,
@@ -11062,10 +11151,6 @@ async def main_flow(m: Message):
         mark_user_activity(u, active=not day_closed_today(u))
         await save_user(u, DB_PATH)
 
-    if text and has_red_crisis_phrase(text):
-        await crisis_redirect(m, u)
-        return
-
     if u.get("stage") == "existing_user_start_menu":
         if text in {"Продолжить сегодняшний день", "Проверим снова"}:
             await log_event(uid, "start_menu_continue_today", {"analytics_event": False}, db_path=DB_PATH)
@@ -11101,15 +11186,6 @@ async def main_flow(m: Message):
     mechanism = detect_user_mechanism(text)
     if mechanism:
         await remember_user_mechanism(u, mechanism)
-
-    # Global safety gate: every text/voice transcript is checked before any normal flow.
-    if text and has_crisis_safety_signal(text, u.get("stage") or ""):
-        await start_safety_interceptor(m, u, text, "global_text", explicit=False)
-        return
-
-    # If a safety block is already active, swallow all normal/productivity routing.
-    if await handle_safety_mode(m, u, text):
-        return
 
     procrastination_intent = procrastination_crisis_intent(text, u)
     if procrastination_intent == "crisis":
@@ -11336,7 +11412,6 @@ async def main_flow(m: Message):
             kb_analysis_detail_next,
             "analysis_details",
         )
-        await maybe_show_analysis_action_transition(m, u, "analysis_details")
         return
 
     early_global_kind = global_button_kind(text, low) if is_known_reply_button(text) else ""
@@ -13998,11 +14073,30 @@ async def remember_user_mechanism(u: Dict[str, Any], mechanism: str) -> None:
 
 
 async def crisis_redirect(m: Message, u: Dict[str, Any]) -> None:
+    """Compatibility entry point: every high-risk phrase uses the canonical safety lock."""
     u["crisis_redirected"] = 1
-    sync_active_attempt(u, bump=True, is_closed=True)
-    await save_user(u, DB_PATH)
-    await log_event(u.get("user_id"), u.get("stage", ""), "crisis_redirected", {"crisis_redirected": True}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await m.answer(CRISIS_REDIRECT_TEXT, reply_markup=kb_crisis_redirect)
+    await start_safety_interceptor(m, u, str(getattr(m, "text", "") or ""), "legacy_red_phrase", explicit=True)
+
+
+async def handle_legacy_crisis_redirect_button(m: Message, u: Dict[str, Any], text: str) -> bool:
+    """Consume buttons left on screen by older bot versions without reopening productivity."""
+    if text not in LEGACY_CRISIS_REDIRECT_BUTTONS:
+        return False
+    await start_safety_interceptor(m, u, text, "legacy_crisis_button", explicit=True)
+    if text == "📞 Позвоню 112":
+        u["safety_mode"] = "active"
+        u["safety_last_risk"] = "yes"
+        await save_user(u, DB_PATH)
+        await m.answer(SAFETY_NOT_SAFE_TEXT, reply_markup=kb_safety_not_safe_steps)
+    elif text == "👤 Напишу близкому":
+        u["safety_mode"] = "active"
+        u["safety_last_risk"] = "uncertain"
+        u["safety_contact_status"] = "sent_message"
+        await save_user(u, DB_PATH)
+        await m.answer(SAFETY_MESSAGE_FOLLOWUP_TEXT, reply_markup=kb_safety_message_followup)
+    else:
+        await m.answer(SAFETY_NEW_CHECK_TEXT, reply_markup=kb_safety_new_check)
+    return True
 
 
 def default_active_attempt(u: Dict[str, Any]) -> Dict[str, Any]:
@@ -14309,6 +14403,10 @@ async def on_skiller_action_callback(c: CallbackQuery) -> None:
     """Action-first adapter: callback captions can never reach ``main_flow``."""
     u = await get_user(c.from_user.id, DB_PATH)
     prepare_calendar_routing(u)
+    if not SKILLER_ACTION_ROUTER_ENABLED:
+        await c.message.answer("Этот тестовый экран уже не активен. Показываю актуальный маршрут — нажми /start.")
+        await c.answer()
+        return
     session = _skiller_session(u)
     result = route_skiller_callback(
         session, c.data or "", callback_id=str(getattr(c, "id", "") or ""),
@@ -14433,19 +14531,28 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {OFFER_CALLBACKS["bot"], "offer_bot"}:
+        if not paid_plan_available():
+            await c.message.answer(payment_not_ready_text())
+            await c.answer()
+            return
         await log_event(uid, "offer", "tariff_details_opened", {"format": "subscription_founding", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, tariff_bot_text(), tariff_bot_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
     if data == OFFER_CALLBACKS["group"]:
-        await log_event(uid, "offer", "tariff_details_opened", {"format": "cbt_group", "amount": 360, "installment": 120}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "tariff_details_opened", {
+            "format": "cbt_group", "unit": "session", "sessions": GROUP_SESSION_COUNT,
+            "amount_from": float(GROUP_SESSION_EUR_MIN), "amount_to": float(GROUP_SESSION_EUR_MAX),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, tariff_group_text(), tariff_group_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["live"], "offer_live"}:
-        await log_event(uid, "offer", "tariff_details_opened", {"format": "live_review", "amount": 59}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "tariff_details_opened", {
+            "format": "live_review", "unit": "session", "amount_from": float(HUMAN_SKILL_SESSION_EUR),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, tariff_live_text(), tariff_live_inline_keyboard(uid), "offer")
         await c.answer()
         return
@@ -14493,8 +14600,8 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {"pay:bot_999", "pay:live_59", "pay:guided_149"}:
         pay_url = payment_bot_999_url() if data == "pay:bot_999" else configured_payment_url()
-        amount_label = {"pay:bot_999": f"€{BASE_OFFER_EUR_LABEL}", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
-        if pay_url:
+        amount_label = {"pay:bot_999": f"€{BASE_OFFER_EUR_LABEL}", "pay:live_59": f"€{HUMAN_SKILL_SESSION_EUR_LABEL}", "pay:guided_149": "€149"}.get(data, "тариф")
+        if pay_url and ENABLE_PAYMENTS:
             u["payment_status"] = "pending_bot_999" if data == "pay:bot_999" else "pending_payment"
             u["last_payment_click"] = data
             await save_user(u, DB_PATH)
