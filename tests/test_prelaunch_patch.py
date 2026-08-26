@@ -78,9 +78,19 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
         self.assertIn("🟢 Продолжить бесплатно", labels)
-        self.assertTrue(any("€4.99/мес" in label for label in labels))
+        self.assertFalse(any("€4.99/мес" in label for label in labels))
         self.assertTrue(any("€20–24" in label for label in labels))
         self.assertTrue(any("от €39" in label for label in labels))
+
+        with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
+            bot, "ENABLE_PAID_PLAN", True,
+        ), patch.object(bot, "PAYMENT_URL", "https://pay.stripe.com/skiller-full"):
+            enabled_labels = [
+                button.text
+                for row in bot.offer_inline_keyboard(1).inline_keyboard
+                for button in row
+            ]
+        self.assertTrue(any("€4.99/мес" in label for label in enabled_labels))
 
     def test_day1_completion_can_unlock_offer_after_value_report(self):
         user = bot.default_user(1)
