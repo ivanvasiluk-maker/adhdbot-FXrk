@@ -2,9 +2,10 @@
 # Privacy policy for Google Sheets analytics:
 # DO NOT send full problem text, voice transcripts, crisis messages, personal stories, or medical details.
 # Sheets is for behavior analytics only, not for storing confessions.
-# Allowed identity fields: telegram_user_id, telegram_username, telegram_name.
+# Telegram identity and free text never leave SQLite through this module.
 import os
 import json
+import re
 import aiohttp
 import asyncio
 import logging
@@ -16,10 +17,10 @@ from typing import Any, Dict, List, Tuple
 import aiosqlite
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 SHEETS_WEBHOOK_URL = os.getenv("SHEETS_WEBHOOK_URL", "")
-SHEETS_SYNC_ENABLED = os.getenv("SHEETS_SYNC_ENABLED", "true").lower() == "true"
+SHEETS_SYNC_ENABLED = os.getenv("SHEETS_SYNC_ENABLED", "false").lower() == "true"
 SHEETS_SYNC_INTERVAL_SECONDS = int(os.getenv("SHEETS_SYNC_INTERVAL_SECONDS", "60"))
 SHEETS_SYNC_BATCH_SIZE = int(os.getenv("SHEETS_SYNC_BATCH_SIZE", "50"))
 ANALYTICS_ID_SALT = os.getenv("ANALYTICS_ID_SALT", "")
@@ -37,6 +38,11 @@ SENSITIVE_KEYS = {
     "medical_details",
     "history",
     "full_text",
+    "telegram_user_id",
+    "telegram_username",
+    "telegram_name",
+    "name",
+    "username",
 }
 ALLOWED_KEYS = {
     "problem_category",
@@ -59,9 +65,6 @@ ALLOWED_KEYS = {
     "trainer_modes_view_count",
     "payment_status",
     "bucket",
-    "telegram_user_id",
-    "telegram_username",
-    "telegram_name",
     "source",
     "keyboard",
     "button_count",
@@ -151,6 +154,16 @@ ALLOWED_KEYS = {
 
 log = logging.getLogger("sheets_sync")
 
+SAFE_TAXONOMY_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+
+
+def anonymous_analytics_id(user_id: Any, *, secret_salt: str = ANALYTICS_ID_SALT) -> str:
+    if not secret_salt or user_id in {None, ""}:
+        return ""
+    return hmac.new(
+        secret_salt.encode(), str(user_id).encode(), hashlib.sha256,
+    ).hexdigest()[:20]
+
 
 def sanitize_event_data(data: Any) -> Dict[str, Any]:
     if not data:
@@ -173,8 +186,8 @@ def sanitize_event_data(data: Any) -> Dict[str, Any]:
                 clean[key] = v
             else:
                 clean[key] = "[masked]"
-        elif isinstance(v, str) and len(v) > 200:
-            clean[key] = v[:200] + "..."
+        elif isinstance(v, str):
+            clean[key] = v if SAFE_TAXONOMY_VALUE.fullmatch(v) else "[masked]"
         elif isinstance(v, (dict, list)):
             clean[key] = "[structured]"
         else:
@@ -188,9 +201,9 @@ def event_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
     return [
         event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
         event.get("event_name") or event.get("event"),
-        event.get("user_id"),
-        user.get("username") or data.get("telegram_username") or "",
-        user.get("name") or data.get("telegram_name") or "",
+        anonymous_analytics_id(event.get("user_id")),
+        "",
+        "",
         data.get("stage") or event.get("stage") or "",
         data.get("day") or user.get("day") or "",
         data.get("trainer_key") or user.get("trainer_key") or "",
@@ -218,9 +231,9 @@ def error_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
     return [
         event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
         event.get("event_name") or event.get("event"),
-        event.get("user_id"),
-        user.get("username") or data.get("telegram_username") or "",
-        user.get("name") or data.get("telegram_name") or "",
+        anonymous_analytics_id(event.get("user_id")),
+        "",
+        "",
         data.get("stage") or event.get("stage") or "",
         data.get("error_type") or "",
         data.get("error_source") or data.get("source") or "",
@@ -267,43 +280,13 @@ def _iso_from_timestamp(value: Any) -> str:
 
 
 def user_to_sheet_row(user: Dict[str, Any]) -> List[Any]:
-    """Format a safe user snapshot for the optional `users` sheet."""
-    analysis = _parse_json(user.get("analysis_json"))
-    profile = _parse_json(user.get("profile_json"))
+    """Deprecated minimal snapshot: no identity, stories, conclusions, or profile strings."""
     return [
         _iso_from_timestamp(user.get("created_at")),
         _iso_from_timestamp(user.get("last_active")),
-        user.get("user_id"),
-        user.get("username") or "",
-        user.get("name") or "",
-        user.get("trainer_key") or "",
-        user.get("language") or "ru",
-        user.get("bucket") or "",
-        analysis.get("pattern") or "",
-        user.get("payment_status") or "",
-        user.get("day") or "",
+        anonymous_analytics_id(user.get("user_id")),
+        user.get("day") or 0,
         user.get("is_test_user") or 0,
-        profile.get("main_pattern") or "",
-        profile.get("avoidance_trigger") or profile.get("avoidance_reason") or "",
-        profile.get("preferred_activation") or "",
-        profile.get("best_skill") or "",
-        profile.get("worst_skill") or profile.get("failed_skill") or "",
-        profile.get("preferred_activation") or "",
-        profile.get("slip_pattern") or profile.get("return_pattern") or "",
-        profile.get("attention_pattern") or "",
-        profile.get("side_skill_interest") or "",
-        profile.get("system_day_signals") or "",
-        profile.get("last_system_day_id") or "",
-        profile.get("most_common_crisis_pattern") or profile.get("last_crisis_pattern") or "",
-        profile.get("most_effective_crisis_skill") or profile.get("last_crisis_skill") or "",
-        profile.get("crisis_success_rate") or "",
-        profile.get("action_done_count") or profile.get("done_count") or "",
-        profile.get("downscale_count") or "",
-        profile.get("return_count") or "",
-        profile.get("failed_skill") or "",
-        profile.get("return_pattern") or "",
-        profile.get("downscale_pattern") or "",
-        profile.get("energy_pattern") or "",
     ]
 
 
@@ -321,8 +304,8 @@ def payment_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = No
         amount = data.get("amount") or ""
     return [
         event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
-        event.get("user_id"),
-        user.get("username") or data.get("telegram_username") or "",
+        anonymous_analytics_id(event.get("user_id")),
+        "",
         name,
         offer_type,
         amount,
@@ -389,9 +372,7 @@ def behavioral_analytics_to_sheet_row(event: Dict[str, Any], *, secret_salt: str
     """Serialize only pseudonymous ids, bounded taxonomy, counts, timestamps, and versions."""
     if not secret_salt:
         raise ValueError("ANALYTICS_ID_SALT is required for behavioral analytics export")
-    anonymous_user = hmac.new(
-        secret_salt.encode(), str(event.get("user_id") or "").encode(), hashlib.sha256,
-    ).hexdigest()[:20]
+    anonymous_user = anonymous_analytics_id(event.get("user_id"), secret_salt=secret_salt)
     return [
         event.get("created_at") or "", event.get("event_name") or "", anonymous_user,
         event.get("situation_id") or "", event.get("experiment_id") or "",
@@ -400,6 +381,40 @@ def behavioral_analytics_to_sheet_row(event: Dict[str, Any], *, secret_salt: str
         int(event.get("count_value") or 0), event.get("policy_version") or "",
         event.get("ranking_version") or "", int(event.get("skill_version") or 0),
     ]
+
+
+async def sync_behavioral_analytics_events(db_path: str, limit: int) -> Dict[str, Any]:
+    """Export only the normalized PATCH-16 table; legacy events stay local."""
+    if not ANALYTICS_ID_SALT:
+        return {"synced": 0, "failed": 0, "error": "", "warning": "ANALYTICS_ID_SALT is empty"}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM behavioral_analytics_events WHERE synced=0 ORDER BY id LIMIT ?",
+            (limit,),
+        )).fetchall()
+        if not rows:
+            return {"synced": 0, "failed": 0, "error": ""}
+        events = [dict(row) for row in rows]
+        ok, message = await post_rows(
+            [behavioral_analytics_to_sheet_row(event, secret_salt=ANALYTICS_ID_SALT) for event in events],
+            sheet="behavioral_kpi",
+        )
+        event_ids = [int(event["id"]) for event in events]
+        placeholders = ",".join("?" for _ in event_ids)
+        if ok:
+            await db.execute(
+                f"UPDATE behavioral_analytics_events SET synced=1,last_sync_error=NULL WHERE id IN ({placeholders})",
+                event_ids,
+            )
+            await db.commit()
+            return {"synced": len(event_ids), "failed": 0, "error": ""}
+        await db.execute(
+            f"UPDATE behavioral_analytics_events SET sync_attempts=sync_attempts+1,last_sync_error=? WHERE id IN ({placeholders})",
+            [message[:500], *event_ids],
+        )
+        await db.commit()
+        return {"synced": 0, "failed": len(event_ids), "error": message[:500]}
 
 
 async def _fetch_unsynced_events(db: aiosqlite.Connection, limit: int) -> List[Dict[str, Any]]:
@@ -464,6 +479,13 @@ async def _mark_events_failed(db: aiosqlite.Connection, event_ids: List[int], er
 
 
 async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
+    # The old multi-tab exporter mixed identity/profile snapshots with events.
+    # Keep it unreachable: production sync is normalized behavioral analytics only.
+    return await sync_behavioral_analytics_events(db_path, limit)
+
+
+async def _sync_legacy_events_disabled(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
+    """Retained only as migration reference; never called by the scheduler."""
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         events = await _fetch_unsynced_events(db, limit)

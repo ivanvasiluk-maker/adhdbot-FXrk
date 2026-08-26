@@ -140,6 +140,10 @@ from core.product_config import (
     ENABLE_DAY1_WOW, ENABLE_HUMAN_OFFER, ENABLE_GROUP_OFFER, ENABLE_PAID_PLAN,
     SKILL_LIBRARY_PATH, SKILL_REGISTRY_ENABLED, assert_production_payment_safety, format_eur,
 )
+from core.offer_config import (
+    GROUP_SESSION_COUNT, GROUP_SESSION_EUR_MAX, GROUP_SESSION_EUR_MIN,
+    HUMAN_SKILL_SESSION_EUR, SKILLER_ACTION_ROUTER_ENABLED, format_eur_compact,
+)
 from core.value_proof_offer import (
     PersonalValueReport, ValueProof, evaluate_value_proof, render_base_unlock_offer,
     render_no_value_review, render_personal_value_report,
@@ -147,6 +151,13 @@ from core.value_proof_offer import (
 from core.behavioral_analytics import BehavioralAnalyticsEvent
 
 BASE_OFFER_EUR_LABEL = format_eur()
+HUMAN_SKILL_SESSION_EUR_LABEL = format_eur_compact(HUMAN_SKILL_SESSION_EUR)
+GROUP_SESSION_EUR_MIN_LABEL = format_eur_compact(GROUP_SESSION_EUR_MIN)
+GROUP_SESSION_EUR_MAX_LABEL = format_eur_compact(GROUP_SESSION_EUR_MAX)
+GROUP_PROGRAM_TOTAL_MIN_EUR = GROUP_SESSION_EUR_MIN * GROUP_SESSION_COUNT
+GROUP_PROGRAM_TOTAL_MAX_EUR = GROUP_SESSION_EUR_MAX * GROUP_SESSION_COUNT
+GROUP_PROGRAM_MONTH_MIN_EUR = GROUP_PROGRAM_TOTAL_MIN_EUR / 3
+GROUP_PROGRAM_MONTH_MAX_EUR = GROUP_PROGRAM_TOTAL_MAX_EUR / 3
 ACTIVE_FILE_SKILL_REGISTRY = None
 
 # ============================================================
@@ -6648,8 +6659,8 @@ def short_offer_text() -> str:
         "Хочешь продолжить?\n\n"
         "🟢 Бесплатный короткий режим остаётся доступным.\n"
         f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.\n"
-        "👥 Группа навыков — от €20–24 за занятие.\n"
-        "👤 Потренировать навык с человеком — от €39.\n\n"
+        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие.\n"
+        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}.\n\n"
         "Подробности покажу только после выбора варианта."
     )
 
@@ -7224,9 +7235,15 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     if paid_plan_available():
         keyboard.append([InlineKeyboardButton(text=f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
     if ENABLE_GROUP_OFFER:
-        keyboard.append([InlineKeyboardButton(text="👥 Группа навыков — от €20–24/занятие", callback_data=OFFER_CALLBACKS["group"])])
+        keyboard.append([InlineKeyboardButton(
+            text=f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL}/занятие",
+            callback_data=OFFER_CALLBACKS["group"],
+        )])
     if ENABLE_HUMAN_OFFER:
-        keyboard.append([InlineKeyboardButton(text="👤 Потренировать навык с человеком — от €39", callback_data=OFFER_CALLBACKS["live"])])
+        keyboard.append([InlineKeyboardButton(
+            text=f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
+            callback_data=OFFER_CALLBACKS["live"],
+        )])
     if PAYMENT_ACCEPT_ANY:
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
@@ -7333,20 +7350,20 @@ def tariff_bot_text() -> str:
 
 def tariff_live_text() -> str:
     return (
-        "👤 Потренировать навык с человеком — от €39\n\n"
+        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n\n"
         "Если хочется не разбираться одному, можно взять одну встречу с человеком.\n\n"
         "За 45–60 минут:\n"
         "— разберём конкретный стопор;\n"
         "— найдём, где ломается цепочка;\n"
         "— выберем 1–2 навыка;\n"
         "— потренируем их прямо на вашей ситуации.\n\n"
-        "От €39 за встречу. Если окажется, что вопрос глубже и нужна терапия — обсудим отдельно.\n"
+        f"От €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу. Если окажется, что вопрос глубже и нужна терапия — обсудим отдельно.\n"
     )
 
 
 def tariff_group_text() -> str:
     return (
-        "👥 Группа навыков — от €20–24 за занятие\n\n"
+        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие\n\n"
         "Полная программа рассчитана на 12 недель.\n"
         "Ведущий — Иван Василюк. Программа основана на КПТ и ДБТ.\n\n"
         "Что получает участник:\n"
@@ -7354,7 +7371,8 @@ def tariff_group_text() -> str:
         "— домашние поведенческие эксперименты;\n"
         "— поддержку группы;\n"
         "— использование SKILLER между встречами.\n\n"
-        "Полная программа: €360 — по €120 в месяц.\n"
+        f"Полная программа: €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_TOTAL_MAX_EUR)} "
+        f"(€{format_eur_compact(GROUP_PROGRAM_MONTH_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_MONTH_MAX_EUR)} в месяц).\n"
         "Перед участием — короткое собеседование."
     )
 
@@ -7416,9 +7434,9 @@ def offer_details_full_mode_text() -> str:
         "🟢 Бесплатно — базовая версия для самостоятельного движения.\n\n"
         f"🔵 Подписка — €{BASE_OFFER_EUR_LABEL} / месяц\n"
         "Карта навыков, Learning Engine, неограниченные эксперименты, напоминания и журнал.\n\n"
-        "👥 Группа навыков — от €20–24 за занятие\n"
+        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие\n"
         "Еженедельные занятия, эксперименты, поддержка и SKILLER между встречами.\n\n"
-        "👤 Потренировать навык с человеком — от €39\n"
+        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n"
         "Одна встреча 45–60 минут: конкретный стопор и практика 1–2 навыков."
     )
 
@@ -11082,7 +11100,7 @@ async def main_flow(m: Message):
     # A callback may put the action router into a dedicated text/voice state.
     # Consume that input here before every legacy intake or story-analysis path.
     skiller_session = _skiller_session(u)
-    if skiller_session.get("state") in {
+    if SKILLER_ACTION_ROUTER_ENABLED and skiller_session.get("state") in {
         SkillerDialogState.DAY1_CLARIFY.value,
         SkillerDialogState.CORRECTION_INPUT.value,
         SkillerDialogState.NEW_CASE_INTAKE.value,
@@ -14376,6 +14394,10 @@ async def on_skiller_action_callback(c: CallbackQuery) -> None:
     """Action-first adapter: callback captions can never reach ``main_flow``."""
     u = await get_user(c.from_user.id, DB_PATH)
     prepare_calendar_routing(u)
+    if not SKILLER_ACTION_ROUTER_ENABLED:
+        await c.message.answer("Этот тестовый экран уже не активен. Показываю актуальный маршрут — нажми /start.")
+        await c.answer()
+        return
     session = _skiller_session(u)
     result = route_skiller_callback(
         session, c.data or "", callback_id=str(getattr(c, "id", "") or ""),
@@ -14510,13 +14532,18 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data == OFFER_CALLBACKS["group"]:
-        await log_event(uid, "offer", "tariff_details_opened", {"format": "cbt_group", "amount": 360, "installment": 120}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "tariff_details_opened", {
+            "format": "cbt_group", "unit": "session", "sessions": GROUP_SESSION_COUNT,
+            "amount_from": float(GROUP_SESSION_EUR_MIN), "amount_to": float(GROUP_SESSION_EUR_MAX),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, tariff_group_text(), tariff_group_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["live"], "offer_live"}:
-        await log_event(uid, "offer", "tariff_details_opened", {"format": "live_review", "amount": 59}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(uid, "offer", "tariff_details_opened", {
+            "format": "live_review", "unit": "session", "amount_from": float(HUMAN_SKILL_SESSION_EUR),
+        }, DB_PATH, SHEETS_WEBHOOK_URL)
         await answer_with_inline_screen(c.message, u, tariff_live_text(), tariff_live_inline_keyboard(uid), "offer")
         await c.answer()
         return
@@ -14564,7 +14591,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {"pay:bot_999", "pay:live_59", "pay:guided_149"}:
         pay_url = payment_bot_999_url() if data == "pay:bot_999" else configured_payment_url()
-        amount_label = {"pay:bot_999": f"€{BASE_OFFER_EUR_LABEL}", "pay:live_59": "€59", "pay:guided_149": "€149"}.get(data, "тариф")
+        amount_label = {"pay:bot_999": f"€{BASE_OFFER_EUR_LABEL}", "pay:live_59": f"€{HUMAN_SKILL_SESSION_EUR_LABEL}", "pay:guided_149": "€149"}.get(data, "тариф")
         if pay_url and ENABLE_PAYMENTS:
             u["payment_status"] = "pending_bot_999" if data == "pay:bot_999" else "pending_payment"
             u["last_payment_click"] = data

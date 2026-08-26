@@ -21,7 +21,11 @@ TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "de
 
 # Persistent user-state schema version. Migrations must be additive/non-destructive:
 # deploys must never drop the SQLite file or reset existing users.
-USER_STATE_SCHEMA_VERSION = 18
+USER_STATE_SCHEMA_VERSION = 19
+
+
+class StaleUserWriteError(RuntimeError):
+    """A second handler tried to overwrite a newer user-state snapshot."""
 
 
 # ============================================================
@@ -1259,6 +1263,7 @@ USER_FIELDS = [
     "return_mode",
     "current_state",
     "state_version",
+    "row_revision",
     "current_action_id",
     "current_action_context",
     "last_simplification_modality",
@@ -1500,6 +1505,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "return_mode": None,
         "current_state": "ONBOARDING",
         "state_version": 0,
+        "row_revision": 0,
         "current_action_id": None,
         "current_action_context": None,
         "last_simplification_modality": None,
@@ -2007,6 +2013,7 @@ async def init_db(db_path: str):
                 safety_resume_context TEXT,
                 current_state TEXT DEFAULT 'ONBOARDING',
                 state_version INTEGER DEFAULT 0,
+                row_revision INTEGER DEFAULT 0,
                 current_action_id TEXT,
                 last_simplification_modality TEXT,
                 success_repeat_count INTEGER DEFAULT 0,
@@ -2316,17 +2323,21 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
                     u[json_field] = None
             else:
                 u[json_field] = None
-        return sync_user_state_aliases(u)
+        u = sync_user_state_aliases(u)
+        u["_loaded_row_revision"] = int(u.get("row_revision") or 0)
+        return u
 
 async def save_user(u: Dict[str, Any], db_path: str):
-    """Сохранить пользователя в БД без сброса состояния между деплоями."""
-    u = sync_user_state_aliases(dict(u))
-    u["updated_at"] = _utc_iso()
-    u["schema_version"] = USER_STATE_SCHEMA_VERSION
+    """Persist one user snapshot with optimistic concurrency protection."""
+    state = sync_user_state_aliases(dict(u))
+    expected_revision = int(u.get("_loaded_row_revision", state.get("row_revision") or 0))
+    state["row_revision"] = expected_revision + 1
+    state["updated_at"] = _utc_iso()
+    state["schema_version"] = USER_STATE_SCHEMA_VERSION
     cols = USER_FIELDS
     vals = []
     for c in cols:
-        v = u.get(c)
+        v = state.get(c)
         # Serialize lists/dicts to JSON for storage
         if isinstance(v, (list, dict)):
             try:
@@ -2336,13 +2347,35 @@ async def save_user(u: Dict[str, Any], db_path: str):
         vals.append(v)
     placeholders = ",".join(["?"] * len(cols))
     cols_sql = ",".join(cols)
+    update_cols = [column for column in cols if column != "user_id"]
+    assignments = ",".join(f"{column}=?" for column in update_cols)
+    storage = dict(zip(cols, vals))
 
     async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA busy_timeout=5000")
+        await db.execute("BEGIN IMMEDIATE")
         await db.execute(
-            f"INSERT OR REPLACE INTO users ({cols_sql}) VALUES ({placeholders})",
-            tuple(vals),
+            f"UPDATE users SET {assignments} WHERE user_id=? AND COALESCE(row_revision,0)=?",
+            tuple(storage[column] for column in update_cols) + (state["user_id"], expected_revision),
         )
+        changed = int((await (await db.execute("SELECT changes()")).fetchone())[0] or 0)
+        if changed == 0:
+            existing = await (await db.execute(
+                "SELECT COALESCE(row_revision,0) FROM users WHERE user_id=?", (state["user_id"],),
+            )).fetchone()
+            if existing is not None:
+                await db.rollback()
+                raise StaleUserWriteError(
+                    f"user {state['user_id']} changed concurrently: expected row revision "
+                    f"{expected_revision}, current {int(existing[0] or 0)}"
+                )
+            await db.execute(
+                f"INSERT INTO users ({cols_sql}) VALUES ({placeholders})",
+                tuple(vals),
+            )
         await db.commit()
+    u.update({column: state.get(column) for column in USER_FIELDS})
+    u["_loaded_row_revision"] = int(state["row_revision"])
 
 # ============================================================
 # DB MIGRATION + EVENTS (аналитика) + GAMIFY FIELDS
@@ -2430,6 +2463,7 @@ EXTRA_USER_COLS = {
     "return_mode": "TEXT",
     "current_state": "TEXT DEFAULT 'ONBOARDING'",
     "state_version": "INTEGER DEFAULT 0",
+    "row_revision": "INTEGER DEFAULT 0",
     "current_action_id": "TEXT",
     "current_action_context": "TEXT",
     "last_simplification_modality": "TEXT",
@@ -2655,7 +2689,7 @@ async def migrate_db(db_path: str):
 async def startup_schema_check(db_path: str) -> Dict[str, Any]:
     """Fail startup clearly when an additive migration was not applied."""
     required = {
-        "users": {"user_id", "stage", "profile_json"},
+        "users": {"user_id", "stage", "profile_json", "row_revision"},
         "flow_states": {"user_id", "current_step", "revision"},
         "behavioral_experiments": {"id", "user_id", "skill_id", "status"},
         "experiment_outcomes": {"experiment_id", "action_started", "success_criterion_met"},
