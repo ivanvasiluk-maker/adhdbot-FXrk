@@ -1262,6 +1262,8 @@ async def start_safety_interceptor(m: Message, u: Dict[str, Any], text: str, sou
     """Open the new 3-button safety check per spec section 8.2."""
     details = safety_signal_details(text, explicit=explicit)
     await log_event(u["user_id"], "safety", "safety_interceptor_opened", {"source": source, **details}, DB_PATH, SHEETS_WEBHOOK_URL)
+    # Preserve the legacy marker for migrated records, reports, and old release checks.
+    u["crisis_redirected"] = 1
     u["safety_mode"] = "triage"
     set_legacy_stage(u, "safety_mode")
     set_current_state(u, STATE_SAFETY_LOCK, close_action=True)
