@@ -73,13 +73,16 @@ async def main() -> None:
             })
             await save_user(u, bot.DB_PATH)
 
-            assert "🔄 Сменить навык" in {button.text for row in bot.action_keyboard().keyboard for button in row}
+            active_labels = {button.text for row in bot.action_keyboard().keyboard for button in row}
+            assert active_labels == {"✅ Сделал", "🟡 Попробовал, но не вышло", "↘️ Нужно проще", "🌙 Закрыть день"}
+            # Старое сообщение Telegram всё ещё должно безопасно открыть замену,
+            # даже если эта кнопка больше не перегружает основной экран.
             u, prompt = await send(uid, "🔄 Сменить навык")
             assert "Не будем повторять навык" in prompt
             assert u["stage"] == "skill_change_reason"
 
             u, changed = await send(uid, "😬 Слишком тревожно / страшно")
-            assert "Навык заменён" in changed
+            assert "Навык заменён" in changed, changed
             assert "Это не откат и не провал" in changed
             assert "Сначала тело, потом задача" in changed
             assert u["daily_skill_name"] == "Сначала тело, потом задача"
@@ -102,7 +105,7 @@ async def main() -> None:
             assert u2["stage"] == "skill_change_meaning"
             u2, changed2 = await send(uid2, "это освобождает меня позже")
             assert "Навык заменён" in changed2
-            assert "что освободится позже" in changed2
+            assert "что освободится позже" in changed2, changed2
         finally:
             bot.DB_PATH = old_db_path
 

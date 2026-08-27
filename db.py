@@ -21,7 +21,7 @@ TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "de
 
 # Persistent user-state schema version. Migrations must be additive/non-destructive:
 # deploys must never drop the SQLite file or reset existing users.
-USER_STATE_SCHEMA_VERSION = 19
+USER_STATE_SCHEMA_VERSION = 20
 
 
 class StaleUserWriteError(RuntimeError):
@@ -1226,6 +1226,9 @@ USER_FIELDS = [
     "test_answers",
     "done_count",
     "return_count",
+    "pending_return_after_disruption",
+    "pending_return_reason",
+    "pending_return_date",
     "analysis_retry_count",
     "analysis_action_transition_shown",
     "has_started_training",
@@ -1468,6 +1471,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "test_answers": [],  # Временное хранилище для ответов теста
         "done_count": 0,
         "return_count": 0,
+        "pending_return_after_disruption": 0,
+        "pending_return_reason": None,
+        "pending_return_date": None,
         "analysis_retry_count": 0,
         "analysis_action_transition_shown": 0,
         "has_started_training": 0,  # Флаг: 1 если юзер начал день 1
@@ -1979,6 +1985,9 @@ async def init_db(db_path: str):
                 test_answers TEXT,
                 done_count INTEGER,
                 return_count INTEGER,
+                pending_return_after_disruption INTEGER DEFAULT 0,
+                pending_return_reason TEXT,
+                pending_return_date TEXT,
                 analysis_retry_count INTEGER,
                 has_started_training INTEGER,
                 last_offer_shown_at TEXT,
@@ -2422,6 +2431,9 @@ EXTRA_USER_COLS = {
     "test_answers": "TEXT",
     "done_count": "INTEGER",
     "return_count": "INTEGER",
+    "pending_return_after_disruption": "INTEGER DEFAULT 0",
+    "pending_return_reason": "TEXT",
+    "pending_return_date": "TEXT",
     "analysis_retry_count": "INTEGER",  # сколько раз пользователь сказал "ты меня не понял"
     "analysis_action_transition_shown": "INTEGER DEFAULT 0",
     "has_started_training": "INTEGER",  # 1 если юзер начал день 1
@@ -4387,10 +4399,6 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
 
     skill_map = profile.get("_skill_map") if isinstance(profile, dict) else {}
     checked = _checked_skill_lines(profile, events, skill_map, limit=5)
-    effective = [line for line in checked if "помог" in line.lower() or "подтверж" in line.lower() or "рабоч" in line.lower()]
-    if not effective:
-        effective = checked[:2]
-
     offered = [_event_skill_text(e) for e in events if e["event_type"] in {"intervention_offered", "intervention_attempted"}]
     legacy_next = [profile.get("recommended_core_skill"), profile.get("recommended_variant"), profile.get("best_variant")]
     next_candidates: List[str] = []
@@ -4403,12 +4411,6 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
     else:
         next_test = "выбрать один маленький вход в задачу и отметить честный результат"
 
-    if len(effective) < 2:
-        for fallback in ("написать плохой черновик без редактирования", "убрать телефон вне руки"):
-            if fallback not in effective:
-                effective.append(fallback)
-            if len(effective) >= 2:
-                break
     bundle = [
         "Убрать телефон на 3 минуты.",
         "Открыть задачу.",
@@ -4421,12 +4423,21 @@ def render_short_user_map(profile: dict, name: Optional[str] = None) -> str:
     ]
     text = (
         "🧭 Твоя рабочая карта\n\n"
-        "Что чаще всего мешает начать:\n"
-        f"{_map_bullets(reported, 'данных пока мало — ждём твоих слов и фактов', limit=2)}\n\n"
-        "Что уже помогало:\n"
-        f"{_map_bullets(effective, 'пока проверяем первые входы', limit=2)}\n\n"
-        "Что пока неясно:\n"
-        f"— {(hypotheses[0] if hypotheses else next_test)}\n\n"
+        "Что ты описал — это уже видно:\n"
+        f"{_map_bullets(reported, 'пока есть только общий сигнал: вход в задачу становится слишком дорогим', limit=2)}\n\n"
+        "Что мы пока предполагаем:\n"
+        f"{_map_bullets(hypotheses, 'пока проверяем, какой механизм сильнее всего мешает старту', limit=2)}\n\n"
+        "Что уже проверили:\n"
+        f"{_map_bullets(checked, 'завершённых проверок ещё нет — первый результат обновит карту', limit=2)}\n\n"
+        "Что проверим следующим:\n"
+        f"— {next_test}\n\n"
+        "Что будем делать:\n"
+        "— подбирать следующий вход по механизму, а не повторять случайный совет;\n"
+        "— сохранять результат каждой попытки и менять то, что не подошло.\n\n"
+        "Что надо развивать:\n"
+        "— START: начинать без долгой внутренней борьбы;\n"
+        "— STAY: оставаться в задаче после первого шага;\n"
+        "— RETURN: возвращаться после телефона, паузы или срыва.\n\n"
         "Твоя ближайшая связка:\n"
         + "\n".join(f"{i}. {step}" for i, step in enumerate(bundle, start=1))
         + "\n\nКогда сорвался:\n"

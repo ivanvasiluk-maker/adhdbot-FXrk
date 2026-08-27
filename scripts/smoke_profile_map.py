@@ -46,27 +46,39 @@ async def run():
         u["day"] = 3
         await save_user(u, db_path)
 
-        # 1) Perfectionism trigger -> perfectionism_start_block
-        m1 = DummyMessage(uid, "Хочу сделать идеально, потом доделаю")
-        await bot.main_flow(m1)
+        # 1) Deterministic diagnosis signal -> perfectionism_start_block.
+        # Do not make this offline smoke depend on a configured LLM.
+        await bot.record_profile_signal(uid, "analysis", {
+            "main_pattern": "perfectionism_start_block",
+            "avoidance_reason": "fear_of_bad_result",
+            "main_hypothesis": "страх ошибки или оценки",
+            "recommended_track": "procrastination",
+            "recommended_variant": "bad_draft",
+        }, source="smoke_analysis")
         p1 = await get_user_profile(uid, db_path)
 
-        # 2) Too hard branch -> entry_too_large (via ❌ Не сделал)
-        m2 = DummyMessage(uid, "❌ Не сделал")
-        await bot.main_flow(m2)
+        # 2) One failed entry is recorded without fabricating a conversation.
+        await bot.record_profile_signal(uid, "training", {
+            "last_not_completed_reason": "страх ошибки",
+            "failed_skill": "phone_away_3_min",
+            "action_failed_count": 1,
+        }, source="smoke_failed")
         p2 = await get_user_profile(uid, db_path)
 
-        # 3) Done branch -> best_skill
-        u = await get_user(uid, db_path)
-        u["stage"] = "training"
-        await save_user(u, db_path)
-        m3 = DummyMessage(uid, "✅ Сделал(а)")
-        await bot.main_flow(m3)
+        # 3) One successful entry -> best_skill and value proof.
+        await bot.record_profile_signal(uid, "training", {
+            "best_skill": "bad_draft",
+            "last_successful_skill": "bad_draft",
+            "action_done_count": 1,
+            "last_skill_effect": "helped",
+        }, source="action_done")
         p3 = await get_user_profile(uid, db_path)
 
         # 4) Day3 offer and payment URL fallback selection
         u = await get_user(uid, db_path)
-        bot.PAYMENT_URL_MONTH_1498 = "https://pay.example/month1498"
+        bot.PAYMENT_URL_MONTH_1498 = "https://buy.stripe.com/test-skiller-full"
+        bot.ENABLE_PAYMENTS = True
+        bot.ENABLE_PAID_PLAN = True
         offer_msg = DummyMessage(uid, "")
         await bot.show_day3_offer(offer_msg, u, "smoke_test")
         offer_text = offer_msg.answers[-1]["text"] if offer_msg.answers else ""
@@ -112,12 +124,12 @@ async def run():
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
-        has_adaptive_payment = any("€14.98" in t and ("Подключить" in t or "Полный режим" in t) for t in kb_texts)
-        has_primary_map = "🧭 Первичная карта" in offer_text or "🧭 За первые дни" in offer_text
-        has_day3_conclusion = "появились первые" in offer_text or "не окончательный вывод" in offer_text
-        has_personal_offer = ("Живой разбор карты" in " ".join(kb_texts) or "живой разбор карты" in offer_text.lower()) and "Остаться" in " ".join(kb_texts)
-        has_model_value = "историю попыток" in offer_text or "какие навыки дали эффект" in offer_text or "базовом режиме" in offer_text
-        has_selling_specifics = ("Что уже видно:" in offer_text and "следующий эксперимент" in offer_text) or "Ещё несколько коротких проверок" in offer_text
+        has_adaptive_payment = any("€4.99" in t and ("SKILLER Full" in t or "Оформить" in t or "Полный режим" in t) for t in kb_texts)
+        has_primary_map = "📌 Краткое заключение" in offer_text and "Как держится проблема" in offer_text
+        has_day3_conclusion = "Главный узел" in offer_text and "лучший сигнал" in offer_text.lower()
+        has_personal_offer = "Продолжить бесплатно" in " ".join(kb_texts) and "Потренировать навык с человеком" in " ".join(kb_texts)
+        has_model_value = "START → STAY → RETURN" in offer_text
+        has_selling_specifics = "Выбери, как закрепить результат" in offer_text and "Подробное заключение" in " ".join(kb_texts)
         assert int(task_start.get("value") or 0) >= 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
         assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map

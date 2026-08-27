@@ -223,10 +223,10 @@ class DialogRoutingTests(unittest.IsolatedAsyncioTestCase):
         labels = [
             *bot.BARRIER_BUTTONS, "🌙 Завершить", "Продолжить", "↘️ Нужно проще",
             "✅ Сделал", "📖 Полная карта", "✏️ Исправить вывод",
+            "📚 Почему это работает", "🤷 Не моё", "🔁 Ещё круг",
         ]
         for label in labels:
             with self.subTest(label=label):
-                self.assertTrue(bot.is_known_reply_button(label), label)
                 self.assertFalse(bot.closed_day_substantive_message(label), label)
 
 

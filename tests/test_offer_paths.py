@@ -30,6 +30,15 @@ class OfferPathTests(unittest.TestCase):
             OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
         ])
 
+    def test_offer_also_exposes_conclusion_and_next_plan(self):
+        callbacks = [
+            button.callback_data
+            for row in offer_inline_keyboard(123).inline_keyboard
+            for button in row if button.callback_data
+        ]
+        self.assertIn(OFFER_CALLBACKS["conclusion_full"], callbacks)
+        self.assertIn(OFFER_CALLBACKS["next_plan"], callbacks)
+
     def test_subscription_path_fails_closed_without_real_payment_url(self):
         with patch.object(bot, "PAYMENT_URL", "https://your-payment-link"), patch.object(bot, "PAYMENT_MONTH_URL", ""):
             callbacks = [row[0].callback_data for row in offer_inline_keyboard(123).inline_keyboard]

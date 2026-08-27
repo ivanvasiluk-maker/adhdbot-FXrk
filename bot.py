@@ -423,7 +423,6 @@ kb_completed_day_open = ReplyKeyboardMarkup(
         [KeyboardButton(text="⚡ Дать короткий навык")],
         [KeyboardButton(text="🧠 Что я сегодня понял")],
         [KeyboardButton(text="✏️ Исправить вывод")],
-        [KeyboardButton(text="📚 Что посмотреть / почитать")],
         [KeyboardButton(text="🌙 На сегодня хватит")],
     ],
     resize_keyboard=True,
@@ -897,59 +896,90 @@ def offer_shown_today(u: Dict[str, Any]) -> bool:
         return False
 
 
-def short_daily_map_text(profile: Dict[str, Any], skill_map: Optional[Dict[str, Any]] = None) -> str:
-    blockers = [
+def short_daily_map_text(
+    profile: Dict[str, Any], skill_map: Optional[Dict[str, Any]] = None,
+    u: Optional[Dict[str, Any]] = None,
+) -> str:
+    model = profile.get("personal_working_model") if isinstance(profile.get("personal_working_model"), dict) else {}
+    model_barrier = _top_specific_signal(model.get("recurring_barriers"), "")
+    blockers = _specific_signals([
+        profile.get("main_hypothesis"),
+        model_barrier,
+        profile.get("last_not_completed_reason"),
         profile.get("avoidance_trigger"),
         profile.get("attention_pattern"),
         profile.get("energy_pattern"),
         profile.get("main_pattern"),
-    ]
-    blockers = [label({}, str(x), str(x)) for x in blockers if x and str(x).lower() not in {"unknown", "none"}][:3]
+    ], limit=2)
     if not blockers:
-        blockers = ["данных пока мало — проверяем маленький вход"]
+        blockers = ["вход в важную задачу становится слишком дорогим"]
     positive = [x for x in ((skill_map or {}).get("skills") or []) if x.get("status") in {"promising", "confirmed", "started_task"}][:2]
-    next_skill = current_skill_for_action({"daily_skill_id": profile.get("next_skill_hint")}) or profile.get("next_skill_hint") or "open_without_timer"
+    helpful = _top_specific_signal(model.get("helpful_interventions"), "")
+    next_skill = (
+        profile.get("next_skill_hint") or profile.get("recommended_variant")
+        or profile.get("last_successful_skill") or (positive[0].get("skill_id") if positive else "")
+        or (current_skill_for_action(u or {}) if u else "") or "open_only"
+    )
+    task = current_task_label(u or {}) if u else "текущая задача"
+    helped_lines = []
+    if helpful:
+        helped_lines.append(helpful)
+    helped_lines.extend(
+        _skill_label(item.get("skill_id"), item.get("skill_id")) for item in positive
+        if _skill_label(item.get("skill_id"), item.get("skill_id")) not in helped_lines
+    )
+    attempts = max(
+        int(model.get("evidence_count") or 0),
+        len(user_skill_attempts(u or {})),
+        int(profile.get("action_done_count") or 0),
+    )
+    evidence_line = (
+        "— уже есть первые поведенческие данные; будем проверять, повторяется ли эффект"
+        if attempts else
+        "— это предварительная гипотеза; первое действие покажет, верно ли мы поняли стопор"
+    )
     return (
-        "🧭 Коротко по карте сегодня\n\n"
-        "Что мы уже заметили\n\n"
-        "Тебе чаще мешает:\n"
-        + "\n".join(f"— {x}" for x in blockers)
+        "🧭 Карта дня\n\n"
+        "Что вижу сейчас\n"
+        f"— задача: {task}\n"
+        + "\n".join(f"— возможный стопор: {x}" for x in blockers)
         + "\n\n"
-        "Уже есть первый сигнал, что помогает:\n"
-        + ("\n".join(f"— {_skill_label(item.get('skill_id'), item.get('skill_id'))}" for item in positive) if positive else "— пока проверяем")
+        "Что будем делать\n"
+        f"— проверим навык «{_skill_label(str(next_skill), str(next_skill))}» на этой задаче\n"
+        "— после попытки запишем: удалось ли начать, стало ли легче и получилось ли продолжить\n"
+        f"{evidence_line}\n\n"
+        "Что развиваем\n"
+        "— START: начинать без долгой внутренней борьбы\n"
+        "— STAY: не выпадать сразу после первого шага\n"
+        "— RETURN: возвращаться после телефона, паузы или срыва\n\n"
+        "Что уже давало движение\n"
+        + ("\n".join(f"— {item}" for item in helped_lines[:2]) if helped_lines else "— пока проверенного способа нет — найдём его по результатам действий")
         + "\n\n"
-        "Следующий тест:\n"
-        f"— {_skill_label(str(next_skill), str(next_skill))}"
+        "Цель SKILLER — собрать твой повторяемый протокол START → STAY → RETURN, а не выдавать случайные советы."
     )
 
 
 async def send_user_map(m: Message, u: Dict[str, Any], source: str):
     profile = await get_user_profile(u["user_id"], DB_PATH)
-    if (
-        int(u.get("day") or 1) == 1
-        and int(u.get("done_count") or profile.get("action_done_count") or 0) == 0
-        and source in {"global_button", "persistent_button"}
-        and str(u.get("stage") or "") not in {"waiting_next_day", "done", "day_core_stop", "success_menu", "success_limit"}
-    ):
-        await log_event(u["user_id"], u.get("stage", ""), "profile_map_deferred_until_first_action", {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_keyboard(
-            m,
-            u,
-            "Карту покажу после первого действия — сейчас не грузим тебя чтением.\n\nСначала один маленький шаг, потом кратко покажу, что уже стало видно.",
-            kb_training_main,
-            u.get("stage") or "training_main",
-        )
-        return
     skill_map = await build_skill_map_data(u, profile)
     profile["_skill_map"] = skill_map
     today = local_date_for_user(u)
     already_shown = u.get("profile_map_shown_date") == today and int(u.get("profile_map_shown_count") or 0) > 0
     full_requested = source == "full_map"
     if not full_requested:
-        txt = short_daily_map_text(profile, skill_map)
+        txt = short_daily_map_text(profile, skill_map, u)
         markup = kb_short_map_repeat
     else:
-        txt = render_prelaunch_full_map(u, profile, skill_map)
+        try:
+            conclusion = model_from_dict(profile.get("conclusion_model") or {})
+            intro = {
+                "skinny": "Факты, гипотеза и следующий тест. Без приговоров.",
+                "beck": "Подробная рабочая модель по твоему описанию и экспериментам.",
+                "marsha": "Это карта конкретного стопора, а не оценка тебя целиком.",
+            }.get(str(u.get("trainer_key") or "marsha"), "Не диагноз — рабочая схема.")
+            txt = render_full_working_model(conclusion, trainer_intro=intro)
+        except (KeyError, TypeError, ValueError):
+            txt = render_prelaunch_full_map(u, profile, skill_map)
         trainer = TRAINERS.get(u.get("trainer_key") or "marsha", TRAINERS["marsha"])
         txt = trainer_wrap(u, txt, "map")
         txt += f"\n\nТекущий тренер: {trainer.get('emoji', '')} {trainer.get('display_name') or trainer.get('name')}"
@@ -1503,6 +1533,7 @@ async def handle_safety_mode(m: Message, u: Dict[str, Any], text: str) -> bool:
             u["safety_mode"] = "none"
             set_legacy_stage(u, "training")
             await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "safety", "safety_user_chose_resume_later", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer("Хорошо. Возвращаемся без давления.", reply_markup=kb_training_main)
             return True
         if text == "💬 Остаться в поддержке":
@@ -3501,6 +3532,12 @@ def known_reply_button_texts() -> set[str]:
         markup = globals().get(name)
         if markup is not None:
             texts.update(_reply_keyboard_texts(markup))
+    # Every reply keyboard emitted by this module is navigation. Telegram can
+    # leave an older keyboard visible after a deploy; an omitted stale label
+    # must never be mistaken for a new problem description and sent to AI.
+    for value in globals().values():
+        if isinstance(value, ReplyKeyboardMarkup):
+            texts.update(_reply_keyboard_texts(value))
     texts.update({
         "💪 Дать следующий шаг", "⚡ Я застрял", "⚡ Застревание в работе", "🌙 Закрыть день",
         "📱 Залип", "😣 Слишком сложно", "😵 Нет сил", "❌ Не сделал",
@@ -4377,6 +4414,7 @@ async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: st
     }
     if code == "too_hard":
         patch.update({"needs_downscale": True, "last_too_hard_skill": sid})
+        await bot_record_action_event(u, "too_hard_reported", skill_id=sid, metadata={"source": "not_done_reason", "context_not_failure": True})
         await bot_record_action_event(u, "step_reduced", skill_id=sid, metadata={"reason": "not_done_too_hard", "context_not_failure": True})
     elif code == "no_energy":
         patch.update({"energy_pattern": "low_start_energy", "needs_support_mode": True})
@@ -4516,7 +4554,11 @@ def build_user_post_action_reflection(
             attempt.get("task_title") or u.get("current_task_title")
             or u.get("today_target") or "текущая задача"
         ),
-        barrier=str(feedback.get("barrier") or profile.get("last_not_completed_reason") or "unknown"),
+        barrier=public_enum_text(str(
+            feedback.get("barrier") or feedback.get("mechanism")
+            or profile.get("main_hypothesis") or profile.get("last_not_completed_reason")
+            or "вход в задачу становится слишком дорогим"
+        )),
         skill_title=str(skill.get("name") or feedback.get("skill_title") or sid or "короткий вход"),
         tested_action=str(
             attempt.get("current_step") or u.get("current_next_physical_step")
@@ -4556,7 +4598,11 @@ async def persist_personal_working_model(
     )
     model = update_working_model(
         profile.get("personal_working_model"),
-        barrier=str(feedback.get("barrier") or profile.get("last_not_completed_reason") or "барьер уточняется"),
+        barrier=public_enum_text(str(
+            feedback.get("barrier") or feedback.get("mechanism")
+            or profile.get("main_hypothesis") or profile.get("last_not_completed_reason")
+            or "вход в задачу становится слишком дорогим"
+        )),
         skill_title=str(skill.get("name") or sid or "короткий вход"),
         context=str(attempt.get("context_domain") or "general"),
         successful=result == "STRONG_SUCCESS",
@@ -4658,6 +4704,9 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     await record_profile_signal(u["user_id"], "training", patch, source="minimal_skill_feedback")
     u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
     u["pending_feedback_json"] = None
+    # The experiment is complete even when the effect was weak or neutral.
+    # Without this transition, the next-step button resends the same skill forever.
+    mark_current_skill_status(u, "completed")
     set_legacy_stage(u, "post_action_reflection")
     await save_user(u, DB_PATH)
     await log_event(
@@ -5441,6 +5490,7 @@ async def start_stuck_text_validation(m: Message, u: Dict[str, Any], text: str):
         },
         source="stuck_free_text_validation",
     )
+    u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
     await log_event(u["user_id"], "training", "stuck_free_text_validated", {"kind": kind, "text": text_for_analysis[:240], "clarification_count": clarification_count}, DB_PATH, SHEETS_WEBHOOK_URL)
     await answer_with_keyboard(m, u, trainer_wrap(u, response, "stuck"), keyboard, f"stuck_validation_{kind}")
 
@@ -5622,6 +5672,7 @@ async def handle_stuck_validation_choice(m: Message, u: Dict[str, Any], text: st
         },
         source="stuck_validation_choice",
     )
+    u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
     u["pending_feedback_json"] = None
     await save_user(u, DB_PATH)
     if text == "✅ Да, похоже":
@@ -6308,10 +6359,15 @@ async def apply_skill_change(
     u["daily_skill_name"] = new_name
     u["daily_skill_status"] = "in_progress"
     skill = dict(SKILLS_DB.get(new_sid) or {})
-    skill.setdefault("skill_id", new_sid)
-    skill.setdefault("name", new_name)
-    skill.setdefault("description", intro)
-    skill.setdefault("steps", [minimum])
+    skill.update({
+        "skill_id": new_sid,
+        "name": new_name,
+        "why_short": intro,
+        "description": intro,
+        "simple": [minimum],
+        "steps": [minimum],
+        "minimum": minimum,
+    })
     replace_day_core_skill(u, new_sid)
     await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=new_sid, skill_name=new_name)
     await bot_record_action_event(
@@ -6344,8 +6400,28 @@ async def apply_skill_change(
     }, source="skill_change_requested")
     if previous_sid:
         await record_working_map_skill_result(u["user_id"], "failed_skills", previous_sid)
-    await update_user_profile(u["user_id"], {"user_model_events": model_events}, DB_PATH, source="skill_change_requested_events")
-    text = format_skill_card(u, skill, current_task_label(u))
+    updated_profile = await update_user_profile(
+        u["user_id"],
+        {"user_model_events": model_events},
+        DB_PATH,
+        source="skill_change_requested_events",
+    )
+    # answer_with_keyboard persists the in-memory user snapshot. Keep that
+    # snapshot aligned with the profile writes above so it cannot overwrite
+    # the newly learned "this skill did not fit" signal with stale JSON.
+    u["profile_json"] = updated_profile
+    text = (
+        "🔄 Навык заменён\n\n"
+        "Что вижу\n"
+        f"— предыдущий вход сейчас не подошёл: {reason_text}\n\n"
+        "Что будем делать\n"
+        f"— проверим другой механизм через «{new_name}»\n"
+        "— оценим не красоту выполнения, а стал ли вход в задачу легче\n\n"
+        "Что развиваем\n"
+        "— умение менять способ входа без отказа от самой задачи\n\n"
+        "Это не откат и не провал. Это уточнение твоей рабочей карты.\n\n"
+        + format_skill_card(u, skill, current_task_label(u))
+    )
     await answer_with_keyboard(m, u, text, action_keyboard(), "skill_card")
 
 
@@ -6664,14 +6740,78 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
 
 
 def short_offer_text() -> str:
+    options = ["🟢 Бесплатный короткий режим остаётся доступным."]
+    if paid_plan_available():
+        options.append(f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.")
+    if ENABLE_GROUP_OFFER:
+        options.append(f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие.")
+    if ENABLE_HUMAN_OFFER:
+        options.append(f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}.")
     return (
-        "Хочешь продолжить?\n\n"
-        "🟢 Бесплатный короткий режим остаётся доступным.\n"
-        f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.\n"
-        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие.\n"
-        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}.\n\n"
-        "Подробности покажу только после выбора варианта."
+        "Выбери, как закрепить результат и решить следующий узел:\n\n"
+        + "\n".join(options)
+        + "\n\nМожно открыть подробное заключение и план перед выбором."
     )
+
+
+def offer_short_conclusion_text(u: Dict[str, Any], summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    attempts = day3_attempt_count(summary, profile)
+    obstacle = _offer_main_obstacle(summary, profile)
+    helpful = _offer_skill_fact(summary, helpful=True)
+    unhelpful = _offer_skill_fact(summary, helpful=False)
+    task = current_task_label(u)
+    return (
+        "📌 Краткое заключение\n\n"
+        "Что вижу\n"
+        f"— ситуация: {task}\n"
+        f"— Главный узел: {obstacle}\n\n"
+        "Как держится проблема\n"
+        "важная задача → напряжение или неопределённость → уход / переделка / остановка "
+        "→ короткое облегчение → давление усиливается.\n\n"
+        "Что уже проверили\n"
+        f"— попыток: {attempts}\n"
+        f"— лучший сигнал: {helpful}\n"
+        f"— не стоит повторять вслепую: {unhelpful}\n\n"
+        "Что будем делать\n"
+        "— подбирать вход по механизму конкретной ситуации\n"
+        "— сохранять результат каждой попытки и не повторять то, что не помогло\n"
+        "— отдельно тренировать начало, удержание и возврат\n\n"
+        "Что надо развивать\n"
+        "— START: начинать без долгой внутренней борьбы\n"
+        "— STAY: оставаться в задаче после первого шага\n"
+        "— RETURN: возвращаться после телефона, паузы или срыва\n\n"
+        "Проблема меняется от способа входа, значит её можно тренировать. Цель продолжения — собрать твой повторяемый протокол START → STAY → RETURN."
+    )
+
+
+def offer_next_plan_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    first_entry = day3_first_working_entry(summary, profile)
+    next_test = _offer_next_experiment(summary, profile)
+    return (
+        "🧭 Что делать дальше\n\n"
+        "На ближайшие 7 дней:\n"
+        f"1. START — дважды проверить вход «{first_entry}» на реальных задачах.\n"
+        "2. STAY — отдельно проверить, что помогает не остановиться сразу после микрошагa.\n"
+        "3. RETURN — собрать короткий протокол возврата после телефона, паузы или срыва.\n"
+        f"4. Следующая гипотеза — {next_test}.\n\n"
+        "После новых попыток заключение обновится: что работает, что не работает и какой навык закреплять дальше."
+    )
+
+
+def offer_detailed_conclusion_text(u: Dict[str, Any], summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    try:
+        conclusion = model_from_dict(profile.get("conclusion_model") or {})
+        detail = render_full_working_model(
+            conclusion,
+            trainer_intro="Подробная рабочая модель: факты, гипотезы, неизвестное и следующий тест.",
+        )
+    except (KeyError, TypeError, ValueError):
+        detail = render_prelaunch_full_map(u, profile, profile.get("_skill_map") or {})
+    return f"{detail}\n\n{offer_next_plan_text(summary, profile)}"
+
+
+def offer_screen_text(u: Dict[str, Any], summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    return f"{offer_short_conclusion_text(u, summary, profile)}\n\n———\n\n{short_offer_text()}"
 
 
 OFFER_MENU_STAGE = "OFFER_MENU"
@@ -6761,7 +6901,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
             DB_PATH, BehavioralAnalyticsEvent("offer_shown", u["user_id"]), created_at=offer_seen_at,
         )
 
-    text = trainer_wrap(u, short_offer_text(), "offer")
+    text = trainer_wrap(u, offer_screen_text(u, summary, profile), "offer")
     if is_preview:
         text = (
             "Это можно посмотреть заранее. Автоматически варианты появятся после 3-го дня "
@@ -7206,6 +7346,8 @@ OFFER_CALLBACKS = {
     "request_live": "offer:request_live",
     "request_guided": "offer:request_guided",
     "request_group": "offer:request_group",
+    "conclusion_full": "offer:conclusion_full",
+    "next_plan": "offer:next_plan",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -7253,6 +7395,10 @@ def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
             text=f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
             callback_data=OFFER_CALLBACKS["live"],
         )])
+    keyboard.extend([
+        [InlineKeyboardButton(text="📖 Подробное заключение", callback_data=OFFER_CALLBACKS["conclusion_full"])],
+        [InlineKeyboardButton(text="🧭 Что делать дальше", callback_data=OFFER_CALLBACKS["next_plan"])],
+    ])
     if PAYMENT_ACCEPT_ANY:
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
@@ -7264,11 +7410,11 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
     if paid_plan_available():
         rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
-    rows.extend([
-        [InlineKeyboardButton(text="👥 Группа навыков", callback_data=OFFER_CALLBACKS["group"])],
-        [InlineKeyboardButton(text="👤 С человеком", callback_data=OFFER_CALLBACKS["live"])],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-    ])
+    if ENABLE_GROUP_OFFER:
+        rows.append([InlineKeyboardButton(text="👥 Группа навыков", callback_data=OFFER_CALLBACKS["group"])])
+    if ENABLE_HUMAN_OFFER:
+        rows.append([InlineKeyboardButton(text="👤 С человеком", callback_data=OFFER_CALLBACKS["live"])])
+    rows.append([InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -7342,10 +7488,14 @@ def offer_disclaimer_text() -> str:
 def tariff_bot_text() -> str:
     return (
         f"🔵 SKILLER Founding Member — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
-        "Для тех, кто хочет продолжать самостоятельно, но чтобы SKILLER запоминал результаты и становился точнее.\n\n"
+        "Для тех, кто хочет решить проблему самостоятельно, но не начинать каждый раз с нового случайного совета.\n\n"
+        "Цель полного режима — собрать твой повторяемый протокол:\n"
+        "— как начать;\n"
+        "— как удержаться после старта;\n"
+        "— как вернуться после срыва.\n\n"
         "Founding Member: эта цена сохранится для тебя, пока подписка остаётся активной.\n"
         "Ты сможешь влиять на развитие продукта и первым получать новые функции.\n\n"
-        "Если SKILLER уже помог сделать первые шаги, подписка поможет продолжить строить персональную систему навыков.\n\n"
+        "SKILLER будет сохранять результаты, не предлагать по кругу то, что не помогло, и обновлять заключение по новым попыткам.\n\n"
         "Внутри:\n"
         "— персональная карта навыков;\n"
         "— Learning Engine;\n"
@@ -7905,14 +8055,32 @@ def _steps_from_embedded_skill_text(text: Any) -> List[str]:
     return [line for line in block.splitlines() if line.strip()]
 
 
+def _rationale_from_embedded_skill_text(text: Any) -> str:
+    raw = str(text or "")
+    before_steps = raw.split("Сделай:", 1)[0]
+    lines = [_clean_skill_line(line) for line in before_steps.splitlines()]
+    lines = [line for line in lines if line]
+    # The first line is normally the embedded skill title.
+    if lines:
+        lines = lines[1:]
+    return " ".join(lines[:3]).strip()
+
+
 def _skill_card_parts(skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None) -> tuple[str, str, str, str]:
     skill_name = _clean_skill_line(skill.get("name") or skill.get("title") or "Микро-шаг")
-    why_short = _clean_skill_line(skill.get("why_short") or skill.get("explain") or skill.get("goal") or "Нужен, чтобы сделать вход дешевле и начать без требования результата.")
+    raw_card = skill.get("daily_text") or skill.get("how") or skill.get("how_more") or ""
+    why_short = _clean_skill_line(skill.get("why_short") or skill.get("explain") or skill.get("goal") or "")
+    if not why_short or why_short in {
+        "Даём другой вход, чтобы не крутить один и тот же навык.",
+        "Навык снижает стоимость входа и помогает не застревать в одном и том же сценарии.",
+    }:
+        why_short = _rationale_from_embedded_skill_text(raw_card)
+    why_short = why_short or "Нужен, чтобы сделать вход дешевле и начать без требования результата."
     steps = skill.get("simple") or skill.get("steps") or []
     if isinstance(steps, list) and steps:
         clean_steps = _unique_skill_steps([contextualize_task_text(step, u) for step in steps], limit=3)
     else:
-        embedded_steps = _steps_from_embedded_skill_text(skill.get("how") or skill.get("how_more") or "")
+        embedded_steps = _steps_from_embedded_skill_text(raw_card)
         source_steps = embedded_steps or [skill.get("how") or skill.get("how_more") or "Открой задачу на 10 секунд и остановись."]
         clean_steps = _unique_skill_steps([contextualize_task_text(step, u) for step in source_steps], limit=3)
     step_text = "\n".join(f"{i}. {step}" for i, step in enumerate(clean_steps, start=1))
@@ -7920,18 +8088,63 @@ def _skill_card_parts(skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None)
     return skill_name, why_short, step_text, minimum
 
 
-def new_day_skill_card_text(skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None) -> str:
+def _current_mechanism_label(u: Optional[Dict[str, Any]], profile: Optional[Dict[str, Any]] = None) -> str:
+    u = u or {}
+    profile = profile or {}
+    attempt = active_attempt(u)
+    raw = str(
+        attempt.get("current_mechanism")
+        or attempt.get("last_user_mechanism")
+        or profile.get("main_hypothesis")
+        or profile.get("main_pattern")
+        or profile.get("avoidance_trigger")
+        or ""
+    ).strip()
+    code = legacy_mechanism_code(raw) or raw
+    labels = {
+        "evaluation_avoidance": "страх оценки мешает приблизиться к задаче",
+        "executive_start_deficit": "трудно перейти от намерения к первому действию",
+        "choice_overload": "слишком много вариантов мешают выбрать шаг",
+        "low_activation": "для старта сейчас мало энергии",
+        "rumination": "мысли мешают перейти к действию",
+        "emotional_avoidance": "неприятное состояние усиливает избегание",
+        "perfectionism_error_fear": "страх ошибки делает первый шаг дорогим",
+        "attention_drift": "внимание быстро уходит от задачи",
+        "unclear_next_action": "следующее физическое действие пока неясно",
+        "low_reward": "у действия мало быстрой отдачи",
+        "overwhelm": "задача ощущается слишком большой",
+        "recovery_after_lapse": "нужен мягкий возврат после паузы",
+    }
+    public = public_enum_text(labels.get(code, raw)).strip()
+    return public if public and not _is_placeholder_signal(public) else "вход в задачу пока слишком дорогой"
+
+
+def new_day_skill_card_text(
+    skill: Dict[str, Any], u: Optional[Dict[str, Any]] = None,
+    profile: Optional[Dict[str, Any]] = None,
+) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
     trainer_line = trainer_general_line_for_user(u) if u else "Давай бережно: только маленький вход, без давления на результат."
-    return (
+    task = current_task_label(u or {})
+    mechanism = _current_mechanism_label(u, profile)
+    card = (
         f"{trainer_line}\n\n"
-        f"🧩 Навык: {skill_name}\n\n"
-        f"{why_short}\n\n"
+        f"🧩 Навык дня — для твоей ситуации: {skill_name}\n\n"
+        "Что вижу\n"
+        f"— задача: {task}\n"
+        f"— сейчас проверяем: {mechanism}\n\n"
+        "Что будем делать\n"
+        f"— {why_short}\n"
+        "— проверим навык действием, а не будем считать гипотезу фактом\n\n"
+        "Что развиваем\n"
+        "— сначала START — более надёжный вход в задачу\n"
+        "— затем STAY и RETURN — удержание и возврат после срыва\n\n"
         f"Сделай:\n{step_text}\n\n"
-        f"Минимум:\n{minimum}"
+        f"Минимум:\n{minimum}\n\n"
+        "После ответа я обновлю карту: что сработало, что не подошло и какой шаг проверять дальше."
     )
     day = int((u or {}).get("day") or 0)
-    hook = EARLY_DAY_HOOKS.get(day, "")
+    hook = (globals().get("EARLY_DAY_HOOKS") or {}).get(day, "")
     return f"{hook}\n\n{card}" if hook else card
 
 
@@ -7943,7 +8156,7 @@ def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any], u: Option
             f"{new_day_context_header(profile)}\n"
             f"{early_personal_bundle_route_text(day, profile)}"
         )
-    return new_day_skill_card_text(skill, u)
+    return new_day_skill_card_text(skill, u, profile)
 
 
 DAILY_SKILL_ALIASES = {
@@ -8183,7 +8396,7 @@ def build_new_day_intro(
 ) -> str:
     if include_context:
         return new_day_skill_text(skill, profile or {}, u)
-    return new_day_skill_card_text(skill, u)
+    return new_day_skill_card_text(skill, u, profile or {})
 
 
 def should_send_day_intro(u: Dict[str, Any]) -> bool:
@@ -8618,13 +8831,20 @@ async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
 
 def closed_day_substantive_message(text: str) -> bool:
     clean = " ".join(str(text or "").split())
-    return bool(clean and len(clean) >= 3 and not clean.startswith("/") and not is_known_reply_button(clean))
+    if not clean or len(clean) < 3 or clean.startswith("/"):
+        return False
+    # Some legacy reply labels are routed globally but are not present in the
+    # static known-button registry. They are navigation, not a new situation.
+    if is_known_reply_button(clean) or global_button_kind(clean, clean.lower()):
+        return False
+    return True
 
 
 async def start_closed_day_additional_analysis(m: Message, u: Dict[str, Any], text: str) -> None:
     """USER_MESSAGE wins over completed daily training without reopening that training."""
     u["interaction_allowed"] = 1
     u["daily_training_completed"] = 1
+    u["closed_day_additional_active"] = 1
     set_legacy_stage(u, "closed_day_additional_analysis")
     await save_user(u, DB_PATH)
     await log_event(
@@ -8635,11 +8855,55 @@ async def start_closed_day_additional_analysis(m: Message, u: Dict[str, Any], te
     await run_analysis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
 
 
+async def open_closed_day_analysis_step(m: Message, u: Dict[str, Any]) -> None:
+    """Offer the diagnosed step without reopening the already completed day."""
+    try:
+        comp = json.loads(u.get("analysis_json") or "{}")
+    except (TypeError, ValueError):
+        comp = {}
+    analysis_result = comp.get("analysis_result") if isinstance(comp, dict) and isinstance(comp.get("analysis_result"), dict) else {}
+    sid = str(
+        (comp.get("selected_skill") if isinstance(comp, dict) else "")
+        or analysis_result.get("recommended_variant") or analysis_result.get("recommended_core_skill")
+        or "bad_draft"
+    )
+    if sid not in SKILLS_DB:
+        sid = "bad_draft" if "bad_draft" in SKILLS_DB else ("open_only" if "open_only" in SKILLS_DB else next(iter(SKILLS_DB)))
+    skill = dict(SKILLS_DB[sid])
+    skill.setdefault("skill_id", sid)
+    u["current_skill"] = sid
+    u["daily_skill_id"] = sid
+    u["daily_skill_name"] = skill.get("name") or sid
+    u["daily_skill_status"] = "voluntary_extra"
+    u["current_action_context"] = "optional_after_close"
+    u["closed_day_additional_active"] = 0
+    set_legacy_stage(u, "closed_day_voluntary_step")
+    set_current_state(u, STATE_PAUSED, close_action=False)
+    await save_user(u, DB_PATH)
+    await log_event(
+        u["user_id"], "day_completed", "additional_situation_step_opened",
+        {"skill_id": sid, "day_stays_closed": True}, DB_PATH, SHEETS_WEBHOOK_URL,
+    )
+    await answer_with_keyboard(
+        m, u,
+        "Разбор новой ситуации готов. Проверим вывод одним действием; основной день останется закрытым.\n\n"
+        + build_current_skill_text(skill, u=u),
+        kb_closed_day_extra_step, "closed_day_voluntary_step",
+    )
+
+
 async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low: str) -> bool:
     # Slash commands are explicit navigation/debug intents; closed-day fallback must not swallow them.
     if (text or "").startswith("/"):
         return False
     if not day_closed_today(u):
+        return False
+    if int(u.get("closed_day_additional_active") or 0) == 1 and str(u.get("stage") or "") in {
+        "await_problem_text", "awaiting_barrier_choice", "analysis_need_more",
+        "confirm_analysis", "analysis_details", "working_map", "social_support_await",
+        "misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await",
+    }:
+        # The daily session stays closed, but the new situation must finish its own route.
         return False
     if u.get("stage") == "personal_model_correction":
         if not closed_day_substantive_message(text):
@@ -8660,7 +8924,10 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         set_legacy_stage(u, "day_core_stop")
         await save_user(u, DB_PATH)
         await answer_with_keyboard(
-            m, u, f"Исправил вывод: {correction}\n\nИстория попыток при этом сохранена.",
+            m, u,
+            "Уточнение сохранено, а не заменило всю карту:\n"
+            f"— {correction}\n\n"
+            "Результаты попыток и остальные выводы сохранены. Теперь карта будет учитывать твою формулировку.",
             kb_completed_day_open, "day_core_stop",
         )
         return True
@@ -8754,11 +9021,16 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         set_legacy_stage(u, "personal_model_correction")
         await save_user(u, DB_PATH)
         await answer_with_keyboard(
-            m, u, "Напиши одной короткой фразой, что я понял неверно или как сформулировать точнее.",
+            m, u,
+            "Напиши одной короткой фразой, что именно исправить. Например:\n"
+            "— главный стопор — страх ошибки\n"
+            "— помог плохой черновик\n"
+            "— телефон не помог\n\n"
+            "Я изменю этот пункт, а не заменю всю карту одной фразой.",
             kb_completed_day_open, "personal_model_correction",
         )
         return True
-    if text == "📚 Что посмотреть / почитать":
+    if text in {"📚 Что посмотреть / почитать", "📚 Материал по моей ситуации"}:
         sid = current_skill_for_action(u) or current_skill_id(u)
         profile = await get_user_profile(u["user_id"], DB_PATH)
         barrier = str(profile.get("last_not_completed_reason") or "")
@@ -8812,15 +9084,25 @@ def render_prelaunch_full_map(u: Dict[str, Any], profile: Dict[str, Any], skill_
     model = profile.get("personal_working_model") if isinstance(profile.get("personal_working_model"), dict) else {}
     development = profile.get("development_map") if isinstance(profile.get("development_map"), dict) else {}
     attempts = max(int(model.get("evidence_count") or 0), len(user_skill_attempts(u)))
-    barrier = _top_signal(model.get("recurring_barriers"), public_enum_text(profile.get("main_pattern") or "барьер уточняется"))
-    helped = _top_signal(model.get("helpful_interventions"), "пока проверяем")
-    failed = _top_signal(model.get("unhelpful_interventions"), "пока нет устойчивого отрицательного сигнала")
+    barrier = _top_specific_signal(model.get("recurring_barriers"), "") or _first_specific_signal([
+        profile.get("main_hypothesis"), profile.get("last_not_completed_reason"),
+        profile.get("avoidance_trigger"), profile.get("main_pattern"),
+    ], "вход в важную задачу становится слишком дорогим")
+    helped = _top_specific_signal(model.get("helpful_interventions"), "") or _first_specific_signal([
+        profile.get("last_successful_skill"), profile.get("best_skill"),
+    ], "пока нет подтверждённого способа")
+    failed = _top_specific_signal(model.get("unhelpful_interventions"), "") or _first_specific_signal([
+        profile.get("failed_skill"), profile.get("worst_skill"),
+    ], "пока нет устойчивого отрицательного сигнала")
     start = "есть первый сигнал" if profile.get("last_skill_completed") else "ещё проверяем"
     stay = "продолжение подтверждено" if profile.get("last_continued_after_skill") is True else "продолжение пока не подтверждено"
     returned = "возврат наблюдался" if int(profile.get("return_count") or u.get("return_count") or 0) else "данных о возврате мало"
     unknown = [str(x) for x in development.get("checks") or []][:2]
     unknown_text = "\n".join(f"— {public_enum_text(x)}" for x in unknown) or "— повторится ли эффект;\n— проблема больше в START или STAY."
-    next_test = _skill_label(str(profile.get("next_skill_hint") or current_skill_for_action(u) or "open_only"))
+    next_test = _skill_label(str(
+        profile.get("next_skill_hint") or profile.get("recommended_variant")
+        or profile.get("last_successful_skill") or current_skill_for_action(u) or "open_only"
+    ))
     confidence = "низкая" if attempts < 2 else "средняя" if attempts < 4 else "высокая"
     return (
         "🧭 Твоя рабочая карта\n\n"
@@ -8837,6 +9119,37 @@ def render_prelaunch_full_map(u: Dict[str, Any], profile: Dict[str, Any], skill_
 def _top_signal(value: Any, fallback: str) -> str:
     values = dict(value or {}) if isinstance(value, dict) else {}
     return public_enum_text(max(values, key=lambda key: (int(values[key] or 0), str(key)))) if values else fallback
+
+
+def _is_placeholder_signal(value: Any) -> bool:
+    low = " ".join(str(value or "").lower().replace("_", " ").split())
+    return not low or low in {"unknown", "none", "general"} or any(token in low for token in (
+        "барьер уточняется", "барьер пока уточняется", "данных пока мало",
+        "текущая задача", "полезный способ пока проверяем", "пока проверяем",
+    ))
+
+
+def _specific_signals(values: List[Any], *, limit: int) -> List[str]:
+    result: List[str] = []
+    for raw in values:
+        value = public_enum_text(str(raw or "")).strip()
+        if _is_placeholder_signal(value) or value in result:
+            continue
+        result.append(value)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _first_specific_signal(values: List[Any], fallback: str) -> str:
+    signals = _specific_signals(values, limit=1)
+    return signals[0] if signals else fallback
+
+
+def _top_specific_signal(value: Any, fallback: str) -> str:
+    values = dict(value or {}) if isinstance(value, dict) else {}
+    ranked = sorted(values, key=lambda key: (int(values[key] or 0), str(key)), reverse=True)
+    return _first_specific_signal(ranked, fallback)
 
 
 def day1_profile_card_text(u: Dict[str, Any], profile: Dict[str, Any], attempts: int) -> str:
@@ -9205,7 +9518,7 @@ async def build_admin_stats_text(db_path: str) -> str:
         f"Дошли до day3: {sum(1 for u in users_rows if int(u.get('day') or 0) >= 3)}",
         f"Offer shown: {event_counts['offer_shown']}",
         f"€20 clicks: {event_counts['payment_click_20']}",
-        f"€14.98 clicks: {event_counts['payment_click_month_1498']}",
+        f"Subscription clicks: {event_counts['payment_click_month_1498']}",
         f"Подумаю: {event_counts['payment_declined_soft']}",
         f"Crisis clicked: {event_counts['crisis_clicked']}",
         "",
@@ -10561,17 +10874,27 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
     if not isinstance(comp, dict):
         comp = {}
     correction = clamp_str(" ".join(correction.split()), 400)
-    comp["short_conclusion"] = correction
+    previous = str(comp.get("short_conclusion") or "").strip()
     comp["hypothesis"] = correction
     comp["user_correction"] = correction
+    comp["specific_pattern"] = correction
     summary = comp.get("input_signal_summary") if isinstance(comp.get("input_signal_summary"), dict) else {}
     summary["specific_pattern"] = correction
     comp["input_signal_summary"] = summary
+    comp["short_conclusion"] = (
+        f"{previous}\n\nУточнение пользователя:\n— {correction}"
+        if previous and correction.lower() not in previous.lower() else (previous or correction)
+    )
     comp["analysis_id"] = comp.get("analysis_id") or f"analysis_{uuid.uuid4().hex[:12]}"
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     set_legacy_stage(u, "confirm_analysis")
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, f"Исправленный вывод:\n{correction}", kb_analysis_confirm, "confirm_analysis")
+    await answer_with_keyboard(
+        m, u,
+        "Уточнил один пункт, не стирая остальное заключение:\n"
+        f"— {correction}\n\nЭто теперь точнее?",
+        kb_analysis_confirm, "confirm_analysis",
+    )
 
 
 def raw_active_flow_type(u: Dict[str, Any]) -> str:
@@ -11430,6 +11753,13 @@ async def main_flow(m: Message):
         mark_current_skill_status(u, "completed")
         gamify_apply(u, 2, "simplified_skill_done")
         sid = current_skill_id(u) or current_skill_for_action(u) or u.get("daily_skill_id") or DOWNSCALE_PRIMARY_SKILL
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        await record_return_after_slip_action_event_if_needed(u, "simplified_skill_done_recovery")
+        returned_after_disruption = await record_return_after_disruption_if_needed(
+            u, profile, "simplified_skill_done_recovery",
+        )
+        if returned_after_disruption:
+            await save_user(u, DB_PATH)
         await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "simplified_skill_done_recovery", "stage": raw_stage})
         await record_profile_signal(u["user_id"], "training", {
             "last_completed_skill": sid,
@@ -12393,10 +12723,12 @@ async def main_flow(m: Message):
             return
         if is_timer_too_hard(text):
             await log_event(u["user_id"], "training", "too_hard_even_timer", {"text": text[:120]}, DB_PATH, SHEETS_WEBHOOK_URL)
+            await bot_record_action_event(u, "too_hard_reported", metadata={"source": "timer_too_hard"})
             await m.answer(trainer_failed_response(u.get("trainer_key") or "marsha"))
             await send_downscale(m, u, "timer_too_hard")
             return
         if is_too_hard(text):
+            await bot_record_action_event(u, "too_hard_reported", metadata={"source": "action_loop"})
             await m.answer(trainer_failed_response(u.get("trainer_key") or "marsha"))
             await send_downscale(m, u, "too_hard_text")
             return
@@ -12793,6 +13125,9 @@ async def main_flow(m: Message):
     if u.get("stage") == "working_map":
         if text == "➡️ Переходим к первому навыку" or "первому навыку" in low or "давай действие" in low:
             await log_event(u["user_id"], "analysis", "analysis_action_started", {"source": "working_map"}, DB_PATH, SHEETS_WEBHOOK_URL)
+            if int(u.get("closed_day_additional_active") or 0) == 1:
+                await open_closed_day_analysis_step(m, u)
+                return
             set_legacy_stage(u, "waiting_next_day")
             ensure_first_start_date(u)
             await save_user(u, DB_PATH)
@@ -12819,6 +13154,9 @@ async def main_flow(m: Message):
         low = text.lower()
         if "давай действие" in low or text == "💪 Давай действие":
             await log_event(u["user_id"], "analysis", "analysis_action_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+            if int(u.get("closed_day_additional_active") or 0) == 1:
+                await open_closed_day_analysis_step(m, u)
+                return
             profile = await get_user_profile(u["user_id"], DB_PATH)
             if not profile.get("social_support_prompt_shown"):
                 set_legacy_stage(u, "social_support_await")
@@ -13754,6 +14092,13 @@ async def main_flow(m: Message):
         mark_current_skill_status(u, "completed")
         gamify_apply(u, 2, "simplified_skill_done")
         sid = current_skill_id(u) or current_skill_for_action(u) or u.get("daily_skill_id") or DOWNSCALE_PRIMARY_SKILL
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        await record_return_after_slip_action_event_if_needed(u, "simplified_skill_done_recovery")
+        returned_after_disruption = await record_return_after_disruption_if_needed(
+            u, profile, "simplified_skill_done_recovery",
+        )
+        if returned_after_disruption:
+            await save_user(u, DB_PATH)
         await bot_record_action_event(u, "attempt_completed_self_reported", skill_id=sid, metadata={"source": "simplified_skill_done_recovery", "stage": raw_stage})
         await record_profile_signal(u["user_id"], "training", {
             "last_completed_skill": sid,
@@ -14569,11 +14914,35 @@ async def on_offer_callbacks(c: CallbackQuery):
         await c.answer()
         return
 
+    if data == OFFER_CALLBACKS["conclusion_full"]:
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        summary = build_profile_map_summary(u, profile)
+        await log_event(uid, "offer", "offer_full_conclusion_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(
+            c.message, u, trainer_wrap(u, offer_detailed_conclusion_text(u, summary, profile), "map"),
+            offer_variant_inline_keyboard(uid), "offer",
+        )
+        await c.answer()
+        return
+
+    if data == OFFER_CALLBACKS["next_plan"]:
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        summary = build_profile_map_summary(u, profile)
+        await log_event(uid, "offer", "offer_next_plan_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(
+            c.message, u, trainer_wrap(u, offer_next_plan_text(summary, profile), "map"),
+            offer_variant_inline_keyboard(uid), "offer",
+        )
+        await c.answer()
+        return
+
     if data in {OFFER_CALLBACKS["back"], "offer_back"}:
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         summary = build_profile_map_summary(u, profile)
-        await answer_with_inline_screen(c.message, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
         await c.answer()
         return
 
@@ -14655,7 +15024,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     profile = await get_user_profile(uid, DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
     summary = build_profile_map_summary(u, profile)
-    await answer_with_inline_screen(c.message, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
+    await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
 
 
 @router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"yes", "no", "noop"})
@@ -14966,6 +15335,7 @@ async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply
 MAX_PROACTIVE_PER_DAY = 3  # spec §4.4
 MAX_INACTIVITY_REMINDERS_PER_DAY = 1  # spec §4.4
 _INACTIVITY_HOURS = 6  # spec §4.2
+PROACTIVE_ACTIVITY_COOLDOWN_HOURS = 2
 MORNING_REMINDER_WINDOW = (8, 0, 9, 0)
 EVENING_REMINDER_WINDOW = (20, 0, 21, 0)
 
@@ -14982,6 +15352,11 @@ def _increment_proactive_count(u: Dict[str, Any], today: str) -> None:
     current = _proactive_count_today(u, today)
     u["proactive_count_today"] = current + 1
     u["proactive_count_date"] = today
+
+
+def _proactive_limit_reached(u: Dict[str, Any], today: str) -> bool:
+    """One global cap across morning, evening, inactivity and overload messages."""
+    return _proactive_count_today(u, today) >= MAX_PROACTIVE_PER_DAY
 
 
 def _user_no_reminders_today(u: Dict[str, Any], today: str) -> bool:
@@ -15011,6 +15386,12 @@ async def background_checkins(bot: Bot):
                 now_local = local_now_for_user(u)
                 today = now_local.date().isoformat()
                 if _user_no_reminders_today(u, today):
+                    continue
+                if _proactive_limit_reached(u, today):
+                    continue
+                recent_activity_hours = hours_since_last_activity(u)
+                if recent_activity_hours is not None and recent_activity_hours < PROACTIVE_ACTIVITY_COOLDOWN_HOURS:
+                    # Do not interrupt someone who has just used the bot, even if a clock window opened.
                     continue
                 is_closed = closed_day_status(u)
                 closed_today = is_closed and closed_on_local_date(u, today)
@@ -15086,6 +15467,7 @@ async def background_checkins(bot: Bot):
                     continue
                 variant_id, text, keyboard = choose_variant(u)
                 mark_reactivation_sent(u, variant_id)
+                _increment_proactive_count(u, today)
                 await save_user(u, DB_PATH)
                 await log_event(u["user_id"], "reactivation", "reactivation_sent", {
                     "user_id": u.get("user_id"),

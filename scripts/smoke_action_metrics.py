@@ -124,8 +124,19 @@ async def main() -> None:
             assert flow_metrics["today"]["micro_approaches"] == 0
 
             await send(991, "✅ Сделал")
+            await send(991, "Да")
+            await send(991, "Помогло")
+            await send(991, "Продолжил задачу")
             flow_metrics = await get_action_metrics(991, db_path, day_id=flow_day)
-            assert flow_metrics["today"]["returns_after_slip"] == 1
+            current = await bot.get_user(991, db_path)
+            assert flow_metrics["today"]["returns_after_slip"] == 1, (
+                flow_metrics,
+                current.get("stage"),
+                current.get("pending_return_after_disruption"),
+                current.get("pending_return_reason"),
+                current.get("pending_return_date"),
+                bot.local_date_for_user(current),
+            )
             assert flow_metrics["today"]["micro_approaches"] == 1
 
             hard_user = default_user(992)
@@ -134,9 +145,11 @@ async def main() -> None:
             hard_user["current_day_id"] = hard_day
             await save_user(hard_user, db_path)
             await send(992, "🟡 Застрял / не вышло")
+            hard_after_stuck = await bot.get_user(992, db_path)
             await send(992, "😣 Слишком сложно")
             hard_metrics = await get_action_metrics(992, db_path, day_id=hard_day)
-            assert hard_metrics["today"]["too_hard"] == 1
+            hard_current = await bot.get_user(992, db_path)
+            assert hard_metrics["today"]["too_hard"] == 1, (hard_metrics, hard_after_stuck.get("stage"), hard_current.get("stage"))
             assert hard_metrics["today"]["micro_approaches"] == 0
 
             await record_action_event(992, db_path, "skill_skipped", day_id=hard_day, skill_id="open_only")

@@ -106,7 +106,7 @@ async def main() -> None:
             assert profile.get("trainer_switch_history")
 
             u, map_text = await send(uid, "🧭 Моя карта")
-            assert "Коротко по карте сегодня" in map_text
+            assert "Карта дня" in map_text
             assert profile.get("trainer_current_mode") == "beck"
 
             u, _ = await send(uid, "🎭 Сменить тренера")
