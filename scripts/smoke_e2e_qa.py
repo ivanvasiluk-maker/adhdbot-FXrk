@@ -130,10 +130,15 @@ async def main() -> None:
             user = await get_user(uid, db_path)
             consumed = await bot.start_safety_interceptor(crisis_msg, user, crisis_msg.text, "qa_e2e", explicit=False)
             user = await get_user(uid, db_path)
-            assert consumed is False
-            assert bot.safety_mode(user) == "none"
-            assert not crisis_msg.answers
-            report.append("13-14. legacy emergency safety flow suppressed")
+            assert consumed is True
+            assert bot.safety_mode(user) == "triage"
+            assert crisis_msg.answers
+            report.append("13-14. safety interceptor took priority over the product flow")
+
+            # Continue the non-safety QA route from a clean synthetic state.
+            user["safety_mode"] = "none"
+            user["stage"] = "training"
+            await save_user(user, db_path)
 
             await bot.mark_day_closed(user, "qa_e2e_manual_close")
             user = await get_user(uid, db_path)

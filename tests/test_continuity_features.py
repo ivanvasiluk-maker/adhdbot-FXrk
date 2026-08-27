@@ -32,7 +32,7 @@ class PersonalWorkingModelTests(unittest.TestCase):
 class ContentAndClosureTests(unittest.TestCase):
     def test_no_content_never_invents_url(self):
         text = render_content_suggestion(ContentRegistry().select(barrier_type="anxiety"))
-        self.assertIn("нет подходящего проверенного материала", text)
+        self.assertIn("закрепить сегодняшний навык", text)
         self.assertNotIn("http", text)
 
     def test_only_reviewed_content_is_rankable(self):
@@ -46,6 +46,13 @@ class ContentAndClosureTests(unittest.TestCase):
         text = render_content_suggestion(selected, reason="сегодня порог входа был слишком высоким")
         self.assertIn("первый наблюдаемый контакт", text)
         self.assertNotIn("http", text)
+
+    def test_real_material_matches_fear_of_error_and_distraction(self):
+        perfectionism = CONTENT_REGISTRY.select(barrier_type="страшно ошибиться и стыдно")
+        distraction = CONTENT_REGISTRY.select(barrier_type="ушёл в телефон и YouTube")
+        self.assertEqual(perfectionism.content_id, "cci_perfectionism")
+        self.assertEqual(distraction.content_id, "cci_procrastination")
+        self.assertIn("cci.health.wa.gov.au", render_content_suggestion(perfectionism))
 
     def test_closure_and_return_keep_interaction_open(self):
         closure = render_session_closure("помогло открыть файл")

@@ -83,11 +83,14 @@ def render_working_model(model: Mapping[str, Any]) -> str:
     barrier = _top(model.get("recurring_barriers"), "барьер пока уточняется")
     helped = _top(model.get("helpful_interventions"), "полезный способ пока проверяем")
     unhelpful = _top(model.get("unhelpful_interventions"), "пока нет устойчиво бесполезного способа")
+    correction = " ".join(str(model.get("explicit_user_correction") or "").split())
+    correction_text = f"\nТвоё уточнение: {correction}.\n" if correction else ""
     return (
         "Вот что я пока понял о тебе.\n\n"
         f"{prefix}: чаще встречается «{barrier}».\n"
         f"Помогало: {helped}.\n"
         f"Пока не помогало: {unhelpful}.\n\n"
+        f"{correction_text}"
         "Это рабочая версия, а не диагноз: её можно исправить следующими результатами."
     )
 

@@ -61,8 +61,9 @@ class PostActionFeedbackTests(unittest.TestCase):
         self.assertEqual(labels, [
             "🎯 Разобрать ещё одну ситуацию", "⚡ Дать короткий навык",
             "🧠 Что я сегодня понял", "✏️ Исправить вывод",
-            "📚 Что посмотреть / почитать", "🌙 На сегодня хватит",
+            "🌙 На сегодня хватит",
         ])
+        self.assertNotIn("📚 Материал по моей ситуации", labels)
 
 
 class NeverDeadEndIntegrationTests(unittest.IsolatedAsyncioTestCase):

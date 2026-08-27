@@ -37,7 +37,7 @@
 26. `/testmode_on` работает для админа.
 27. `/set_day 3` / `/force_next_day` работают только для ADMIN.
 28. `/show_offer` показывает Day3 offer только для ADMIN.
-29. Day3 offer показывает `€14.98`.
+29. Day3 offer показывает единую цену `€4.99/мес` из `BASE_OFFER_EUR`.
 30. Day3 offer продаёт персональную систему / рабочую карту действия, не “бота на месяц”.
 31. Payment click logs event.
 32. `/sync_sheets` работает.
@@ -67,8 +67,8 @@
 15. `/test_access <TEST_CHEAT_CODE>` или plain cheat code.
 16. `/set_day 3`.
 17. `/show_offer`.
-18. Проверить offer `€14.98`.
-19. Кликнуть `💳 Продолжить за €14.98`.
+18. Проверить offer `€4.99/мес`.
+19. Кликнуть `💳 Оформить за €4.99`.
 20. Проверить событие в SQLite.
 21. `/sync_sheets`.
 22. Проверить строку в Google Sheets.

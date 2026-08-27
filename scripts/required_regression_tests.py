@@ -587,8 +587,11 @@ def test_offer_text_and_map_are_specific_without_curator_button():
         "_skill_map": {"skills": [{"skill_id": "bad_draft", "status": "confirmed"}]},
     })
     assert "🧭 Твоя рабочая карта" in map_text
-    assert "Что чаще всего мешает начать:" in map_text
-    assert "Что уже помогало:" in map_text
+    assert "Что ты описал — это уже видно:" in map_text
+    assert "Что мы пока предполагаем:" in map_text
+    assert "Что уже проверили:" in map_text
+    assert "Что проверим следующим:" in map_text
+    assert "Что надо развивать:" in map_text
     assert "Твоя ближайшая связка:" in map_text
     assert "Когда сорвался:" in map_text
 

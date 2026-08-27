@@ -120,7 +120,7 @@ async def main() -> None:
             assert "Я опираюсь на твои слова" in details
 
             u, changed, _ = await send(uid, "✅ Да, похоже")
-            assert "Минимальный шаг" in changed or "возвращение контроля" in changed
+            assert "Минимальный шаг" in changed or "микро-шаг" in changed or "возвращение контроля" in changed, changed
 
             uid2 = 9302
             await seed_user(uid2, stage="stuck_reason_text")
@@ -138,7 +138,7 @@ async def main() -> None:
             assert "самокритика" in self_attack
             assert "Минимальный физический шаг" in self_attack
             u3, calm, _ = await send(uid3, "✅ Да, похоже")
-            assert "Минимальный шаг" in calm or "возвращение контроля" in calm
+            assert "Минимальный шаг" in calm or "микро-шаг" in calm or "возвращение контроля" in calm, calm
 
             uid4 = 9304
             await seed_user(uid4, stage="stuck_reason_text")
@@ -158,8 +158,8 @@ async def main() -> None:
             u6, _, _ = await send(uid6, "залип в новости")
             u6, changed_from_validation, _ = await send(uid6, "🔄 Сменить навык")
             assert "Что в нём не подходит" not in changed_from_validation
-            assert "Минимальный шаг" in changed_from_validation
-            assert u6["stage"] == "downscale_action"
+            assert "Минимальный шаг" in changed_from_validation or "микро-шаг" in changed_from_validation
+            assert u6["stage"] == "stuck_micro_action"
 
             uid5 = 9305
             await seed_user(uid5, stage="stuck_reason_text")

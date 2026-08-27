@@ -64,7 +64,17 @@ async def main() -> None:
         analysis_result.get("first_check") or "",
         analysis_result.get("recommended_skill_reason") or "",
     )
-    for marker in ("Короткое заключение", "Главный узел сейчас", "Ресурс, который уже есть", "Что проверим первым", "Почему выбран этот навык"):
+    for marker in (
+        "Короткое заключение",
+        "Что вижу сейчас",
+        "На что можно опереться",
+        "Что будем делать",
+        "этот навык выбран потому",
+        "Что надо развивать",
+        "START:",
+        "STAY:",
+        "RETURN:",
+    ):
         assert marker in conclusion_text, conclusion_text
     assert "1. Что произошло" not in conclusion_text, conclusion_text
 

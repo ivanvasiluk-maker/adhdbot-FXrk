@@ -1,10 +1,12 @@
 import inspect
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import bot
 import flows
-from db import default_user
+from db import default_user, get_user, init_db, migrate_db, save_user
 
 
 class FakeMessage:
@@ -17,6 +19,21 @@ class FakeMessage:
 
 
 class ReleaseStabilizationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_return_context_survives_message_reload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "bot.db")
+            await init_db(db_path)
+            await migrate_db(db_path)
+            user = default_user(100)
+            bot.mark_pending_return_after_disruption(user, "stuck_phone")
+            await save_user(user, db_path)
+
+            reloaded = await get_user(100, db_path)
+
+        self.assertEqual(reloaded["pending_return_after_disruption"], 1)
+        self.assertEqual(reloaded["pending_return_reason"], "stuck_phone")
+        self.assertTrue(reloaded["pending_return_date"])
+
     def test_payment_urls_are_explicit_https_and_never_placeholders(self):
         self.assertFalse(bot.is_ready_payment_url(""))
         self.assertFalse(bot.is_ready_payment_url("https://your-payment-link"))

@@ -95,7 +95,10 @@ async def main() -> None:
                 assert any(marker in joined(repeat_msg) for marker in (
                     "Это следующий шаг, не повтор старта.",
                     "Даём другой вход, чтобы не крутить один и тот же навык.",
-                ))
+                    "🧩 Навык дня — для твоей ситуации:",
+                    "🧩 Навык:",
+                    "Что будем делать",
+                )), joined(repeat_msg)
                 assert "🌱 Новый день" not in joined(repeat_msg)
                 assert "Вчера мы увидели" not in joined(repeat_msg)
             assert await attempt_count_for_day(day_id, bot.DB_PATH) == 3
@@ -130,8 +133,7 @@ async def main() -> None:
             assert "🧩 Навык:" not in force_msg.answers[-2]
             assert "🌱 Новый день" not in force_msg.answers[-1]
             assert "Вчера мы увидели" not in force_msg.answers[-1]
-            assert "🧩 Навык:" in force_msg.answers[-1]
-            assert "🧩 Навык:" in force_msg.answers[-1]
+            assert "🧩 Навык дня — для твоей ситуации:" in force_msg.answers[-1]
             assert "Минимум:" in force_msg.answers[-1]
             assert "📚 Мини-урок" not in force_msg.answers[-1]
             assert user["current_day_id"] != day_id

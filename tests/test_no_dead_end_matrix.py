@@ -52,8 +52,10 @@ class NeverDeadEndAcceptanceTests(unittest.TestCase):
     def test_09_reviewed_material_is_available(self):
         self.assertIsNotNone(CONTENT_REGISTRY.select(barrier_type="too_hard"))
 
-    def test_10_missing_material_is_honest(self):
-        self.assertIn("нет подходящего", render_content_suggestion(ContentRegistry().select(barrier_type="missing")))
+    def test_10_missing_material_never_becomes_a_dead_end(self):
+        text = render_content_suggestion(ContentRegistry().select(barrier_type="missing"))
+        self.assertIn("закрепить сегодняшний навык", text)
+        self.assertNotIn("нет подходящего", text)
 
     def test_11_session_has_one_anchor(self):
         self.assertEqual(reflection(completed=True).render().count("Запомнить:"), 1)

@@ -25,7 +25,7 @@
 12. Check side skill appears max 1 per day and not after crisis/overload/downscale.
 13. Check body-doubling signal is saved to `profile_json` as `preferred_activation = body_doubling` when user mentions coworking / call / another person nearby.
 14. Enter `/test_access <TEST_CHEAT_CODE>` or the plain cheat code. Check `/set_day 3`, `/force_next_day`, `/show_offer` are available for the explicit test user, while payment/stat/sync admin commands still return “Команда недоступна.”
-15. Use `/force_next_day`, `/set_day 3`, and `/show_offer`. Check day jumps immediately open the selected day training (not the old “До завтра” keyboard) and offer shows `€14.98` and sells personal system / action map, not “bot for a month”.
+15. Use `/force_next_day`, `/set_day 3`, and `/show_offer`. Check day jumps immediately open the selected day training (not the old “До завтра” keyboard) and offer shows `€4.99/мес`, leads with the personal conclusion, and sells a START–STAY–RETURN system rather than “bot for a month”.
 16. Check Sheets logs events without full personal texts, voice transcripts, crisis content, confessions, or medical details.
 
 ## 18. Final decision
@@ -54,4 +54,4 @@
 - Есть test mode для прокликивания за один день.
 - Тренеры говорят разным языком.
 - Если сложно — бот уменьшает шаг, а не запускает новый разбор.
-- Day3 offer продаёт персональную систему / рабочую карту действия за `€14.98`, а не “бота на месяц”.
+- Day3 offer продаёт персональную систему / рабочую карту действия за `€4.99/мес`, а не “бота на месяц”.
