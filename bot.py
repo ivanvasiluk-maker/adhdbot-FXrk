@@ -3495,10 +3495,25 @@ def apply_engine_updates(u: Dict[str, Any], screen: Dict[str, Any]):
 
 
 CONTEXT_FALLBACK_TEXT = (
-    "Старый экран уже не актуален.\n"
-    "Покажу следующий доступный вариант или закроем день без повтора.\n\n"
+    "Этот экран уже не актуален. Покажу текущий доступный шаг.\n\n"
     "Что сейчас нужнее?"
 )
+
+# Reply keyboards survive deployments in Telegram clients.  Keep every label
+# for a global destination in one place so old and new screens route alike.
+MAP_BUTTON_ALIASES = {
+    "🧭 Моя карта", "🧭 Посмотреть карту", "Посмотреть карту",
+    "Открыть мою карту", "📖 Полная карта",
+}
+ACTION_BUTTON_ALIASES = {
+    "💪 Сделать следующий шаг", "💪 Дать следующий шаг", "💪 Давай действие",
+    "💪 Начать тренировку", "💪 Продолжить тренировку", "Дать короткий навык",
+    "⚡ Дать короткий навык",
+}
+CLOSE_DAY_BUTTON_ALIASES = {
+    "🌙 Закрыть день", "✅ Закрыть день", "🌙 Завершить",
+    "🌙 На сегодня хватит", "🌙 На сегодня достаточно",
+}
 
 kb_context_fallback = ReplyKeyboardMarkup(
     keyboard=[
@@ -3550,6 +3565,7 @@ def known_reply_button_texts() -> set[str]:
         "🌙 Завершить", "Продолжить", "📖 Полная карта", "✏️ Исправить вывод",
         "Назад", "Выбрать позже", "Посмотреть карту", "Что я сегодня понял", "Дать короткий навык",
     })
+    texts.update(MAP_BUTTON_ALIASES | ACTION_BUTTON_ALIASES | CLOSE_DAY_BUTTON_ALIASES)
     return texts
 
 
@@ -4546,9 +4562,13 @@ def build_user_post_action_reflection(
     sid = str(feedback.get("skill_id") or current_skill_for_action(u) or "")
     skill = SKILLS_DB.get(sid) or {}
     attempt = active_attempt(u)
+    snapshot = current_experiment_snapshot(u)
     known_pattern = str(profile.get("main_pattern") or profile.get("avoidance_pattern") or "")
     if "_" in known_pattern and " " not in known_pattern:
         known_pattern = ""
+    snapshot_action = snapshot.get("minimum") or snapshot.get("instruction")
+    if not snapshot.get("experiment_id"):
+        snapshot_action = attempt.get("current_step") or snapshot_action
     return build_post_action_reflection(ReflectionContext(
         situation=str(
             attempt.get("task_title") or u.get("current_task_title")
@@ -4559,9 +4579,9 @@ def build_user_post_action_reflection(
             or profile.get("main_hypothesis") or profile.get("last_not_completed_reason")
             or "вход в задачу становится слишком дорогим"
         )),
-        skill_title=str(skill.get("name") or feedback.get("skill_title") or sid or "короткий вход"),
+        skill_title=public_enum_text(skill.get("name") or feedback.get("skill_title") or snapshot.get("skill_id") or sid or "короткий вход"),
         tested_action=str(
-            attempt.get("current_step") or u.get("current_next_physical_step")
+            snapshot_action
             or skill.get("minimum") or skill.get("how") or "первый шаг"
         ),
         completed=bool(feedback.get("completed")), partial=bool(feedback.get("partial")),
@@ -4616,11 +4636,11 @@ async def persist_personal_working_model(
             conclusion = model_from_dict(conclusion_data)
             experiment_name = str(skill.get("name") or sid or "короткий вход")
             detail = {
-                "STRONG_SUCCESS": "После микрошага пользователь продолжил исходную задачу.",
-                "WEAK_SUCCESS": "Микрошаг немного помог, но продолжение задачи не подтверждено.",
-                "EXECUTED_ONLY": "Инструкция выполнена, но продолжение исходной задачи не наблюдалось.",
-                "FAILED": "Эксперимент не был выполнен полностью.",
-                "UNKNOWN": "Пока недостаточно данных о поведенческом результате.",
+                "STRONG_SUCCESS": "После упражнения ты продолжил исходную задачу.",
+                "WEAK_SUCCESS": "Шаг немного помог, но пока неясно, стало ли легче продолжить задачу.",
+                "EXECUTED_ONLY": "Шаг получилось сделать, но после него ты не продолжил исходную задачу.",
+                "FAILED": "Этот вариант пока не получилось проверить полностью.",
+                "UNKNOWN": "Пока недостаточно данных о том, помог ли этот шаг.",
             }[result]
             conclusion = update_next_untested_prediction(
                 conclusion, result, experiment_name=experiment_name, result_detail=detail,
@@ -6909,7 +6929,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
             "Сейчас можно изучить варианты или вернуться к тренировке.\n\n"
             + text
         )
-    await answer_with_inline_screen(m, u, text, offer_inline_keyboard(u["user_id"]), "offer")
+    await answer_with_inline_screen(m, u, text, offer_inline_keyboard(u["user_id"], bool(int(u.get("is_test_user") or 0))), "offer")
 
 
 def pop_offer_resume_flow(u: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -7356,6 +7376,10 @@ def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def test_payment_allowed(user_id: int, user_is_test_user: bool = False) -> bool:
+    return bool(PAYMENT_ACCEPT_ANY and (TEST_MODE or is_admin(user_id) or user_is_test_user))
+
+
 async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[str, Any]] = None) -> None:
     meta = dict(meta or {})
     meta.setdefault("days", 30)
@@ -7381,25 +7405,26 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
         )
 
 
-def offer_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    keyboard = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
+def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> InlineKeyboardMarkup:
+    keyboard = []
     if paid_plan_available():
-        keyboard.append([InlineKeyboardButton(text=f"🔵 SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
-    if ENABLE_GROUP_OFFER:
-        keyboard.append([InlineKeyboardButton(
-            text=f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL}/занятие",
-            callback_data=OFFER_CALLBACKS["group"],
-        )])
+        keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить со SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
     if ENABLE_HUMAN_OFFER:
         keyboard.append([InlineKeyboardButton(
-            text=f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
+            text=f"👤 Разобрать с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
             callback_data=OFFER_CALLBACKS["live"],
         )])
     keyboard.extend([
         [InlineKeyboardButton(text="📖 Подробное заключение", callback_data=OFFER_CALLBACKS["conclusion_full"])],
         [InlineKeyboardButton(text="🧭 Что делать дальше", callback_data=OFFER_CALLBACKS["next_plan"])],
     ])
-    if PAYMENT_ACCEPT_ANY:
+    if ENABLE_GROUP_OFFER:
+        keyboard.append([InlineKeyboardButton(
+            text=f"👥 Группа — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL}/занятие",
+            callback_data=OFFER_CALLBACKS["group"],
+        )])
+    keyboard.append([InlineKeyboardButton(text="🟢 Пока продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])])
+    if test_payment_allowed(user_id, user_is_test_user):
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
         keyboard.append([InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL)])
@@ -8421,7 +8446,11 @@ async def _start_normalized_experiment_for_day(u: Dict[str, Any], skill: Dict[st
     if context not in card.contexts:
         context = card.contexts[0] if card.contexts else "other"
     task = str(u.get("current_task_title") or u.get("today_target") or "текущая задача")[:280]
-    target = str(u.get("current_next_physical_step") or card.min_variant)[:280]
+    # Derive presentation data only from the new skill.  The user-level next
+    # step can still belong to the experiment which has just ended.
+    _, _, displayed_instruction, displayed_minimum = _skill_card_parts(skill, u)
+    target = str(displayed_minimum or card.min_variant)[:280]
+    instruction = str(displayed_instruction or card.standard_variant or target)[:500]
     try:
         progression = str(skill.get("progression_type") or "first")
         parent_id = None
@@ -8462,8 +8491,22 @@ async def _start_normalized_experiment_for_day(u: Dict[str, Any], skill: Dict[st
             "behavioral_experiment_id": experiment_id,
             "behavioral_experiment_revision": revision,
             "skill_version": f"{card.version}.0.0",
+            "skill_id": skill_id,
+            "instruction": instruction,
+            "instruction_variant": instruction,
+            "minimum_action": target,
+            "minimum": target,
         })
+        # A new experiment must not inherit presentation/result state from the
+        # experiment which preceded it.
+        u["active_experiment_id"] = experiment_id
+        u["current_next_physical_step"] = target
+        u["pending_feedback_json"] = None
+        u["pending_result"] = None
+        u["previous_experiment_instruction"] = None
+        u["previous_experiment_result"] = None
         u["active_attempt"] = attempt
+        u["current_experiment_snapshot"] = current_experiment_snapshot(u)
     except Exception as exc:
         await log_event(
             int(u["user_id"]), "personalization", "normalized_experiment_start_failed",
@@ -8673,10 +8716,12 @@ async def activate_new_calendar_day(u: Dict[str, Any], source: str, *, skill_id:
 
 
 DAY_CLOSED_ACTION_TEXT = (
-    "Основную тренировку на сегодня мы закончили. Но взаимодействие остаётся доступным."
+    "Основная тренировка на сегодня закончена.\n\n"
+    "Если хочется — можно посмотреть карту, разобрать новую ситуацию или сделать один "
+    "добровольный мини-шаг. День от этого не откроется заново."
 )
 DAY_ALREADY_CLOSED_TEXT = (
-    "Основную тренировку на сегодня мы закончили. Но если хочешь продолжить — можем."
+    DAY_CLOSED_ACTION_TEXT
 )
 
 
@@ -10809,14 +10854,41 @@ PUBLIC_ENUM_LABELS = {
     "overload": "перегруз",
     "too_many_options": "слишком много вариантов",
     "low_reward": "не вижу смысла",
+    "one_visible_step": "Один видимый шаг",
+    "visible_next_step": "Один видимый шаг",
+    "open_only": "Открыть без таймера",
+    "one_tab_focus": "Фокус в одной вкладке",
+    "return_after_slip": "Возврат после выпадения",
+    "bad_first_step": "Плохой черновик",
+    "phone_far_3min": "Телефон вне руки на 3 минуты",
+    "task_naming": "Назвать следующий шаг",
 }
 
 
 def public_enum_text(value: Any) -> str:
-    text = str(value or "")
+    raw = str(value or "").strip()
+    if raw in SKILL_LABELS:
+        return str(SKILL_LABELS[raw])
+    skill = SKILLS_DB.get(raw)
+    if isinstance(skill, dict):
+        label_value = skill.get("name") or skill.get("title") or skill.get("display_name")
+        if label_value:
+            return str(label_value)
+    text = raw
     for internal, public in PUBLIC_ENUM_LABELS.items():
         text = text.replace(internal, public)
     return text
+
+
+LOW_INFORMATION_CORRECTIONS = {
+    "все говно", "всё говно", "говно", "не знаю", "хз", "нет", "не то",
+    "всё не так", "все не так",
+}
+
+
+def conclusion_correction_is_actionable(value: str) -> bool:
+    text = " ".join(str(value or "").lower().split())
+    return len(text) >= 8 and text not in LOW_INFORMATION_CORRECTIONS
 
 
 async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: str) -> None:
@@ -10874,13 +10946,27 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
     if not isinstance(comp, dict):
         comp = {}
     correction = clamp_str(" ".join(correction.split()), 400)
+    if not conclusion_correction_is_actionable(correction):
+        set_legacy_stage(u, "awaiting_conclusion_correction")
+        await save_user(u, DB_PATH)
+        await m.answer(
+            "Понял: текущий вывод не попал.\n\n"
+            "Не буду записывать эту фразу в твою карту.\n"
+            "Что именно неверно?\n\nНапример:\n"
+            "— дело не в перегрузе, а в страхе ошибки\n"
+            "— этот навык мне вообще не помог\n"
+            "— я застреваю уже после старта"
+        )
+        return
     previous = str(comp.get("short_conclusion") or "").strip()
-    comp["hypothesis"] = correction
     comp["user_correction"] = correction
-    comp["specific_pattern"] = correction
+    notes = comp.get("user_notes") if isinstance(comp.get("user_notes"), list) else []
+    comp["user_notes"] = [*notes, correction][-20:]
     summary = comp.get("input_signal_summary") if isinstance(comp.get("input_signal_summary"), dict) else {}
-    summary["specific_pattern"] = correction
+    summary["user_correction"] = correction
     comp["input_signal_summary"] = summary
+    if "а не" in correction.lower() or "скорее" in correction.lower():
+        comp["hypothesis_status"] = "needs_recheck"
     comp["short_conclusion"] = (
         f"{previous}\n\nУточнение пользователя:\n— {correction}"
         if previous and correction.lower() not in previous.lower() else (previous or correction)
@@ -10930,13 +11016,13 @@ def procrastination_crisis_intent(text: str, u: Dict[str, Any]) -> str:
 
 
 def global_button_kind(text: str, low: str) -> str:
-    if text in {"🧭 Моя карта", "📖 Полная карта", "🧭 Посмотреть карту"} or "моя карта" in low or "посмотреть карту" in low or "полная карта" in low:
+    if text in MAP_BUTTON_ALIASES:
         return "map"
-    if text in {"💪 Давай действие", "🧭 Давай действие", "💪 Дать сегодняшний навык", "💪 Дать следующий шаг", "💪 Начать тренировку", "💪 Продолжить тренировку", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту", "💪 Сделать следующий шаг"} or "давай действие" in low or "дать сегодняшний навык" in low or "дать следующий шаг" in low or "начать тренировку" in low:
+    if text in ACTION_BUTTON_ALIASES or text in {"🧭 Давай действие", "💪 Дать сегодняшний навык", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
         return "action"
     if text in {"🌙 Хватит на сегодня", "🌙 На сегодня хватит"} or "хватит" in low:
         return "enough"
-    if text in {"🌙 Закрыть день", "✅ Закрыть день", "🌙 Завершить"} or "закрыть день" in low or low == "завершить":
+    if text in CLOSE_DAY_BUTTON_ALIASES:
         return "close_day"
     if text == "🌙 До завтра" or "до завтра" in low:
         return "tomorrow"
@@ -13991,7 +14077,7 @@ async def main_flow(m: Message):
             if pay_url:
                 await m.answer(f"{payment_intro}\n\nНажми кнопку ниже для оплаты.")
                 await m.answer(" ", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"💳 Продолжить за €{BASE_OFFER_EUR_LABEL}", url=pay_url)]]))
-                if PAYMENT_ACCEPT_ANY:
+                if test_payment_allowed(u["user_id"], bool(int(u.get("is_test_user") or 0))):
                     await answer_with_inline_screen(m, u, "Для теста: после любой успешной оплаты по ссылке нажми подтверждение ниже — я засчитаю её как правильную.", test_payment_confirm_keyboard(), "offer")
             else:
                 await log_event(u["user_id"], "offer", "payment_error", {"error_type": "payment_url_missing", "payment_click": "month_1498", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -14029,13 +14115,13 @@ async def main_flow(m: Message):
             profile = await get_user_profile(u["user_id"], DB_PATH)
             profile["_skill_map"] = await build_skill_map_data(u, profile)
             await log_event(u["user_id"], "offer", "profile_signals_opened", {"source": "offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await answer_with_inline_screen(m, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(u["user_id"]), "offer")
+            await answer_with_inline_screen(m, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(u["user_id"], bool(int(u.get("is_test_user") or 0))), "offer")
             return
         if text == "⬅️ Назад" or "назад" in low:
             profile = await get_user_profile(u["user_id"], DB_PATH)
             profile["_skill_map"] = await build_skill_map_data(u, profile)
             summary = build_profile_map_summary(u, profile)
-            await answer_with_inline_screen(m, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(u["user_id"]), "offer")
+            await answer_with_inline_screen(m, u, trainer_wrap(u, day3_conclusion_and_map_text(summary, profile), "offer"), offer_inline_keyboard(u["user_id"], bool(int(u.get("is_test_user") or 0))), "offer")
             return
         await show_context_fallback(m, u, "offer_invalid_button")
         return
@@ -14458,6 +14544,11 @@ def default_active_attempt(u: Dict[str, Any]) -> Dict[str, Any]:
         "effect_status": "unknown",
         "behavioral_experiment_id": None,
         "behavioral_experiment_revision": None,
+        "skill_id": None,
+        "instruction": None,
+        "instruction_variant": None,
+        "minimum_action": None,
+        "minimum": None,
         "skill_version": None,
         "selected_difficulty": 1,
         "progression_type": "first",
@@ -14491,6 +14582,19 @@ def active_attempt(u: Dict[str, Any]) -> Dict[str, Any]:
     merged["day_closed"] = bool(merged.get("day_closed") or day_closed_today(u))
     u["active_attempt"] = merged
     return merged
+
+
+def current_experiment_snapshot(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only presentation data owned by the currently active attempt."""
+    attempt = active_attempt(u) or {}
+    return {
+        "attempt_id": attempt.get("attempt_id"),
+        "experiment_id": attempt.get("behavioral_experiment_id") or u.get("active_experiment_id"),
+        "skill_id": attempt.get("skill_id") or attempt.get("current_skill_id") or current_skill_for_action(u),
+        "instruction": attempt.get("instruction") or attempt.get("instruction_variant") or "",
+        "minimum": attempt.get("minimum_action") or attempt.get("minimum") or "",
+        "state_revision": attempt.get("behavioral_experiment_revision") or attempt.get("screen_version"),
+    }
 
 
 def sync_active_attempt(
@@ -14942,7 +15046,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         summary = build_profile_map_summary(u, profile)
-        await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
         await c.answer()
         return
 
@@ -14958,12 +15062,12 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {OFFER_CALLBACKS["paid_test"], "confirm_test_payment"}:
-        if PAYMENT_ACCEPT_ANY:
+        if test_payment_allowed(uid, bool(int(u.get("is_test_user") or 0))):
             await grant_paid_access(u, "test_payment_confirm_button", {"accept_any_payment": True})
             if not await resume_after_offer_if_needed(c.message, u):
                 await send_full_mode_welcome(c.message, u)
         else:
-            await c.message.answer("Автоподтверждение оплаты выключено. Нужен PAYMENT_ACCEPT_ANY=1 или админская /mark_paid.")
+            await c.message.answer("Тестовое подтверждение оплаты недоступно для этого аккаунта.")
         await c.answer()
         return
 
@@ -15003,7 +15107,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         await log_event(uid, "offer", "profile_signals_opened", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid), "offer")
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
         await c.answer()
         return
 
@@ -15024,7 +15128,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     profile = await get_user_profile(uid, DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
     summary = build_profile_map_summary(u, profile)
-    await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid), "offer")
+    await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
 
 
 @router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"yes", "no", "noop"})
