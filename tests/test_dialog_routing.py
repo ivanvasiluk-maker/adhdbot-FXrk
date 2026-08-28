@@ -197,6 +197,10 @@ class DialogRoutingTests(unittest.IsolatedAsyncioTestCase):
             bot, "show_context_fallback", new=AsyncMock()
         ), patch.object(bot, "send_user_map", new=AsyncMock()), patch.object(
             bot, "close_day_from_global_button", new=AsyncMock()
+        ), patch.object(
+            bot, "get_user_profile", new=AsyncMock(return_value={})
+        ), patch.object(
+            bot, "handle_action_request", new=AsyncMock()
         ):
             await bot.main_flow(FakeMessage("Не могу начать отчёт и ухожу в телефон"))
             for label in buttons:

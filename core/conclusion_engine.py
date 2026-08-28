@@ -197,10 +197,15 @@ def apply_experiment(hypothesis: HypothesisState, prediction: PredictionState,
     for_evidence, against = list(hypothesis.evidence_for), list(hypothesis.evidence_against)
     supported, unsupported = hypothesis.supported_tests, hypothesis.unsupported_tests
     if result == "STRONG_SUCCESS":
-        for_evidence.append(f"После эксперимента «{_safe(experiment_name)}» наблюдаемый результат совпал с прогнозом: {_safe(prediction.observable_outcome)}.")
+        for_evidence.append(
+            f"Когда ты попробовал «{_safe(experiment_name)}», начать оказалось легче: "
+            "после упражнения ты продолжил исходную задачу."
+        )
         supported += 1
     elif result == "EXECUTED_ONLY":
-        against.append(f"В эксперименте «{_safe(experiment_name)}» действие выполнено, но прогнозируемое продолжение задачи не наблюдалось.")
+        against.append(
+            f"Шаг «{_safe(experiment_name)}» получилось сделать, но после него ты не продолжил исходную задачу."
+        )
         unsupported += 1
     # FAILED/UNKNOWN/WEAK_SUCCESS cannot establish that the mechanism is absent.
     status = hypothesis.status
@@ -273,6 +278,13 @@ def render_full_working_model(model: WorkingModelState, *, trainer_intro: str = 
              f"\nОсновная рабочая гипотеза:\n🟢 {primary.label}."]
     if primary.evidence_for:
         parts.append("\nЧто говорит в её пользу:\n" + "\n".join(f"— {x}" for x in primary.evidence_for))
+        if primary.supported_tests > 1:
+            parts.append(
+                f"\nЭтот эффект повторился {primary.supported_tests} раз, поэтому сейчас "
+                "это самый перспективный рабочий вход."
+            )
+        elif primary.supported_tests == 1:
+            parts.append("\nПока это только один хороший сигнал — проверим, повторится ли эффект.")
     parts.append("\nАльтернативные гипотезы:\n" + "\n".join(
         f"{STATUS_UI[h.status]}: {h.label}. " + ("Пока недостаточно данных." if h.untested else "Данные обновлены экспериментом.")
         for h in alternatives))
@@ -283,7 +295,7 @@ def render_full_working_model(model: WorkingModelState, *, trainer_intro: str = 
     parts.append("\nЧто пока неизвестно:\n" + "\n".join(f"— {x}" for x in unknown))
     if prediction:
         parts += [f"\n🔮 Если наша модель верна\n{prediction.prediction}",
-                  f"Наблюдаемый результат: {prediction.observable_outcome}"]
+                  f"Что проверим на практике: {_public_prediction(prediction.observable_outcome)}"]
     parts.append(f"\nСледующий эксперимент:\n{model.next_experiment or 'пока не выбран'}")
     return "\n".join(parts)
 
@@ -300,6 +312,14 @@ def _clean(items: Sequence[str]) -> list[str]:
 
 def _safe(value: str) -> str:
     return " ".join(str(value or "").split())[:500]
+
+
+def _public_prediction(value: str) -> str:
+    """Convert legacy research phrasing into direct second-person UI copy."""
+    text = _safe(value)
+    text = text.replace("пользователь продолжит", "ты продолжишь")
+    text = text.replace("Пользователь продолжит", "Ты продолжишь")
+    return text
 
 
 def _now() -> str:
