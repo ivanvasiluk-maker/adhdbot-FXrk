@@ -232,6 +232,145 @@ def select_skill(user_state: UserState) -> Dict[str, Any]:
 
 
 
+
+BEHAVIOR_ENGINE_ENTITIES = (
+    "user",
+    "situation",
+    "task",
+    "context",
+    "barrier",
+    "hypothesis",
+    "micro_skill",
+    "behavior_experiment",
+    "result",
+    "feedback",
+    "personal_model",
+    "next_recommendation",
+)
+
+EXPERIMENT_FEEDBACK_OPTIONS = {
+    "completion": ["done", "partially_done", "not_done"],
+    "difficulty": ["easy", "ok", "too_hard", "unclear", "no_energy", "no_time"],
+    "helpfulness": ["helped", "slightly_helped", "not_helped"],
+    "next_outcome": ["continued_task", "stopped_after_microstep", "felt_easier", "felt_more_anxious", "new_barrier"],
+}
+
+BARRIER_TO_MECHANISM = {
+    "task_too_big": "reduce_task_size",
+    "unclear_first_step": "clarify_first_step",
+    "fear_of_failure": "reduce_quality_threshold",
+    "perfectionism": "reduce_quality_threshold",
+    "low_energy": "restore_energy",
+    "anxiety": "lower_emotional_arousal",
+    "distractibility": "remove_distractions",
+    "too_many_decisions": "reduce_decisions",
+    "self_criticism": "self_validation",
+    "slip_recovery": "return_after_slip",
+}
+
+SKILL_ID_TO_BARRIER = {
+    "open_only": "task_too_big",
+    "open_without_timer": "task_too_big",
+    "task_naming": "unclear_first_step",
+    "visible_next_step": "unclear_first_step",
+    "ninety_sec_start": "task_too_big",
+    "bad_first_step": "perfectionism",
+    "one_tab_focus": "distractibility",
+    "phone_far_3min": "distractibility",
+    "restart_after_slip": "slip_recovery",
+    "check_the_facts_light": "fear_of_failure",
+    "self_criticism_to_instruction": "self_criticism",
+    "urge_surf_60": "distractibility",
+    "body_before_task": "low_energy",
+    "minimum_viable_day": "low_energy",
+    "body_doubling_plan": "external_support_needed",
+    "if_then_plan": "too_many_decisions",
+}
+
+
+def normalize_micro_skill(skill_id: str, skill: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a Behavior Engine skill record without mutating the legacy catalog."""
+    raw = dict(skill or {})
+    barrier = raw.get("barrier") or raw.get("primary_barrier") or SKILL_ID_TO_BARRIER.get(skill_id, raw.get("mechanism", "start_avoidance"))
+    mechanism = raw.get("behavioral_mechanism") or raw.get("mechanism") or BARRIER_TO_MECHANISM.get(str(barrier), "micro_start")
+    duration = raw.get("duration") or raw.get("duration_seconds") or "30-180s"
+    difficulty = raw.get("difficulty_level") or raw.get("difficulty") or (1 if str(duration).startswith(("30", "60")) else 2)
+    minimum = raw.get("minimum_action") or raw.get("minimum") or raw.get("micro") or "Сделать один видимый контакт с задачей."
+    return {
+        "id": skill_id,
+        "title": raw.get("title") or raw.get("name") or skill_id,
+        "short_description": raw.get("why_short") or raw.get("goal") or raw.get("explain") or "Микродействие для входа в задачу.",
+        "module": raw.get("module") or raw.get("track") or "procrastination",
+        "category": raw.get("category") or raw.get("variant") or "micro_start",
+        "behavioral_mechanism": mechanism,
+        "barrier": barrier,
+        "context": raw.get("context") or raw.get("context_tags") or ["any"],
+        "difficulty_level": int(difficulty) if str(difficulty).isdigit() else difficulty,
+        "duration": duration,
+        "steps": _unique_skill_steps(raw),
+        "minimum_success_criterion": _clean_skill_line(minimum),
+        "contraindications": raw.get("contraindications") or raw.get("limits") or [],
+        "simplify_options": raw.get("simplify_options") or raw.get("simpler") or ["Сделать только минимальный критерий."],
+        "intensify_options": raw.get("intensify_options") or raw.get("harder") or ["Продолжить ещё 1–3 минуты, если стало легче."],
+        "feedback_to_collect": raw.get("feedback_to_collect") or ["completion", "difficulty", "helpfulness", "next_outcome"],
+        "tags": raw.get("tags") or [str(barrier), str(mechanism)],
+        "source": raw.get("source") or "legacy_skiller_catalog",
+        "evidence_level": raw.get("evidence_level") or "expert_hypothesis",
+        "real_user_validation_status": raw.get("real_user_validation_status") or "needs_more_data",
+    }
+
+
+def build_behavior_experiment(user_state: UserState, skill_id: str, skill: Dict[str, Any]) -> Dict[str, Any]:
+    """Create the structured Context → Barrier → Intervention episode payload."""
+    normalized = normalize_micro_skill(skill_id, skill)
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "user_id": str(user_state.get("user_id") or user_state.get("telegram_id") or ""),
+        "module": normalized["module"],
+        "task_type": user_state.get("current_task_object") or user_state.get("task_type") or "unknown",
+        "task_text": _clamp_text(user_state.get("today_target") or user_state.get("current_task_title"), 300, ""),
+        "barrier": user_state.get("current_barrier") or normalized["barrier"],
+        "context": user_state.get("current_task_context") or "unknown",
+        "energy": user_state.get("energy"),
+        "stress": user_state.get("stress"),
+        "available_time_minutes": user_state.get("available_time_minutes"),
+        "skill_id": normalized["id"],
+        "mechanism": normalized["behavioral_mechanism"],
+        "difficulty_level": normalized["difficulty_level"],
+        "hypothesis": f"Проверим, поможет ли механизм {normalized['behavioral_mechanism']} с барьером {normalized['barrier']}.",
+        "minimum_success_criterion": normalized["minimum_success_criterion"],
+        "started": None,
+        "completed": None,
+        "helpfulness": None,
+        "difficulty": None,
+        "continued_after_skill": None,
+        "continuation_minutes": None,
+        "user_feedback": "",
+        "created_at": now,
+    }
+
+
+def build_evening_report_from_experiments(experiments: List[Dict[str, Any]]) -> str:
+    """Render a short non-judgmental evening report from structured episodes."""
+    items = [e for e in experiments or [] if isinstance(e, dict)]
+    if not items:
+        return "Сегодня данных мало. Завтра можно начать с одного эксперимента на 30 секунд."
+    helped = [e for e in items if e.get("helpfulness") in {"helped", "slightly_helped", 4, 5}]
+    hard = [e for e in items if e.get("difficulty") in {"too_hard", 4, 5} or e.get("completed") is False]
+    if helped:
+        best = helped[-1]
+        return (
+            f"Сегодня вы проверили {len(items)} эксперимент(а). "
+            f"Лучше всего сработал механизм «{best.get('mechanism', 'маленький вход')}». "
+            "Похоже, его стоит повторить в похожем контексте."
+        )
+    if hard:
+        return (
+            f"Сегодня {len(hard)} эксперимент(а) оказались слишком сложными. Это не провал. "
+            "Следующий шаг лучше уменьшить до 30 секунд или заменить механизм."
+        )
+    return f"Сегодня вы собрали данные по {len(items)} эксперимент(а). Завтра используем их для следующей рекомендации."
+
 def _target_header(target: str) -> str:
     target = (target or "").strip()
     if target == "__target_not_selected__":
@@ -247,6 +386,7 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
     skill_name = _clean_skill_line(skill.get("name", "Микро-шаг"))
     trainer_variants = skill.get("trainer_variants") or {}
     trainer_line = trainer_variants.get(trainer_key) or trainer_variants.get("marsha") or "Давай бережно: только маленький вход, без давления на результат."
+    experiment = build_behavior_experiment(user_state, str(skill.get("skill_id") or ""), skill)
     text = (
         f"{_trainer_header(user_state)} {trainer_line}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
@@ -263,10 +403,16 @@ def build_skill_card(user_state: UserState, skill: Dict[str, Any]) -> Screen:
             _event(
                 "skill_card_shown",
                 "training",
-                {"skill_id": skill.get("skill_id"), "trainer_key": trainer_key, "button_count": len(SKILL_CARD_BUTTONS)},
+                {
+                    "skill_id": skill.get("skill_id"),
+                    "trainer_key": trainer_key,
+                    "button_count": len(SKILL_CARD_BUTTONS),
+                    "experiment": experiment,
+                },
             )
         ],
         skill_id=skill.get("skill_id"),
+        experiment=experiment,
     )
 
 
