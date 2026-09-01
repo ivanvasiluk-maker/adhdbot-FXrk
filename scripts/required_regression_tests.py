@@ -138,9 +138,8 @@ def test_can_show_offer_strict_day_gate():
         "action_done_count": 3, "completed_experiments": 2, "successful_or_partial": 1,
         "personalized_insight_exists": True, "value_report_seen_at": "2026-08-01T00:00:00Z",
     }
-    assert bot.can_show_offer(u, profile) is True
-    profile["offer_seen_at"] = bot.dt.datetime.now(bot.dt.timezone.utc).isoformat()
     assert bot.can_show_offer(u, profile) is False
+    assert bot.scheduled_offer_due(u, profile) is False
 
 
 def test_set_day_3_alone_does_not_show_offer():
@@ -283,16 +282,19 @@ async def test_show_offer_force_enables_offer_prerequisites():
         fresh = await get_user(uid, bot.DB_PATH)
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh["stage"] == bot.OFFER_PREVIEW_STAGE
+        assert fresh["stage"] != bot.OFFER_PREVIEW_STAGE
         assert fresh["day"] == 1
-        assert fresh.get("offer_mode") == "preview"
+        assert not fresh.get("offer_mode")
         assert not profile.get("offer_shown")
         assert not profile.get("offer_seen_at")
         assert msg.answers
-        assert "Это можно посмотреть заранее" in "\n".join(msg.answers)
+        joined = "\n".join(msg.answers)
+        assert "beta-тест" in joined
+        assert "бесплат" in joined
+        assert "€" not in joined
 
 
-async def test_offer_preview_menu_callbacks_do_not_go_stale():
+async def test_stale_offer_callbacks_are_blocked_in_free_beta():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
         await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
@@ -312,30 +314,37 @@ async def test_offer_preview_menu_callbacks_do_not_go_stale():
         msg = FakeMessage(uid, "/show_offer")
         assert await bot.handle_user_command(msg, u, msg.text) is True
         fresh = await get_user(uid, bot.DB_PATH)
-        assert fresh["stage"] == bot.OFFER_PREVIEW_STAGE
-        assert fresh.get("previous_stage") == "training"
+        assert fresh["stage"] == "training"
 
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
-        assert "Этот шаг уже закрыт" not in "\n".join(live_cb.message.answers)
-        assert any("Потренировать навык с человеком" in answer for answer in live_cb.message.answers)
+        live_text = "\n".join(live_cb.message.answers)
+        assert "beta-тест" in live_text
+        assert "платёжные и коммерческие маршруты отключены" in live_text
 
         bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
-        await bot.on_offer_callbacks(bot_cb)
-        assert "Этот шаг уже закрыт" not in "\n".join(bot_cb.message.answers)
-        assert any("SKILLER Founding Member" in answer for answer in bot_cb.message.answers)
+        old_payment_url, old_payments_enabled = bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS
+        bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS = "https://buy.stripe.com/release-test", True
+        try:
+            await bot.on_offer_callbacks(bot_cb)
+        finally:
+            bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS = old_payment_url, old_payments_enabled
+        bot_text = "\n".join(bot_cb.message.answers)
+        assert "beta-тест" in bot_text
+        assert "Founding Member" not in bot_text
+        assert "€" not in bot_text
 
         later_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["continue_training"])
         await bot.on_offer_callbacks(later_cb)
         resumed = await get_user(uid, bot.DB_PATH)
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert resumed["stage"] == "training"
+        assert resumed["stage"] == "training_main"
         assert resumed.get("last_offer_action") == bot.OFFER_CALLBACKS["continue_training"]
         assert not profile.get("offer_shown")
 
 
-async def test_auto_offer_marks_once_but_manual_offer_stays_available():
+async def test_auto_and_manual_offers_are_suppressed_in_free_beta():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
         await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
@@ -353,7 +362,8 @@ async def test_auto_offer_marks_once_but_manual_offer_stays_available():
         auto_msg = FakeMessage(uid, "")
         await bot.show_day3_offer(auto_msg, u, "test_auto", mode="auto")
         user_after_auto = await get_user(uid, bot.DB_PATH)
-        assert user_after_auto.get("last_offer_shown_at")
+        assert not user_after_auto.get("last_offer_shown_at")
+        assert "бесплат" in "\n".join(auto_msg.answers)
 
         second_auto_msg = FakeMessage(uid, "")
         fresh = await get_user(uid, bot.DB_PATH)
@@ -363,11 +373,11 @@ async def test_auto_offer_marks_once_but_manual_offer_stays_available():
         assert await bot.handle_user_command(manual_msg, fresh, manual_msg.text) is True
         manual_user = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert manual_user.get("offer_mode") == "manual"
-        assert manual_msg.answers
+        assert not manual_user.get("offer_mode")
+        assert "бесплат" in "\n".join(manual_msg.answers)
 
 
-async def test_offer_request_form_sends_application_to_curator():
+async def test_stale_paid_request_form_is_blocked_in_free_beta():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
         await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
@@ -379,21 +389,12 @@ async def test_offer_request_form_sends_application_to_curator():
         request_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["request_live"])
         await bot.on_offer_callbacks(request_cb)
         opened = await get_user(uid, bot.DB_PATH)
-        assert opened["stage"] == "offer_request_form"
-        assert opened.get("pending_offer_request_format") == "Тренировка навыка с человеком"
-        assert "Как к тебе обращаться" in "\n".join(request_cb.message.answers)
-
-        form_msg = FakeMessage(uid, "Иван\\n@Ivan_Vasiliuk\\nivan.vasiluk@gmail.com\\nХочу разобрать прокрастинацию")
-        form_msg.bot = FakeTelegramBot()
-        await bot.main_flow(form_msg)
-        submitted = await get_user(uid, bot.DB_PATH)
-        sent_text = form_msg.bot.sent[0][1]
         bot.DB_PATH = old
-        assert submitted["stage"] == bot.OFFER_MENU_STAGE
-        assert "Заявка из offer" in sent_text
-        assert "ivan.vasiluk@gmail.com" in sent_text
-        assert "Хочу разобрать прокрастинацию" in sent_text
-        assert "Я отправил заявку Ивану" in "\n".join(form_msg.answers)
+        assert opened["stage"] == bot.OFFER_PREVIEW_STAGE
+        assert not opened.get("pending_offer_request_format")
+        joined = "\n".join(request_cb.message.answers)
+        assert "beta-тест" in joined
+        assert "коммерческие маршруты отключены" in joined
 
 
 async def test_day_intro_is_not_sent_twice():
@@ -424,9 +425,7 @@ def test_should_show_day3_offer_after_test_access():
         "action_done_count": 3, "completed_experiments": 2, "successful_or_partial": 1,
         "personalized_insight_exists": True, "value_report_seen_at": "2026-08-01T00:00:00Z",
     }
-    assert bot.should_show_day3_offer(u_test, 3), (
-        "Offer should auto-trigger for test users after /test_access (full_mode=0)"
-    )
+    assert not bot.should_show_day3_offer(u_test, 3)
 
     # After /simulate_payment full_mode is set to 1 — offer must be suppressed
     u_paid = dict(u_test)
@@ -550,11 +549,11 @@ def test_offer_gate_requires_attempts_and_respects_cooldown():
         "action_done_count": 3, "completed_experiments": 2, "successful_or_partial": 1,
         "personalized_insight_exists": True, "value_report_seen_at": "2026-08-01T00:00:00Z",
     })
-    assert bot.can_show_offer(u, profile)
+    assert not bot.can_show_offer(u, profile)
     profile["offer_seen_at"] = bot.dt.datetime.now(bot.dt.timezone.utc).isoformat()
     assert not bot.can_show_offer(u, profile)
     profile["offer_seen_at"] = (bot.dt.datetime.now(bot.dt.timezone.utc) - bot.dt.timedelta(days=8)).isoformat()
-    assert bot.can_show_offer(u, profile)
+    assert not bot.can_show_offer(u, profile)
     profile["offer_suppressed_until"] = (bot.dt.datetime.now(bot.dt.timezone.utc) + bot.dt.timedelta(days=7)).isoformat()
     assert not bot.can_show_offer(u, profile)
     profile.pop("offer_suppressed_until")
@@ -576,10 +575,13 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     assert "Базовый режим остаётся доступным." in text
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
-    assert "🟢 Продолжить бесплатно" in keyboard_text
-    assert "🔵 SKILLER Full" in keyboard_text
-    assert "👥 Группа навыков" in keyboard_text and "€20–24" in keyboard_text
-    assert "👤 Потренировать навык с человеком" in keyboard_text and "€39" in keyboard_text
+    assert "🟢 Продолжить beta бесплатно" in keyboard_text
+    assert "🧭 План на следующие 7 дней" in keyboard_text
+    assert "📖 Почему такой вывод" in keyboard_text
+    assert "Другие форматы поддержки" not in keyboard_text
+    assert "👥 Группа навыков" not in keyboard_text
+    assert "👤 Потренировать навык с человеком" not in keyboard_text
+    assert "€" not in keyboard_text
 
     map_text = render_short_user_map({
         "attention_pattern": "scroll_autopilot",
@@ -1206,7 +1208,7 @@ def run():
         test_skinny_uses_direct_respectful_phrases,
         test_offer_gate_requires_attempts_and_respects_cooldown,
         test_offer_text_and_map_are_specific_without_curator_button,
-        test_bot_tariff_has_payment_link_button,
+        test_bot_tariff_is_free_during_beta,
         test_extra_two_minutes_prompt_is_action_not_stop_copy,
         test_combined_crisis_three_plus_states_uses_short_synthesis,
         test_marsha_general_line_shows_assessment_phrase_once_per_day,
@@ -1223,16 +1225,16 @@ def run():
         test_social_support_option_only_when_available,
         test_curator_notification_sends_dm_to_ivan,
         test_show_offer_force_enables_offer_prerequisites,
-        test_offer_preview_menu_callbacks_do_not_go_stale,
-        test_auto_offer_marks_once_but_manual_offer_stays_available,
-        test_offer_request_form_sends_application_to_curator,
+        test_stale_offer_callbacks_are_blocked_in_free_beta,
+        test_auto_and_manual_offers_are_suppressed_in_free_beta,
+        test_stale_paid_request_form_is_blocked_in_free_beta,
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
         test_force_next_day_and_set_day_keep_saved_profile_state,
         test_stuck_flow_asks_effect_before_aftercare,
         test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow,
         test_simplified_done_recovery_asks_effect_without_technical_route_message,
-        test_successful_payment_grants_paid_access_automatically,
+        test_successful_payment_does_not_mutate_free_beta_access,
         test_repeat_start_shows_existing_user_menu_without_onboarding_restart,
         test_internal_user_events_are_marked_non_analytics,
         test_product_once_events_keep_duplicates_technical_only,
@@ -1252,15 +1254,16 @@ def run():
 
 
 
-def test_bot_tariff_has_payment_link_button():
+def test_bot_tariff_is_free_during_beta():
     kb = bot.tariff_bot_inline_keyboard(94023)
     buttons = [button for row in kb.inline_keyboard for button in row]
     pay_buttons = [button for button in buttons if getattr(button, "text", "") == f"💳 Оформить за €{bot.BASE_OFFER_EUR_LABEL}"]
-    assert pay_buttons
-    assert getattr(pay_buttons[0], "url", None) or getattr(pay_buttons[0], "callback_data", None) == "pay:bot_999"
+    assert not pay_buttons
+    assert any("beta бесплатно" in getattr(button, "text", "") for button in buttons)
+    assert "€" not in bot.tariff_bot_text()
 
 
-async def test_successful_payment_grants_paid_access_automatically():
+async def test_successful_payment_does_not_mutate_free_beta_access():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH
         bot.DB_PATH = str(Path(td) / "bot.db")
@@ -1275,10 +1278,10 @@ async def test_successful_payment_grants_paid_access_automatically():
         await bot.handle_successful_payment(msg)
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh["payment_status"] == "paid"
-        assert fresh["trial_phase"] == "paid"
+        assert fresh["payment_status"] == "beta_free"
+        assert fresh["trial_phase"] == "beta_free"
         assert int(fresh.get("full_mode") or 0) == 1
-        assert any("Полный режим включ" in answer for answer in msg.answers)
+        assert any("Оплата сейчас не требуется" in answer for answer in msg.answers)
 
 
 def test_extra_two_minutes_prompt_is_action_not_stop_copy():

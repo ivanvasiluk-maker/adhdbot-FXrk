@@ -1,7 +1,8 @@
 import unittest
 from decimal import Decimal
 
-from core.engine import should_show_offer
+import core.engine as engine
+from core.engine import build_offer, should_show_offer
 from core.product_config import assert_production_payment_safety
 from core.value_proof_offer import (
     PersonalValueReport, ValueProof, evaluate_value_proof, render_base_unlock_offer,
@@ -38,10 +39,28 @@ class ValueProofOfferTests(unittest.TestCase):
 
     def test_day_three_alone_does_not_trigger_engine_offer(self):
         self.assertFalse(should_show_offer({"day": 3}))
-        self.assertTrue(should_show_offer({
+        self.assertFalse(should_show_offer({
             "day": 3, "completed_experiments": 2, "successful_or_partial": 1,
             "personalized_insight_exists": True, "value_report_seen_at": "2026-08-06",
         }))
+
+    def test_engine_offer_is_replaced_by_free_beta_access(self):
+        screen = build_offer({"day": 3, "stage": "training"})
+        self.assertIn("beta-тест", screen["text"])
+        self.assertIn("бесплат", screen["text"])
+        self.assertNotIn("€", " ".join(screen["buttons"]))
+        self.assertEqual(screen["next_state"], "training")
+
+    def test_dormant_paid_gate_still_requires_value_proof(self):
+        previous = engine.FREE_BETA_ACCESS
+        engine.FREE_BETA_ACCESS = False
+        try:
+            self.assertTrue(should_show_offer({
+                "day": 3, "completed_experiments": 2, "successful_or_partial": 1,
+                "personalized_insight_exists": True, "value_report_seen_at": "2026-08-06",
+            }))
+        finally:
+            engine.FREE_BETA_ACCESS = previous
 
     def test_report_shows_personal_facts_before_offer(self):
         text = render_personal_value_report(PersonalValueReport(
@@ -60,7 +79,8 @@ class ValueProofOfferTests(unittest.TestCase):
         text = render_base_unlock_offer(price=Decimal("4.99"))
         self.assertIn("Founding Member", text)
         self.assertIn("€4.99 / месяц", text)
-        self.assertIn("Learning Engine", text)
+        self.assertIn("персональная карта навыков", text)
+        self.assertNotIn("Learning Engine", text)
 
     def test_no_value_path_offers_free_review_not_sale(self):
         text = render_no_value_review()
