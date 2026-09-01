@@ -981,12 +981,19 @@ def short_daily_map_text(
     )
     task = current_task_label(u or {}) if u else "текущая задача"
     helped_lines = []
+    helped_keys = set()
+    helped_candidates = []
     if helpful:
-        helped_lines.append(helpful)
-    helped_lines.extend(
+        helped_candidates.append(_skill_label(str(helpful), str(helpful)))
+    helped_candidates.extend(
         _skill_label(item.get("skill_id"), item.get("skill_id")) for item in positive
-        if _skill_label(item.get("skill_id"), item.get("skill_id")) not in helped_lines
     )
+    for item in helped_candidates:
+        label = " ".join(str(item or "").split())
+        key = label.casefold()
+        if label and key not in helped_keys:
+            helped_lines.append(label)
+            helped_keys.add(key)
     attempts = max(
         int(model.get("evidence_count") or 0),
         len(user_skill_attempts(u or {})),
@@ -4606,6 +4613,7 @@ async def other_entry_options_for_user_async(u: Dict[str, Any]) -> List[str]:
 
 def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
     attempt = active_attempt(u)
+    snapshot = current_experiment_snapshot(u)
     return {
         "started": True,
         "completed": None,
@@ -4614,7 +4622,13 @@ def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
         "continued_after_skill": None,
         "difficulty": None,
         "attempt_id": str(attempt.get("attempt_id") or u.get("current_action_id") or ""),
-        "skill_id": str(current_skill_for_action(u) or current_skill_id(u) or ""),
+        # The active experiment owns the skill being evaluated. Profile-level
+        # current_skill can still contain the previous exercise during a
+        # transition and must not leak into the new "Запомнить" anchor.
+        "skill_id": str(
+            snapshot.get("skill_id") or attempt.get("current_skill_id")
+            or current_skill_for_action(u) or current_skill_id(u) or ""
+        ),
         "mechanism": str(attempt.get("current_mechanism") or u.get("current_mechanism") or ""),
         "barrier": str(u.get("pending_stuck_reason") or u.get("last_not_completed_reason") or ""),
         "day_id": str(u.get("current_day_id") or ""),

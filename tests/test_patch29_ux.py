@@ -75,6 +75,36 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("телефон", insight)
         self.assertIn("Завтра не начинаем заново", insight)
 
+    def test_short_map_deduplicates_same_helpful_skill(self):
+        user = bot.default_user(29010)
+        profile = {
+            "personal_working_model": {
+                "helpful_interventions": {"Сделать следующий шаг видимым": 2},
+                "evidence_count": 2,
+            },
+        }
+        skill_map = {"skills": [{"skill_id": "visible_next_step", "status": "confirmed"}]}
+        rendered = bot.short_daily_map_text(profile, skill_map, user)
+        self.assertEqual(rendered.lower().count("— сделать следующий шаг видимым"), 1)
+
+    def test_feedback_anchor_uses_active_experiment_not_previous_skill(self):
+        user = bot.default_user(29011)
+        user["current_skill"] = "bad_draft"
+        user["active_attempt"] = {
+            "skill_id": "visible_next_step",
+            "current_skill_id": "visible_next_step",
+            "minimum_action": "Оставь одну видимую подсказку.",
+        }
+        feedback = bot.minimal_feedback_base(user, source="action_done")
+        self.assertEqual(feedback["skill_id"], "visible_next_step")
+        reflection = bot.build_user_post_action_reflection(
+            user,
+            {**feedback, "completed": True, "helpfulness": "helped", "continued_after_skill": True},
+            {},
+        )
+        self.assertIn("видимую подсказку", reflection.memory_anchor)
+        self.assertNotIn("плох", reflection.memory_anchor.lower())
+
     async def test_voice_transcription_downloads_telegram_ogg_and_returns_text(self):
         message = SimpleNamespace(
             voice=SimpleNamespace(file_id="voice-id", file_unique_id="voice-unique"),
