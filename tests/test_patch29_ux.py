@@ -1,9 +1,12 @@
 import io
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import bot
+import aiosqlite
+from db import init_db, migrate_db, save_user
 
 
 def keyboard_texts(markup):
@@ -143,6 +146,91 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         answer = callback.message.answer.await_args.args[0]
         self.assertIn("списания не будет", answer)
         self.assertIn("доступен тебе бесплатно", answer)
+
+    async def test_full_reset_deletes_child_evidence_without_touching_other_user(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            await init_db(file.name)
+            await migrate_db(file.name)
+            await save_user(bot.default_user(29006), file.name)
+            await save_user(bot.default_user(29007), file.name)
+            async with aiosqlite.connect(file.name) as db:
+                situation = await db.execute(
+                    """INSERT INTO situation_snapshots
+                    (user_id,created_at,task_summary,desired_action,context_domain,action_phase,
+                     emotion_intensity_0_100,energy_0_100,urgency,raw_text_ref)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (29006, "2026-09-01", "отчёт", "открыть", "work", "start", 60, 40, "medium", "private note"),
+                )
+                situation_id = int(situation.lastrowid)
+                other = await db.execute(
+                    """INSERT INTO situation_snapshots
+                    (user_id,created_at,task_summary,desired_action,context_domain,action_phase,
+                     emotion_intensity_0_100,energy_0_100,urgency,raw_text_ref)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    (29007, "2026-09-01", "другая", "открыть", "work", "start", 20, 80, "low", "keep"),
+                )
+                other_situation_id = int(other.lastrowid)
+                mechanism = await db.execute(
+                    """INSERT INTO mechanism_hypotheses
+                    (situation_id,mechanism_code,confidence,evidence_json,unknowns_json,
+                     disconfirming_questions_json,source,confirmed_by_user)
+                    VALUES (?,?,?,?,?,?,?,?)""",
+                    (situation_id, "evaluation_avoidance", "medium", "[]", "[]", "[]", "rules", 0),
+                )
+                mechanism_id = int(mechanism.lastrowid)
+                experiment = await db.execute(
+                    """INSERT INTO behavioral_experiments
+                    (user_id,situation_id,mechanism_hypothesis_id,skill_id,mechanism_code,
+                     context_domain,difficulty_level,instruction_variant,target_action,success_criterion,
+                     status,progression_type,decision_reason_code,trainer_style,state_revision)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (29006, situation_id, mechanism_id, "bad_draft", "evaluation_avoidance",
+                     "work", 1, "one line", "write", "opened", "completed", "first", "initial", "beck", 1),
+                )
+                experiment_id = int(experiment.lastrowid)
+                outcome = await db.execute(
+                    """INSERT INTO behavioral_experiment_outcomes
+                    (experiment_id,criterion_met,observed_result,created_at) VALUES (?,?,?,?)""",
+                    (experiment_id, 0, "private observed result", "2026-09-01"),
+                )
+                outcome_id = int(outcome.lastrowid)
+                await db.execute(
+                    """INSERT INTO experiment_outcomes
+                    (experiment_id,action_started,action_persisted,emotional_change,
+                     success_criterion_met,independent_use,user_note_short,failure_reason_code,captured_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (experiment_id, "yes", "no", "same", 0, 0, "private user note", "too_hard", "2026-09-01"),
+                )
+                await db.execute(
+                    """INSERT INTO behavioral_experiment_decisions
+                    (experiment_id,outcome_id,decision,reason_code,created_at)
+                    VALUES (?,?,?,?,?)""",
+                    (experiment_id, outcome_id, "simplify", "too_hard", "2026-09-01"),
+                )
+                await db.execute(
+                    """INSERT INTO legacy_migration_links
+                    (source_table,source_id,target_type,target_id,migrated_at)
+                    VALUES (?,?,?,?,?)""",
+                    ("skill_attempts", "private-source", "behavioral_experiment", experiment_id, "2026-09-01"),
+                )
+                await db.commit()
+
+            with patch.object(bot, "DB_PATH", file.name):
+                await bot.reset_current_user(29006, 29006)
+
+            async with aiosqlite.connect(file.name) as db:
+                for table in (
+                    "mechanism_hypotheses", "behavioral_experiments",
+                    "behavioral_experiment_outcomes", "experiment_outcomes",
+                    "behavioral_experiment_decisions", "legacy_migration_links",
+                ):
+                    count = (await (await db.execute(f"SELECT COUNT(*) FROM {table}")).fetchone())[0]
+                    self.assertEqual(count, 0, table)
+                kept = (await (await db.execute(
+                    "SELECT COUNT(*) FROM situation_snapshots WHERE id=? AND user_id=?",
+                    (other_situation_id, 29007),
+                )).fetchone())[0]
+                self.assertEqual(kept, 1)
 
 
 if __name__ == "__main__":

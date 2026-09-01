@@ -9862,10 +9862,82 @@ async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
         rows = await (await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )).fetchall()
+        table_columns: Dict[str, set[str]] = {}
         for row in rows:
             table = str(row["name"] if isinstance(row, aiosqlite.Row) else row[0])
             columns = await (await db.execute(f"PRAGMA table_info({_sqlite_ident(table)})")).fetchall()
-            column_names = {str(col["name"] if isinstance(col, aiosqlite.Row) else col[1]) for col in columns}
+            table_columns[table] = {
+                str(col["name"] if isinstance(col, aiosqlite.Row) else col[1]) for col in columns
+            }
+
+        async def ids_for(table: str, where: str, params: tuple[Any, ...]) -> List[int]:
+            if table not in table_columns or "id" not in table_columns[table]:
+                return []
+            found = await (await db.execute(
+                f"SELECT id FROM {_sqlite_ident(table)} WHERE {where}", params,
+            )).fetchall()
+            return [int(item[0]) for item in found]
+
+        def placeholders(values: List[int]) -> str:
+            return ",".join("?" for _ in values)
+
+        # Child evidence tables do not carry user_id. Resolve their exact
+        # ownership first, then delete leaf-to-root inside the same transaction.
+        situation_ids = await ids_for("situation_snapshots", "user_id=?", (uid,))
+        experiment_ids = await ids_for("behavioral_experiments", "user_id=?", (uid,))
+        mechanism_ids: List[int] = []
+        if situation_ids and "mechanism_hypotheses" in table_columns:
+            mechanism_ids = await ids_for(
+                "mechanism_hypotheses",
+                f"situation_id IN ({placeholders(situation_ids)})",
+                tuple(situation_ids),
+            )
+        outcome_ids: List[int] = []
+        if experiment_ids and "behavioral_experiment_outcomes" in table_columns:
+            outcome_ids = await ids_for(
+                "behavioral_experiment_outcomes",
+                f"experiment_id IN ({placeholders(experiment_ids)})",
+                tuple(experiment_ids),
+            )
+
+        if experiment_ids and "behavioral_experiment_decisions" in table_columns:
+            marks = placeholders(experiment_ids)
+            params: tuple[Any, ...] = (*experiment_ids, *experiment_ids)
+            clause = f"experiment_id IN ({marks}) OR next_experiment_id IN ({marks})"
+            if outcome_ids:
+                clause += f" OR outcome_id IN ({placeholders(outcome_ids)})"
+                params = (*params, *outcome_ids)
+            await db.execute(
+                f"DELETE FROM behavioral_experiment_decisions WHERE {clause}", params,
+            )
+        if experiment_ids and "experiment_outcomes" in table_columns:
+            await db.execute(
+                f"DELETE FROM experiment_outcomes WHERE experiment_id IN ({placeholders(experiment_ids)})",
+                tuple(experiment_ids),
+            )
+        if experiment_ids and "behavioral_experiment_outcomes" in table_columns:
+            await db.execute(
+                f"DELETE FROM behavioral_experiment_outcomes WHERE experiment_id IN ({placeholders(experiment_ids)})",
+                tuple(experiment_ids),
+            )
+        if situation_ids and "mechanism_hypotheses" in table_columns:
+            await db.execute(
+                f"DELETE FROM mechanism_hypotheses WHERE situation_id IN ({placeholders(situation_ids)})",
+                tuple(situation_ids),
+            )
+        if "legacy_migration_links" in table_columns:
+            clauses = ["(source_table='users.profile_json' AND source_id=?)"]
+            params: tuple[Any, ...] = (str(uid),)
+            if experiment_ids:
+                clauses.append(
+                    f"(target_type='behavioral_experiment' AND target_id IN ({placeholders(experiment_ids)}))"
+                )
+                params = (*params, *experiment_ids)
+            await db.execute(
+                "DELETE FROM legacy_migration_links WHERE " + " OR ".join(clauses), params,
+            )
+
+        for table, column_names in table_columns.items():
             if "user_id" in column_names:
                 await db.execute(f"DELETE FROM {_sqlite_ident(table)} WHERE user_id=?", (uid,))
             elif table == "users" and "telegram_id" in column_names:
