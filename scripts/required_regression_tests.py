@@ -321,7 +321,12 @@ async def test_offer_preview_menu_callbacks_do_not_go_stale():
         assert any("Потренировать навык с человеком" in answer for answer in live_cb.message.answers)
 
         bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
-        await bot.on_offer_callbacks(bot_cb)
+        old_payment_url, old_payments_enabled = bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS
+        bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS = "https://buy.stripe.com/release-test", True
+        try:
+            await bot.on_offer_callbacks(bot_cb)
+        finally:
+            bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS = old_payment_url, old_payments_enabled
         assert "Этот шаг уже закрыт" not in "\n".join(bot_cb.message.answers)
         assert any("SKILLER Founding Member" in answer for answer in bot_cb.message.answers)
 
@@ -577,9 +582,11 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
     assert "🟢 Продолжить бесплатно" in keyboard_text
-    assert "🔵 SKILLER Full" in keyboard_text
-    assert "👥 Группа навыков" in keyboard_text and "€20–24" in keyboard_text
-    assert "👤 Потренировать навык с человеком" in keyboard_text and "€39" in keyboard_text
+    assert "🧭 План на следующие 7 дней" in keyboard_text
+    assert "📖 Почему такой вывод" in keyboard_text
+    assert "Другие форматы поддержки" in keyboard_text
+    assert "👥 Группа навыков" not in keyboard_text
+    assert "👤 Потренировать навык с человеком" not in keyboard_text
 
     map_text = render_short_user_map({
         "attention_pattern": "scroll_autopilot",

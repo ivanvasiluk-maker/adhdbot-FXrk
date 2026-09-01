@@ -107,9 +107,12 @@ async def main() -> None:
             user, enough_msg = await send(uid, "🌙 Хватит на сегодня")
             assert "Закрыть день или просто сделать паузу?" in joined(enough_msg)
             user, close_msg = await send(uid, "✅ Закрыть день")
-            assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
-            if "Что сегодня было полезнее всего?" in joined(close_msg):
-                user, close_msg = await send(uid, "🧩 Маленький конкретный шаг")
+            assert "Где сегодня чаще ломалась цепочка?" in joined(close_msg)
+            assert await get_user_day_status(day_id, bot.DB_PATH) == "active"
+            user, _ = await send(uid, "STAY — начал и остановился")
+            user, _ = await send(uid, "Телефон / YouTube")
+            user, close_msg = await send(uid, "Напряжённо")
+            assert "Предварительное заключение за день" in joined(close_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
 
             # 3. Action after close opens a voluntary short step without reopening the day.

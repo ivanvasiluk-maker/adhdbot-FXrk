@@ -60,7 +60,8 @@ class ValueProofOfferTests(unittest.TestCase):
         text = render_base_unlock_offer(price=Decimal("4.99"))
         self.assertIn("Founding Member", text)
         self.assertIn("€4.99 / месяц", text)
-        self.assertIn("Learning Engine", text)
+        self.assertIn("персональная карта навыков", text)
+        self.assertNotIn("Learning Engine", text)
 
     def test_no_value_path_offers_free_review_not_sale(self):
         text = render_no_value_review()

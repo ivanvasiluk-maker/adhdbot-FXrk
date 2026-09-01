@@ -1072,9 +1072,8 @@ def morning_checkin_text(name: str = "", day_skill_name: str = "") -> str:
 
 def evening_checkin_text() -> str:
     return (
-        "Добрый вечер.\n"
-        "Закрывать день не обязательно, но полезно оставить один след.\n\n"
-        "Что сегодня было ближе?"
+        "Добрый вечер. Коротко закроем день по фактам.\n\n"
+        "Где сегодня чаще ломалась цепочка?"
     )
 
 
@@ -1135,11 +1134,11 @@ kb_morning_checkin = ReplyKeyboardMarkup(
 
 kb_evening_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🚪 Я всё-таки начал")],
-        [KeyboardButton(text="🟡 Пробовал, но застрял")],
-        [KeyboardButton(text="📱 Почти весь день уносило")],
-        [KeyboardButton(text="🫠 Не было сил")],
-        [KeyboardButton(text="🌙 Не хочу разбирать, просто закрыть день")],
+        [KeyboardButton(text="START — не начал")],
+        [KeyboardButton(text="STAY — начал и остановился")],
+        [KeyboardButton(text="RETURN — отвлёкся и не вернулся")],
+        [KeyboardButton(text="Вернулся и продолжил")],
+        [KeyboardButton(text="🌙 Закрыть без разбора")],
     ],
     resize_keyboard=True,
 )
@@ -1274,7 +1273,8 @@ kb_skill_continue_negative = ReplyKeyboardMarkup(
 
 kb_notifications_consent = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Ок, можно писать")],
+        [KeyboardButton(text="✅ Только вечером")],
+        [KeyboardButton(text="☀️ Утром и вечером")],
         [KeyboardButton(text="🔕 Без напоминаний")],
     ],
     resize_keyboard=True,
@@ -1283,11 +1283,9 @@ kb_notifications_consent = ReplyKeyboardMarkup(
 
 def notifications_consent_text() -> str:
     return (
-        "Я могу писать утром и вечером:\n"
-        "— утром подобрать шаг\n"
-        "— вечером закрыть день\n"
-        "— если ты пропадёшь, один раз мягко вернуть\n\n"
-        "Обычно это 2 сообщения в день, максимум — 3.\n"
+        "По умолчанию я напишу один раз вечером — коротко закрыть день.\n"
+        "Если удобнее, можно включить утро и вечер.\n\n"
+        "Максимум — 2 сообщения в день. После закрытия дня больше не пишу.\n"
         "Можно отключить в любой момент."
     )
 

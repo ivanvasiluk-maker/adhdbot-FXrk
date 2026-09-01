@@ -7,7 +7,8 @@
     {"commit": "0185ae73768471cb4334f47e9cd9872cd9c501cb", "subject": "Schedule offers and reminders at requested times"},
     {"commit": "f9a6facfe4a0f54d491ed49cdb5391b26423be59", "subject": "Complete stable action handlers"},
     {"commit": "0e4579a420347c3014134b291a9b376e9be8f780", "subject": "PATCH-25: publish release stabilization bundle (PATCH-18..25)"},
-    {"commit": "072c41f4637ce9774019f53bf5c9efa281325144", "subject": "Complete final release safety audit fixes"}
+    {"commit": "072c41f4637ce9774019f53bf5c9efa281325144", "subject": "Complete final release safety audit fixes"},
+    {"commit": "664da1b39410da3a2791e94ea587b2352edab67f", "subject": "PATCH-17: pin published commit-subject exceptions"}
   ],
   "phases": [
     {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},

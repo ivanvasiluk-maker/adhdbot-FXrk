@@ -1533,7 +1533,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "active_flow": None,
         "last_safe_screen": None,
         "last_notification_context": None,
-        "reminder_mode": "normal",
+        "reminder_mode": "evening_only",
         "unanswered_proactive_count": 0,
         "daily_check_in_status": "pending",
         "daily_reminder_status": "enabled",
@@ -2540,7 +2540,7 @@ EXTRA_USER_COLS = {
     "proactive_count_date": "TEXT",
     "no_reminders_today": "INTEGER DEFAULT 0",
     "no_reminders_date": "TEXT",
-    "reminder_mode": "TEXT DEFAULT 'normal'",
+    "reminder_mode": "TEXT DEFAULT 'evening_only'",
     "unanswered_proactive_count": "INTEGER DEFAULT 0",
 }
 

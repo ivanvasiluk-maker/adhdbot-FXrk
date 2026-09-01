@@ -45,6 +45,8 @@ PAYMENT_URL_MONTH_1498=
 PAYMENT_MONTH_URL=
 PAYMENT_TEST_URL=
 PAYMENT_ACCEPT_ANY=0
+CURATOR_TELEGRAM_ID=312112015
+CURATOR_USERNAME=Ivan_Vasiliuk
 ENABLE_PAYMENTS=0
 SHEETS_WEBHOOK_URL=
 SHEETS_SYNC_ENABLED=true
@@ -76,7 +78,8 @@ Notes:
 - Leave `OPENAI_API_KEY` empty to run without AI features.
 - Product development is governed by [the Product Constitution](docs/PRODUCT_CONSTITUTION.md). New user-facing scenarios must pass its executable feature gate.
 - Set `TEST_MODE=1` to skip paywalls and unlock full flow during testing.
-- For cheap payment-link QA, set `PAYMENT_TEST_URL` to the €1 link and `PAYMENT_ACCEPT_ANY=1`. In this mode the offer uses the test link when available, and `/confirm_payment` or the “✅ Я оплатил(а) — тест” button manually marks the user as paid for 30 days. There is no automatic provider-side payment verification without a payment webhook. Turn `PAYMENT_ACCEPT_ANY` off before production.
+- For cheap payment-link QA, set `PAYMENT_TEST_URL` to the €1 link and `PAYMENT_ACCEPT_ANY=1`. In this mode the offer uses the test link when available, and `/confirm_payment` or the “✅ Я оплатил(а) — тест” button manually marks the user as paid for 30 days. Turn `PAYMENT_ACCEPT_ANY` off before production.
+- Production payment links do not verify provider events automatically. After paying, the user can request a manual check; the bot sends the request to `CURATOR_TELEGRAM_ID`, and the curator grants access with `/mark_paid <user_id>`. Do not promise automatic activation until a signed provider webhook is deployed.
 - Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables per-user QA helpers, including `/force_next_day` and `/set_day 3` (both immediately open that day’s training) plus `/show_offer`. Destructive/admin operations such as payment marking, stats, and Sheets sync stay ADMIN-only.
 - Set `BOT_STARTUP_CHECK=1` only for deploy/build sanity checks; in this mode the bot initializes and exits without starting Telegram polling.
 - `DB_PATH` points to the SQLite file; it is auto-created/migrated on start. Treat this file as persistent production data: deploy scripts must mount/keep it and must not delete or recreate it, otherwise users lose their current scenario step.

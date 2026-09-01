@@ -298,7 +298,11 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
                 ("Продолжить тренировку", "offer.continue")])
         return _response("Возвращаю к актуальному шагу.", _summary_buttons() if session.get("short_report") else [])
     if action == "resources.show":
-        return _response("📚 На сегодня достаточно одного короткого материала: посмотри про цикл избегания и правило микрошагов. Это необязательная поддержка, не новый эксперимент.")
+        return _response(
+            "📚 Проверенный материал, не новый эксперимент: бесплатный КПТ-практикум Put Off Procrastinating от Centre for Clinical Interventions. "
+            "Начни со схемы Vicious Cycle of Procrastination; читать всё сразу не нужно.\n\n"
+            "https://www.cci.health.wa.gov.au/resources/looking-after-yourself/procrastination"
+        )
     if action == "map.today_insight":
         return _response(session.get("short_report") or "Сегодня мы уточнили рабочую петлю; карта сохранена.")
     if action == "map.full":

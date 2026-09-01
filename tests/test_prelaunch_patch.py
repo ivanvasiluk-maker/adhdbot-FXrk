@@ -77,10 +77,9 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("🟢 Пока продолжить бесплатно", labels)
+        self.assertIn("🟢 Продолжить бесплатно", labels)
         self.assertFalse(any("€4.99/мес" in label for label in labels))
-        self.assertTrue(any("€20–24" in label for label in labels))
-        self.assertTrue(any("от €39" in label for label in labels))
+        self.assertIn("Другие форматы поддержки", labels)
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
             bot, "ENABLE_PAID_PLAN", True,
@@ -134,7 +133,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(bot.MAX_PROACTIVE_PER_DAY):
             bot._increment_proactive_count(user, today)
         self.assertTrue(bot._proactive_limit_reached(user, today))
-        self.assertEqual(bot._proactive_count_today(user, today), 3)
+        self.assertEqual(bot._proactive_count_today(user, today), 2)
 
     def test_offer_leads_with_personal_conclusion_and_solution_route(self):
         user = bot.default_user(1)

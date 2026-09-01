@@ -21,13 +21,13 @@ class OfferPathTests(unittest.TestCase):
         self.assertFalse(bot.can_show_offer(user, profile))
         self.assertFalse(bot.scheduled_offer_due(user, profile))
 
-    def test_main_offer_prioritizes_full_human_and_navigation(self):
+    def test_main_offer_prioritizes_subscription_proof_and_free_path(self):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
             rows = offer_inline_keyboard(123).inline_keyboard[:4]
         callbacks = [row[0].callback_data for row in rows]
         self.assertEqual(callbacks, [
-            OFFER_CALLBACKS["bot"], OFFER_CALLBACKS["live"],
-            OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
+            OFFER_CALLBACKS["bot"], OFFER_CALLBACKS["next_plan"],
+            OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["stay_free"],
         ])
 
     def test_offer_also_exposes_conclusion_and_next_plan(self):
@@ -49,7 +49,8 @@ class OfferPathTests(unittest.TestCase):
         text = tariff_bot_text()
         self.assertIn(f"€{BASE_OFFER_EUR_LABEL} / месяц", text)
         self.assertIn("Founding Member", text)
-        self.assertIn("Learning Engine", text)
+        self.assertIn("персональная карта навыков", text)
+        self.assertNotIn("Learning Engine", text)
 
     def test_group_and_consultation_terms_are_explicit(self):
         group = tariff_group_text()
