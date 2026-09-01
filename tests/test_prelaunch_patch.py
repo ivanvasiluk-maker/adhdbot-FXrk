@@ -77,9 +77,9 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("🟢 Продолжить бесплатно", labels)
-        self.assertFalse(any("€4.99/мес" in label for label in labels))
-        self.assertIn("Другие форматы поддержки", labels)
+        self.assertIn("🟢 Продолжить beta бесплатно", labels)
+        self.assertFalse(any("€" in label for label in labels))
+        self.assertNotIn("Другие форматы поддержки", labels)
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
             bot, "ENABLE_PAID_PLAN", True,
@@ -89,7 +89,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
                 for row in bot.offer_inline_keyboard(1).inline_keyboard
                 for button in row
             ]
-        self.assertTrue(any("€4.99/мес" in label for label in enabled_labels))
+        self.assertFalse(any("€" in label for label in enabled_labels))
 
     def test_offer_copy_does_not_advertise_disabled_or_unconfigured_paths(self):
         with patch.object(bot, "ENABLE_PAYMENTS", False), patch.object(
@@ -100,26 +100,40 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SKILLER Full", text)
         self.assertNotIn("Группа навыков", text)
         self.assertNotIn("С человеком", labels)
-        self.assertEqual(labels, ["🟢 Продолжить бесплатно", "↩️ Назад"])
+        self.assertEqual(labels, ["🟢 Продолжить beta бесплатно", "↩️ Назад"])
 
     def test_day1_completion_can_unlock_offer_after_value_report(self):
         user = bot.default_user(1)
-        user.update({"day": 1, "day_closed": 1, "today_closed": 1, "last_day_closed_at": bot.local_date_for_user(user)})
+        user.update({
+            "day": 1, "day_closed": 1, "today_closed": 1,
+            "last_day_closed_at": bot.local_date_for_user(user),
+            "free_mode": 0, "full_mode": 0,
+        })
         profile = self.profile()
         profile.update({
             "personalized_insight_exists": True, "value_report_seen_at": "2026-08-22T10:00:00+00:00",
             "personal_working_model": {**profile["personal_working_model"], "evidence_count": 1},
         })
         with patch.object(bot, "offer_recently_limited", return_value=False):
-            self.assertTrue(bot.can_show_offer(user, profile))
+            self.assertFalse(bot.can_show_offer(user, profile))
+            with patch.object(bot, "FREE_BETA_ACCESS", False):
+                self.assertTrue(bot.can_show_offer(user, profile))
 
     def test_offer_is_due_at_day_three_close_and_weekly_for_active_user(self):
         now = bot.dt.datetime(2026, 8, 22, 20, 30, tzinfo=bot.dt.timezone.utc)
         user = bot.default_user(1)
-        user.update({"day": 3, "day_closed": 1, "today_closed": 1, "last_day_closed_at": bot.local_date_for_user(user)})
-        self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
+        user.update({
+            "day": 3, "day_closed": 1, "today_closed": 1,
+            "last_day_closed_at": bot.local_date_for_user(user),
+            "free_mode": 0, "full_mode": 0,
+        })
+        self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
+        with patch.object(bot, "FREE_BETA_ACCESS", False):
+            self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         user.update({"day": 10, "last_offer_shown_at": (now - bot.dt.timedelta(days=7)).isoformat(), "last_active": now.timestamp()})
-        self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
+        self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
+        with patch.object(bot, "FREE_BETA_ACCESS", False):
+            self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         user["last_active"] = (now - bot.dt.timedelta(days=8)).timestamp()
         self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
 
@@ -148,7 +162,8 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Что будем делать", text)
         self.assertIn("Что надо развивать", text)
         self.assertIn("START → STAY → RETURN", text)
-        self.assertIn("Выбери, как закрепить результат", text)
+        self.assertIn("открытый beta-тест", text)
+        self.assertIn("доступен бесплатно", text)
 
     def test_day_one_skill_names_the_problem_and_solution_route(self):
         user = bot.default_user(1)

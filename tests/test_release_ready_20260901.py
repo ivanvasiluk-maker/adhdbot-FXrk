@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import bot
 from core.trainer_voice import VoiceContent, render_message
-from db import init_db, record_action_event
+from db import init_db, record_action_event, sync_user_state_aliases
 
 
 class _User:
@@ -59,8 +59,30 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.default_user(1)["reminder_mode"], "evening_only")
         self.assertEqual(bot.MAX_PROACTIVE_PER_DAY, 2)
 
+    def test_open_beta_unlocks_every_user_and_suppresses_sales(self):
+        user = bot.default_user(99001)
+        self.assertEqual(user["payment_status"], "beta_free")
+        self.assertEqual(user["full_mode"], 1)
+        self.assertEqual(user["free_mode"], 1)
+        self.assertTrue(bot.is_paid(user))
+        self.assertFalse(bot.can_show_offer(user, {}))
+        self.assertFalse(bot.paid_plan_available())
+        labels = [button.text for row in bot.offer_inline_keyboard(user["user_id"]).inline_keyboard for button in row]
+        self.assertFalse(any("€" in label or "оплат" in label.lower() for label in labels))
+
+    def test_open_beta_upgrades_existing_unpaid_state_without_reset(self):
+        user = bot.default_user(99002)
+        user.update({"payment_status": "trial", "access_status": "trial", "full_mode": 0, "free_mode": 0, "done_count": 7})
+        normalized = sync_user_state_aliases(user)
+        self.assertEqual(normalized["payment_status"], "beta_free")
+        self.assertEqual(normalized["access_status"], "beta_free")
+        self.assertEqual(normalized["full_mode"], 1)
+        self.assertEqual(normalized["done_count"], 7)
+
     def test_paid_offer_has_honest_manual_verification_path(self):
-        with patch.object(bot, "PAYMENT_MONTH_URL", "https://buy.stripe.com/real-link"):
+        with patch.object(bot, "FREE_BETA_ACCESS", False), patch.object(
+            bot, "PAYMENT_MONTH_URL", "https://buy.stripe.com/real-link",
+        ):
             buttons = [button for row in bot.tariff_bot_inline_keyboard(1).inline_keyboard for button in row]
         claim = [button for button in buttons if button.callback_data == bot.OFFER_CALLBACKS["payment_claim"]]
         self.assertEqual(len(claim), 1)

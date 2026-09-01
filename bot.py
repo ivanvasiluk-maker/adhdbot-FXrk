@@ -138,7 +138,8 @@ SHEETS_SYNC_BATCH_SIZE = getattr(sheets_sync_module, "SHEETS_SYNC_BATCH_SIZE", 5
 from core.product_config import (
     BASE_OFFER_EUR, OFFER_EARLIEST_DAY, SKILL_LIBRARY_FAIL_CLOSED,
     ENABLE_DAY1_WOW, ENABLE_HUMAN_OFFER, ENABLE_GROUP_OFFER, ENABLE_PAID_PLAN,
-    SKILL_LIBRARY_PATH, SKILL_REGISTRY_ENABLED, assert_production_payment_safety, format_eur,
+    FREE_BETA_ACCESS, SKILL_LIBRARY_PATH, SKILL_REGISTRY_ENABLED,
+    assert_production_payment_safety, format_eur,
 )
 from core.offer_config import (
     GROUP_SESSION_COUNT, GROUP_SESSION_EUR_MAX, GROUP_SESSION_EUR_MIN,
@@ -231,6 +232,8 @@ log.info("BOT_TOKEN configured: %s", bool(BOT_TOKEN))
 log.info("DB_PATH: %s", DB_PATH)
 if PAYMENT_ACCEPT_ANY:
     log.warning("PAYMENT_ACCEPT_ANY is enabled: test payment confirmations can grant paid access; disable it before production.")
+if FREE_BETA_ACCESS:
+    log.info("FREE_BETA_ACCESS is enabled: all bot capabilities are free and paid offers are suppressed.")
 if STARTUP_CHECK:
     log.info("BOT_STARTUP_CHECK is enabled: startup will validate init and exit before Telegram polling.")
 
@@ -857,6 +860,8 @@ def offer_recently_limited(u: Dict[str, Any], profile: Optional[Dict[str, Any]] 
 
 def scheduled_offer_due(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None, *, now: Optional[dt.datetime] = None) -> bool:
     """Show at Day 3 close, then weekly while the unpaid user remains active."""
+    if FREE_BETA_ACCESS:
+        return False
     profile = profile or {}
     now = now or dt.datetime.now(dt.timezone.utc)
     safety_active = int(u.get("crisis_mode") or 0) == 1 or str(u.get("stage") or "").startswith("safety")
@@ -888,6 +893,8 @@ def has_unfinished_exercise_for_offer(u: Dict[str, Any]) -> bool:
 
 def can_show_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> bool:
     profile = profile or {}
+    if FREE_BETA_ACCESS:
+        return False
     if int(u.get("free_mode") or 0) == 1:
         return False
     current_day = int(u.get("day") or u.get("current_day") or 1)
@@ -6812,6 +6819,11 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
 
 
 def short_offer_text() -> str:
+    if FREE_BETA_ACCESS:
+        return (
+            "🟢 Сейчас идёт открытый beta-тест. Полный режим SKILLER доступен бесплатно: "
+            "карта, история попыток, следующие тесты и все навыки уже включены."
+        )
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
     if paid_plan_available():
         options.insert(0, f"🔵 Персональная тренировка SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.")
@@ -6889,6 +6901,16 @@ OFFER_STAGES = {"offer", OFFER_MENU_STAGE, OFFER_PREVIEW_STAGE}
 
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: str = "auto"):
     """Show the adaptive day-3 map and paid continuation offer."""
+    if FREE_BETA_ACCESS:
+        await log_event(
+            u["user_id"], u.get("stage", ""), "offer_suppressed_free_beta",
+            {"source": source, "mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL,
+        )
+        await m.answer(
+            "🟢 Открытый beta-тест: полный режим уже доступен бесплатно. Оплата не нужна.",
+            reply_markup=kb_training_main,
+        )
+        return
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
         previous_flow["resume_after_offer"] = True
@@ -7038,6 +7060,12 @@ def _profile_from_user_for_offer(u: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
+    if FREE_BETA_ACCESS:
+        await log_event(
+            u["user_id"], u.get("stage", ""), "offer_suppressed_free_beta",
+            {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL,
+        )
+        return False
     profile = await get_user_profile(u["user_id"], DB_PATH)
     metrics = await get_value_proof_metrics(DB_PATH, user_id=u["user_id"])
     summary = build_profile_map_summary(u, profile)
@@ -7110,6 +7138,12 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
 
 async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
     """QA/manual command: show the offer without changing day/progress prerequisites."""
+    if FREE_BETA_ACCESS:
+        await m.answer(
+            "🟢 Сейчас идёт открытый beta-тест. Все функции бота уже доступны бесплатно — оплачивать ничего не нужно.",
+            reply_markup=kb_training_main,
+        )
+        return
     day = int(u.get("day") or u.get("day_number") or 1)
     mode = "preview" if day < 3 else "manual"
     await log_event(u["user_id"], u.get("stage", ""), "show_offer_manual", {"source": source, "day": day, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -7118,6 +7152,8 @@ async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
     """Value-proof gate: day three or the first confirmed working skill."""
+    if FREE_BETA_ACCESS:
+        return False
     if int(u.get("full_mode") or 0) == 1:
         return False
     has_payment_url = bool(configured_payment_url())
@@ -7184,12 +7220,14 @@ def payment_bot_999_url() -> str:
 
 
 def payment_not_ready_text() -> str:
+    if FREE_BETA_ACCESS:
+        return "Сейчас идёт открытый beta-тест: полный режим уже включён бесплатно."
     return "Оплата скоро будет подключена. Сейчас можно продолжить тест или написать Ивану напрямую."
 
 
 def paid_plan_available() -> bool:
     """Paid subscription is visible only when a real provider URL is ready."""
-    return bool(ENABLE_PAYMENTS and ENABLE_PAID_PLAN and configured_payment_url())
+    return bool(not FREE_BETA_ACCESS and ENABLE_PAYMENTS and ENABLE_PAID_PLAN and configured_payment_url())
 
 
 def schedule_not_ready_text() -> str:
@@ -7455,6 +7493,12 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 
 def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> InlineKeyboardMarkup:
+    if FREE_BETA_ACCESS:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
+            [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
+            [InlineKeyboardButton(text="🟢 Продолжить beta бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+        ])
     keyboard = []
     if paid_plan_available():
         keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить персональную тренировку — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
@@ -7472,6 +7516,11 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
 
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    if FREE_BETA_ACCESS:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 Продолжить beta бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+            [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
+        ])
     rows = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
     if paid_plan_available():
         rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
@@ -7551,6 +7600,12 @@ def offer_disclaimer_text() -> str:
 
 
 def tariff_bot_text() -> str:
+    if FREE_BETA_ACCESS:
+        return (
+            "🟢 Полный режим SKILLER открыт бесплатно на время beta-теста.\n\n"
+            "Доступны персональная карта навыков, история попыток, следующие тесты, "
+            "напоминания и новые обновления. Оплата не нужна."
+        )
     return (
         f"🔵 SKILLER Founding Member — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
         "Для тех, кто хочет решить проблему самостоятельно, но не начинать каждый раз с нового случайного совета.\n\n"
@@ -7617,6 +7672,10 @@ def tariff_specialist_text() -> str:
 
 
 def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    if FREE_BETA_ACCESS:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 Продолжить beta бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+        ])
     rows = []
     pay_url = payment_bot_999_url()
     if pay_url:
@@ -10036,7 +10095,9 @@ async def build_owner_funnel_report(db_path: str, *, report_date: str = "") -> s
     activated = first_skill_users
     returned_after_reactivation = by_event.get("reactivation_success", set()) | by_event.get("reactivation_opened", set())
     payment_clicked = by_event.get("payment_link_opened", set()) | by_event.get("payment_click_month_1498", set())
-    paid = {uid for uid, u in external_users.items() if str(u.get("payment_status") or "") in {"paid", "test"} or int(u.get("full_mode") or 0) == 1}
+    # Full mode is available to everyone during open beta, so it must not be
+    # counted as revenue. Only an explicit, verified payment marker is paid.
+    paid = {uid for uid, u in external_users.items() if str(u.get("payment_status") or "") in {"paid", "test"}}
 
     lines = [
         f"Чистая воронка Skiller{f' за {report_date}' if report_date else ''}",
@@ -10078,6 +10139,9 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return True
 
     if command == "/confirm_payment":
+        if FREE_BETA_ACCESS:
+            await m.answer("Сейчас beta-тест бесплатный: полный режим уже включён для тебя.")
+            return True
         if PAYMENT_ACCEPT_ANY:
             await grant_paid_access(u, "test_confirm_command", {"accept_any_payment": True})
             await send_full_mode_welcome(m, u)
@@ -10483,6 +10547,9 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         return True
 
     if command == "/test_payment":
+        if FREE_BETA_ACCESS:
+            await m.answer("🟢 Тестовая оплата отключена: во время открытого beta-теста все функции бесплатны.")
+            return True
         await log_event(uid, "admin", "test_payment_opened", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer("Тестовая оплата", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL or payment_month_url())]]))
         return True
@@ -10557,6 +10624,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             f"Payments configured {str(bool(ENABLE_PAYMENTS or PAYMENT_MONTH_URL or PAYMENT_URL_MONTH_1498 or PAYMENT_URL_FULL or PAYMENT_URL)).lower()}\n"
             f"Payment test url configured {str(bool(PAYMENT_TEST_URL)).lower()}\n"
             f"Payment accept any {str(bool(PAYMENT_ACCEPT_ANY)).lower()}\n"
+            f"Free beta access {str(bool(FREE_BETA_ACCESS)).lower()}\n"
             f"Testmode {str(bool(TEST_MODE or int(u.get('is_test_user') or 0))).lower()}"
         )
         return True
@@ -11685,6 +11753,11 @@ async def cmd_start(m: Message):
     u["chat_id"] = m.chat.id
     if uid in INTERNAL_TEST_USER_IDS:
         u["is_test_user"] = 1
+    if FREE_BETA_ACCESS:
+        await save_user(u, DB_PATH)
+        await m.answer(
+            "🟢 Открытый beta-тест: все функции SKILLER сейчас доступны бесплатно. Оплата не нужна."
+        )
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
         return
@@ -11757,6 +11830,9 @@ async def handle_successful_payment(m: Message):
     uid = m.from_user.id
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
+    if FREE_BETA_ACCESS:
+        await m.answer("🟢 Оплата сейчас не требуется: в открытом beta-тесте полный режим бесплатный для всех.")
+        return
     payment = getattr(m, "successful_payment", None)
     amount_total = getattr(payment, "total_amount", None)
     currency = getattr(payment, "currency", "EUR")
@@ -12319,6 +12395,12 @@ async def main_flow(m: Message):
 
     if text in {"💳 Полный режим", "💳 Что даёт полный режим"} or "полный режим" in low and "плат" not in low:
         await log_event(u["user_id"], u.get("stage", ""), "offer_details_requested", {"source": "persistent_button"}, DB_PATH, SHEETS_WEBHOOK_URL)
+        if FREE_BETA_ACCESS:
+            await m.answer(
+                "🟢 Полный режим уже включён бесплатно на время открытого beta-теста.",
+                reply_markup=kb_training_main,
+            )
+            return
         await force_show_offer(m, u, "manual_button")
         return
 
@@ -14360,6 +14442,18 @@ async def main_flow(m: Message):
 
     # OFFER stage
     if u.get("stage") == "offer":
+        if FREE_BETA_ACCESS:
+            u["payment_status"] = "beta_free"
+            u["access_status"] = "beta_free"
+            u["free_mode"] = 1
+            u["full_mode"] = 1
+            set_legacy_stage(u, "training")
+            await save_user(u, DB_PATH)
+            await m.answer(
+                "🟢 Платёжный экран отключён: во время открытого beta-теста все функции доступны бесплатно."
+            )
+            await answer_with_keyboard(m, u, "Продолжаем тренировку.", kb_training_main, "training_main")
+            return
         low = text.lower().strip()
         if text in {"💳 Продолжить полный режим", f"💳 Продолжить за €{BASE_OFFER_EUR_LABEL}", f"💳 Месяц — €{BASE_OFFER_EUR_LABEL}"} or "полный режим" in low or "месяц" in low or f"€{BASE_OFFER_EUR_LABEL}" in low or BASE_OFFER_EUR_LABEL == low:
             await log_event(u["user_id"], "offer", "payment_click_month_1498", {"payment_click": "month_1498", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -15237,6 +15331,16 @@ async def on_offer_callbacks(c: CallbackQuery):
     if await handle_safety_callback(c, u, data):
         return
     data, _, _ = split_versioned_callback(data)
+    if FREE_BETA_ACCESS and data not in {
+        OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
+        OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
+        "show_map", "continue_free",
+    }:
+        await c.message.answer(
+            "🟢 Сейчас открытый beta-тест: все функции бота уже доступны бесплатно, платёжные и коммерческие маршруты отключены."
+        )
+        await c.answer()
+        return
     u["last_offer_action"] = data
     click_event = {
         OFFER_CALLBACKS["bot"]: "offer_subscription_clicked",

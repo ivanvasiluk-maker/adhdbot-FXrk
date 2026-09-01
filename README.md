@@ -45,6 +45,7 @@ PAYMENT_URL_MONTH_1498=
 PAYMENT_MONTH_URL=
 PAYMENT_TEST_URL=
 PAYMENT_ACCEPT_ANY=0
+FREE_BETA_ACCESS=1
 CURATOR_TELEGRAM_ID=312112015
 CURATOR_USERNAME=Ivan_Vasiliuk
 ENABLE_PAYMENTS=0
@@ -76,9 +77,10 @@ ADMIN_IDS=
 ```
 Notes:
 - Leave `OPENAI_API_KEY` empty to run without AI features.
+- `FREE_BETA_ACCESS=1` is the current launch mode: all bot capabilities are enabled for every user, offer screens are suppressed, and payment callbacks do not grant or change access. Keep `ENABLE_PAYMENTS=0` and `ENABLE_PAID_PLAN=false` during this beta. To monetize later, first deploy verified provider-side payment handling, then set `FREE_BETA_ACCESS=0`.
 - Product development is governed by [the Product Constitution](docs/PRODUCT_CONSTITUTION.md). New user-facing scenarios must pass its executable feature gate.
 - Set `TEST_MODE=1` to skip paywalls and unlock full flow during testing.
-- For cheap payment-link QA, set `PAYMENT_TEST_URL` to the €1 link and `PAYMENT_ACCEPT_ANY=1`. In this mode the offer uses the test link when available, and `/confirm_payment` or the “✅ Я оплатил(а) — тест” button manually marks the user as paid for 30 days. Turn `PAYMENT_ACCEPT_ANY` off before production.
+- Only after disabling free beta, payment-link QA can use `PAYMENT_TEST_URL` with `PAYMENT_ACCEPT_ANY=1`. Never enable that flag in production; it is not provider-side payment verification.
 - Production payment links do not verify provider events automatically. After paying, the user can request a manual check; the bot sends the request to `CURATOR_TELEGRAM_ID`, and the curator grants access with `/mark_paid <user_id>`. Do not promise automatic activation until a signed provider webhook is deployed.
 - Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables per-user QA helpers, including `/force_next_day` and `/set_day 3` (both immediately open that day’s training) plus `/show_offer`. Destructive/admin operations such as payment marking, stats, and Sheets sync stay ADMIN-only.
 - Set `BOT_STARTUP_CHECK=1` only for deploy/build sanity checks; in this mode the bot initializes and exits without starting Telegram polling.

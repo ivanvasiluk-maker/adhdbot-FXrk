@@ -18,6 +18,7 @@ log = logging.getLogger("bot")
 
 # Global test switch to unlock features without paywalls
 TEST_MODE = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on", "debug"}
+FREE_BETA_ACCESS = os.getenv("FREE_BETA_ACCESS", "1").lower() in {"1", "true", "yes", "on"}
 
 # Persistent user-state schema version. Migrations must be additive/non-destructive:
 # deploys must never drop the SQLite file or reset existing users.
@@ -1443,10 +1444,10 @@ def default_user(uid: int) -> Dict[str, Any]:
         "schema_version": USER_STATE_SCHEMA_VERSION,
         "plan_overrides_json": None,
         "trial_days": 3,
-        "trial_phase": "paid" if TEST_MODE else "trial3",
-        "payment_status": "paid" if TEST_MODE else "trial",
-        "access_status": "paid" if TEST_MODE else "trial",
-        "free_mode": 0,
+        "trial_phase": "paid" if TEST_MODE else "beta_free" if FREE_BETA_ACCESS else "trial3",
+        "payment_status": "paid" if TEST_MODE else "beta_free" if FREE_BETA_ACCESS else "trial",
+        "access_status": "paid" if TEST_MODE else "beta_free" if FREE_BETA_ACCESS else "trial",
+        "free_mode": 1 if FREE_BETA_ACCESS else 0,
         "paid_until": None,
         "last_payment_click": None,
         "is_test_user": 0,
@@ -1554,7 +1555,7 @@ def default_user(uid: int) -> Dict[str, Any]:
         "current_task_context": None,
         "current_next_physical_step": None,
         "current_task_status": None,
-        "full_mode": 0,
+        "full_mode": 1 if FREE_BETA_ACCESS else 0,
         "full_mode_started_at": None,
         "full_mode_until": None,
         "full_mode_plan_json": None,
@@ -2216,6 +2217,16 @@ def sync_user_state_aliases(u: Dict[str, Any]) -> Dict[str, Any]:
     u["stage"] = step_value
     u["current_step"] = step_value
     access_value = u.get("payment_status") or u.get("access_status") or ("paid" if TEST_MODE else "trial")
+    if FREE_BETA_ACCESS:
+        # Keep a genuine paid marker intact for accounting, but grant the same
+        # product capabilities to every beta participant, including old users.
+        if str(access_value).lower() not in {"paid", "full"}:
+            access_value = "beta_free"
+            u["payment_status"] = "beta_free"
+            u["trial_phase"] = "beta_free"
+        u["access_status"] = "beta_free"
+        u["free_mode"] = 1
+        u["full_mode"] = 1
     u["payment_status"] = access_value
     u["access_status"] = access_value
     trainer_value = u.get("trainer_key") or u.get("trainer") or "marsha"
@@ -4454,7 +4465,7 @@ def gamify_apply(u: dict, delta_points: int, reason: str):
 
 def is_paid(u: dict) -> bool:
     """Проверить, есть ли полный доступ: paid, testmode или активная дата paid_until."""
-    if TEST_MODE:
+    if TEST_MODE or FREE_BETA_ACCESS:
         return True
     if int(u.get("is_test_user") or 0) == 1 or str(u.get("payment_status") or "").lower() in {"paid", "test", "full"}:
         return True

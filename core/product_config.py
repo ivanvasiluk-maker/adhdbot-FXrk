@@ -42,6 +42,9 @@ ENABLE_DAY1_WOW = _env_bool("ENABLE_DAY1_WOW", True)
 ENABLE_HUMAN_OFFER = _env_bool("ENABLE_HUMAN_OFFER", True)
 ENABLE_GROUP_OFFER = _env_bool("ENABLE_GROUP_OFFER", True)
 ENABLE_PAID_PLAN = _env_bool("ENABLE_PAID_PLAN", True)
+# Open beta release: every bot capability is available without a paywall.
+# Set FREE_BETA_ACCESS=0 only when a verified production payment flow is ready.
+FREE_BETA_ACCESS = _env_bool("FREE_BETA_ACCESS", True)
 NEW_ARCHITECTURE_TEST_COHORT_ENABLED = _env_bool("NEW_ARCHITECTURE_TEST_COHORT_ENABLED", True)
 SKILL_REGISTRY_ENABLED = _env_bool("SKILL_REGISTRY_ENABLED", False)
 SKILL_LIBRARY_PATH = os.getenv("SKILL_LIBRARY_PATH", "data/skills").strip() or "data/skills"

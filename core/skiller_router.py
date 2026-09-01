@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, MutableMapping
 
+from core.product_config import FREE_BETA_ACCESS
+
 
 class DialogState(str, Enum):
     ONBOARDING = "ONBOARDING"
@@ -273,6 +275,15 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
         session["state"] = DialogState.CRISIS_FLOW.value
         return _response("Что происходит прямо сейчас? Можно ответить текстом, голосом или выбрать состояние.")
     if action.startswith("offer."):
+        if FREE_BETA_ACCESS:
+            if state == DialogState.OFFER:
+                session["state"] = session.pop(
+                    "state_before_offer", session.get("last_non_offer_state", DialogState.DAY_OPEN.value)
+                )
+            return _response(
+                "🟢 Сейчас открытый beta-тест: все функции доступны бесплатно. Оплата не нужна.",
+                [("Продолжить тренировку", "offer.continue")],
+            )
         if state != DialogState.OFFER:
             session["state_before_offer"] = state.value
             session["last_non_offer_state"] = state.value
@@ -292,6 +303,14 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
                                      ("Выбрать позже", "offer.later")])
     if action == "navigation.back":
         if state == DialogState.OFFER:
+            if FREE_BETA_ACCESS:
+                session["state"] = session.pop(
+                    "state_before_offer", session.get("last_non_offer_state", DialogState.DAY_OPEN.value)
+                )
+                return _response(
+                    "🟢 Полный режим открыт бесплатно на время beta-теста.",
+                    [("Продолжить тренировку", "offer.continue")],
+                )
             return _response("Выбери вариант или вернись к тренировке.", [
                 ("🟢 Продолжить бесплатно", "offer.free"), ("🔵 Подписка", "offer.subscription"),
                 ("🟠 Группа КПТ", "offer.group"), ("🔴 Консультация", "offer.consultation"),
