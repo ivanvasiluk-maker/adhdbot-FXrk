@@ -174,7 +174,9 @@ class DialogRoutingTests(unittest.IsolatedAsyncioTestCase):
             for label in labels:
                 user = bot.default_user(71)
                 user.update({"stage": "await_problem_text", "day_date": bot.local_date_for_user(user)})
-                with patch.object(bot, "get_user", new=AsyncMock(return_value=user)):
+                with patch.object(bot, "get_user", new=AsyncMock(return_value=user)), patch.object(
+                    bot, "send_user_map", new=AsyncMock()
+                ):
                     await bot.main_flow(FakeMessage(label))
         llm.assert_not_awaited()
 

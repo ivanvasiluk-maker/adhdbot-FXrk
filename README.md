@@ -76,8 +76,8 @@ BOT_STARTUP_CHECK=0
 ADMIN_IDS=
 ```
 Notes:
-- Leave `OPENAI_API_KEY` empty to run without AI features.
-- `FREE_BETA_ACCESS=1` is the current launch mode: all bot capabilities are enabled for every user, offer screens are suppressed, and payment callbacks do not grant or change access. Keep `ENABLE_PAYMENTS=0` and `ENABLE_PAID_PLAN=false` during this beta. To monetize later, first deploy verified provider-side payment handling, then set `FREE_BETA_ACCESS=0`.
+- `OPENAI_API_KEY` is required for Telegram voice transcription. If it is absent, the text/button flows still work and `/health` reports `Voice transcription ready false`.
+- `FREE_BETA_ACCESS=1` is the current launch mode: all bot capabilities are enabled for every user and automatic sales interruptions stay suppressed. Manual `/show_offer` displays the real proposition and records purchase intent; only after the user presses «Оплатить» does the bot disclose that beta access is free and no charge occurred. Keep `ENABLE_PAYMENTS=0` and `ENABLE_PAID_PLAN=false` during this beta.
 - Product development is governed by [the Product Constitution](docs/PRODUCT_CONSTITUTION.md). New user-facing scenarios must pass its executable feature gate.
 - Set `TEST_MODE=1` to skip paywalls and unlock full flow during testing.
 - Only after disabling free beta, payment-link QA can use `PAYMENT_TEST_URL` with `PAYMENT_ACCEPT_ANY=1`. Never enable that flag in production; it is not provider-side payment verification.

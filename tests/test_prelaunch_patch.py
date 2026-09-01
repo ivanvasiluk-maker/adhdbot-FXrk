@@ -77,8 +77,8 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("🟢 Продолжить beta бесплатно", labels)
-        self.assertFalse(any("€" in label for label in labels))
+        self.assertIn(f"💳 Оплатить €{bot.BASE_OFFER_EUR_LABEL}/мес", labels)
+        self.assertIn("Продолжить тренировку", labels)
         self.assertNotIn("Другие форматы поддержки", labels)
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
@@ -89,15 +89,16 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
                 for row in bot.offer_inline_keyboard(1).inline_keyboard
                 for button in row
             ]
-        self.assertFalse(any("€" in label for label in enabled_labels))
+        self.assertIn(f"💳 Оплатить €{bot.BASE_OFFER_EUR_LABEL}/мес", enabled_labels)
 
-    def test_offer_copy_does_not_advertise_disabled_or_unconfigured_paths(self):
+    def test_manual_beta_offer_advertises_product_without_live_checkout(self):
         with patch.object(bot, "ENABLE_PAYMENTS", False), patch.object(
             bot, "ENABLE_GROUP_OFFER", False,
         ), patch.object(bot, "ENABLE_HUMAN_OFFER", False):
             text = bot.short_offer_text()
             labels = [button.text for row in bot.offer_details_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertNotIn("SKILLER Full", text)
+        self.assertIn("SKILLER Full", text)
+        self.assertIn(f"€{bot.BASE_OFFER_EUR_LABEL}/мес", text)
         self.assertNotIn("Группа навыков", text)
         self.assertNotIn("С человеком", labels)
         self.assertEqual(labels, ["🟢 Продолжить beta бесплатно", "↩️ Назад"])
@@ -162,8 +163,8 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Что будем делать", text)
         self.assertIn("Что надо развивать", text)
         self.assertIn("START → STAY → RETURN", text)
-        self.assertIn("открытый beta-тест", text)
-        self.assertIn("доступен бесплатно", text)
+        self.assertIn(f"€{bot.BASE_OFFER_EUR_LABEL}/мес", text)
+        self.assertNotIn("доступен бесплатно", text)
 
     def test_day_one_skill_names_the_problem_and_solution_route(self):
         user = bot.default_user(1)

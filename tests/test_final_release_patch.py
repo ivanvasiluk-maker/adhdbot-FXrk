@@ -71,7 +71,7 @@ def test_actionable_correction_is_annotation_not_hypothesis():
 
 
 def test_test_payment_hidden_from_production_user_and_allowed_for_test_user():
-    with patch.object(bot, "PAYMENT_ACCEPT_ANY", True), patch.object(bot, "TEST_MODE", False), patch.object(bot, "is_admin", return_value=False):
+    with patch.object(bot, "FREE_BETA_ACCESS", False), patch.object(bot, "PAYMENT_ACCEPT_ANY", True), patch.object(bot, "TEST_MODE", False), patch.object(bot, "is_admin", return_value=False):
         assert not any("Я оплатил(а) — тест" in text for text in _texts(bot.offer_inline_keyboard(100)))
         assert any("Я оплатил(а) — тест" in text for text in _texts(bot.offer_inline_keyboard(100, True)))
         assert not bot.test_payment_allowed(100)
