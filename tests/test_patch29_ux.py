@@ -119,6 +119,37 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
             inline_callbacks(bot.offer_inline_keyboard(user["user_id"])),
         )
 
+    async def test_start_does_not_disclose_free_beta_before_payment_click(self):
+        user = bot.default_user(29008)
+        user.update({"first_start_date": "2026-09-01", "has_started_training": 1})
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=user["user_id"]),
+            chat=SimpleNamespace(id=user["user_id"]),
+            answer=AsyncMock(),
+        )
+        with patch.object(bot, "FREE_BETA_ACCESS", True), patch.object(
+            bot, "get_user", AsyncMock(return_value=user)
+        ), patch.object(bot, "save_user", AsyncMock()), patch.object(
+            bot, "get_user_profile", AsyncMock(return_value={})
+        ), patch.object(bot, "log_event", AsyncMock()):
+            await bot.cmd_start(message)
+        rendered = "\n".join(call.args[0] for call in message.answer.await_args_list)
+        self.assertIn("Вы уже начали работу со Skiller", rendered)
+        self.assertNotIn("beta", rendered.lower())
+        self.assertNotIn("бесплат", rendered.lower())
+
+    async def test_automatic_offer_is_silent_about_beta_and_payment(self):
+        user = bot.default_user(29009)
+        message = SimpleNamespace(answer=AsyncMock())
+        with patch.object(bot, "FREE_BETA_ACCESS", True), patch.object(
+            bot, "log_event", AsyncMock()
+        ):
+            await bot.show_day3_offer(message, user, "day3", mode="auto")
+        rendered = message.answer.await_args.args[0]
+        self.assertEqual(rendered, "Продолжаем тренировку.")
+        self.assertNotIn("beta", rendered.lower())
+        self.assertNotIn("оплат", rendered.lower())
+
     async def test_beta_payment_click_records_intent_without_access_mutation(self):
         user = bot.default_user(29005)
         before = {key: user.get(key) for key in (

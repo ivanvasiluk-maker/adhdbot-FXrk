@@ -6937,10 +6937,10 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
             u["user_id"], u.get("stage", ""), "offer_suppressed_free_beta",
             {"source": source, "mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL,
         )
-        await m.answer(
-            "🟢 Открытый beta-тест: полный режим уже доступен бесплатно. Оплата не нужна.",
-            reply_markup=kb_training_main,
-        )
+        # Do not disclose the free beta proactively. The bot keeps training
+        # normally; the disclosure is shown only after an explicit click on
+        # the purchase-intent button in the manual offer.
+        await m.answer("Продолжаем тренировку.", reply_markup=kb_training_main)
         return
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
@@ -11889,11 +11889,6 @@ async def cmd_start(m: Message):
     u["chat_id"] = m.chat.id
     if uid in INTERNAL_TEST_USER_IDS:
         u["is_test_user"] = 1
-    if FREE_BETA_ACCESS:
-        await save_user(u, DB_PATH)
-        await m.answer(
-            "🟢 Открытый beta-тест: все функции SKILLER сейчас доступны бесплатно. Оплата не нужна."
-        )
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
         return

@@ -364,7 +364,10 @@ async def test_auto_offer_is_suppressed_but_manual_offer_tests_intent_in_free_be
         await bot.show_day3_offer(auto_msg, u, "test_auto", mode="auto")
         user_after_auto = await get_user(uid, bot.DB_PATH)
         assert not user_after_auto.get("last_offer_shown_at")
-        assert "бесплат" in "\n".join(auto_msg.answers)
+        auto_text = "\n".join(auto_msg.answers)
+        assert auto_text == "Продолжаем тренировку."
+        assert "бесплат" not in auto_text
+        assert "оплат" not in auto_text.lower()
 
         second_auto_msg = FakeMessage(uid, "")
         fresh = await get_user(uid, bot.DB_PATH)
