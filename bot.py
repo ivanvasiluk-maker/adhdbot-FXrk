@@ -234,7 +234,10 @@ log.info("DB_PATH: %s", DB_PATH)
 if PAYMENT_ACCEPT_ANY:
     log.warning("PAYMENT_ACCEPT_ANY is enabled: test payment confirmations can grant paid access; disable it before production.")
 if FREE_BETA_ACCESS:
-    log.info("FREE_BETA_ACCESS is enabled: all bot capabilities are free and paid offers are suppressed.")
+    log.info(
+        "FREE_BETA_ACCESS is enabled: all capabilities are free; automatic sales are suppressed "
+        "and manual offer screens only record purchase intent."
+    )
 if STARTUP_CHECK:
     log.info("BOT_STARTUP_CHECK is enabled: startup will validate init and exit before Telegram polling.")
 
@@ -391,6 +394,8 @@ kb_short_map_repeat = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📖 Полная карта")],
         [KeyboardButton(text="💪 Давай действие")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -687,6 +692,8 @@ kb_post_action_reflection = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Продолжить задачу самому")],
         [KeyboardButton(text="Ещё один маленький шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="Закрыть день")],
     ],
     resize_keyboard=True,
@@ -736,6 +743,8 @@ kb_experiment_completed = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Продолжить задачу самому")],
         [KeyboardButton(text="Ещё один маленький шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="Закрыть день")],
     ],
     resize_keyboard=True,
@@ -745,6 +754,7 @@ kb_simplified_skill_after_effect = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🧭 Следующий шаг")],
         [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -754,6 +764,8 @@ kb_extra_microstep_done = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="✅ Сделал")],
         [KeyboardButton(text="🟡 Не вышло")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -969,12 +981,19 @@ def short_daily_map_text(
     )
     task = current_task_label(u or {}) if u else "текущая задача"
     helped_lines = []
+    helped_keys = set()
+    helped_candidates = []
     if helpful:
-        helped_lines.append(helpful)
-    helped_lines.extend(
+        helped_candidates.append(_skill_label(str(helpful), str(helpful)))
+    helped_candidates.extend(
         _skill_label(item.get("skill_id"), item.get("skill_id")) for item in positive
-        if _skill_label(item.get("skill_id"), item.get("skill_id")) not in helped_lines
     )
+    for item in helped_candidates:
+        label = " ".join(str(item or "").split())
+        key = label.casefold()
+        if label and key not in helped_keys:
+            helped_lines.append(label)
+            helped_keys.add(key)
     attempts = max(
         int(model.get("evidence_count") or 0),
         len(user_skill_attempts(u or {})),
@@ -1058,6 +1077,8 @@ VOICE_FREE_TEXT_STAGES = {
     "analysis_retry_await_clarification",
     "analysis_refine",
     "awaiting_conclusion_correction",
+    "personal_model_correction",
+    "closed_day_new_situation",
     "crisis_text",
     "crisis_effect_await",
     "day_review_barrier_other",
@@ -1092,6 +1113,18 @@ def infer_evening_checkin_answer(raw: str) -> str:
     return ""
 
 
+def voice_transcription_failure_text() -> str:
+    if not OPENAI_API_KEY or client is None:
+        return (
+            "Голосовой ввод сейчас не подключён на сервере. Нужен OPENAI_API_KEY; "
+            "пока ответь текстом или выбери кнопку."
+        )
+    return (
+        "Не удалось распознать это голосовое. Попробуй отправить ещё раз чуть короче "
+        "или ответь текстом / кнопкой."
+    )
+
+
 async def transcribe_voice_for_current_prompt(m: Message, u: Dict[str, Any]) -> Optional[str]:
     """Allow voice answers in free-text prompts without changing their state handlers."""
     if not m.voice or u.get("stage") not in VOICE_FREE_TEXT_STAGES:
@@ -1099,7 +1132,7 @@ async def transcribe_voice_for_current_prompt(m: Message, u: Dict[str, Any]) -> 
     await m.answer("Слушаю голосовое и перевожу в текст…")
     voice_text = await whisper_transcribe(m)
     if not voice_text:
-        await m.answer("Не смог разобрать голосовое. Можно ответить текстом или выбрать кнопку.")
+        await m.answer(voice_transcription_failure_text())
         return ""
     await log_event(
         u.get("user_id"),
@@ -4580,6 +4613,7 @@ async def other_entry_options_for_user_async(u: Dict[str, Any]) -> List[str]:
 
 def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
     attempt = active_attempt(u)
+    snapshot = current_experiment_snapshot(u)
     return {
         "started": True,
         "completed": None,
@@ -4588,7 +4622,13 @@ def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
         "continued_after_skill": None,
         "difficulty": None,
         "attempt_id": str(attempt.get("attempt_id") or u.get("current_action_id") or ""),
-        "skill_id": str(current_skill_for_action(u) or current_skill_id(u) or ""),
+        # The active experiment owns the skill being evaluated. Profile-level
+        # current_skill can still contain the previous exercise during a
+        # transition and must not leak into the new "Запомнить" anchor.
+        "skill_id": str(
+            snapshot.get("skill_id") or attempt.get("current_skill_id")
+            or current_skill_for_action(u) or current_skill_id(u) or ""
+        ),
         "mechanism": str(attempt.get("current_mechanism") or u.get("current_mechanism") or ""),
         "barrier": str(u.get("pending_stuck_reason") or u.get("last_not_completed_reason") or ""),
         "day_id": str(u.get("current_day_id") or ""),
@@ -6822,8 +6862,12 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
 def short_offer_text() -> str:
     if FREE_BETA_ACCESS:
         return (
-            "🟢 Сейчас идёт открытый beta-тест. Полный режим SKILLER доступен бесплатно: "
-            "карта, история попыток, следующие тесты и все навыки уже включены."
+            f"🔵 Персональная тренировка SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.\n\n"
+            "Ещё 7 дней бот будет проверять карту на реальных задачах, сохранять результаты попыток, "
+            "не повторять нерабочие советы и собирать твой протокол START → STAY → RETURN.\n\n"
+            "Внутри: персональная карта, история попыток, адаптивные следующие тесты, "
+            "до двух напоминаний в день и все новые навыки.\n\n"
+            "Нажатие «Оплатить» сейчас проверяет готовность купить. До подтверждения списания не будет."
         )
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
     if paid_plan_available():
@@ -6902,15 +6946,15 @@ OFFER_STAGES = {"offer", OFFER_MENU_STAGE, OFFER_PREVIEW_STAGE}
 
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: str = "auto"):
     """Show the adaptive day-3 map and paid continuation offer."""
-    if FREE_BETA_ACCESS:
+    if FREE_BETA_ACCESS and mode == "auto":
         await log_event(
             u["user_id"], u.get("stage", ""), "offer_suppressed_free_beta",
             {"source": source, "mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL,
         )
-        await m.answer(
-            "🟢 Открытый beta-тест: полный режим уже доступен бесплатно. Оплата не нужна.",
-            reply_markup=kb_training_main,
-        )
+        # Do not disclose the free beta proactively. The bot keeps training
+        # normally; the disclosure is shown only after an explicit click on
+        # the purchase-intent button in the manual offer.
+        await m.answer("Продолжаем тренировку.", reply_markup=kb_training_main)
         return
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
@@ -7139,14 +7183,8 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
 
 async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
     """QA/manual command: show the offer without changing day/progress prerequisites."""
-    if FREE_BETA_ACCESS:
-        await m.answer(
-            "🟢 Сейчас идёт открытый beta-тест. Все функции бота уже доступны бесплатно — оплачивать ничего не нужно.",
-            reply_markup=kb_training_main,
-        )
-        return
     day = int(u.get("day") or u.get("day_number") or 1)
-    mode = "preview" if day < 3 else "manual"
+    mode = "manual_beta_intent" if FREE_BETA_ACCESS else ("preview" if day < 3 else "manual")
     await log_event(u["user_id"], u.get("stage", ""), "show_offer_manual", {"source": source, "day": day, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
     await show_day3_offer(m, u, source, mode=mode)
 
@@ -7456,6 +7494,7 @@ OFFER_CALLBACKS = {
     "request_group": "offer:request_group",
     "conclusion_full": "offer:conclusion_full",
     "next_plan": "offer:next_plan",
+    "beta_purchase_intent": "offer:beta_purchase_intent",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -7496,9 +7535,10 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> InlineKeyboardMarkup:
     if FREE_BETA_ACCESS:
         return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["beta_purchase_intent"])],
             [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
             [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
-            [InlineKeyboardButton(text="🟢 Продолжить beta бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+            [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
         ])
     keyboard = []
     if paid_plan_available():
@@ -7601,12 +7641,6 @@ def offer_disclaimer_text() -> str:
 
 
 def tariff_bot_text() -> str:
-    if FREE_BETA_ACCESS:
-        return (
-            "🟢 Полный режим SKILLER открыт бесплатно на время beta-теста.\n\n"
-            "Доступны персональная карта навыков, история попыток, следующие тесты, "
-            "напоминания и новые обновления. Оплата не нужна."
-        )
     return (
         f"🔵 SKILLER Founding Member — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
         "Для тех, кто хочет решить проблему самостоятельно, но не начинать каждый раз с нового случайного совета.\n\n"
@@ -7986,14 +8020,14 @@ def new_day_insights_text(profile: Dict[str, Any]) -> str:
         insights.append("залипание усиливается, когда телефон рядом")
     if not insights:
         insights = [
-            "данных пока мало, поэтому не делаем выводов о причине",
-            "сегодня проверяем один маленький вход",
-            "эффект навыка запишем как сигнал, а не как диагноз",
+            "данных пока мало, но есть две рабочие гипотезы: вход тормозит неопределённость или напряжение перед первым шагом",
+            "сегодня одним коротким тестом различим эти гипотезы",
+            "по результату выберем следующий вход и не будем повторять то, что не помогает",
         ]
     cautious_fallback = [
-        "данных пока мало, поэтому гипотезы проверяем действием",
-        "маленький шаг безопаснее, чем попытка резко собраться",
-        "важен факт попытки, а не идеальный результат",
+        "гипотезы уже есть — теперь проверяем их действием",
+        "маленький шаг покажет, проблема в размере входа, тревоге или отвлечении",
+        "мы будем отбрасывать нерабочие варианты и собирать твой способ старта",
     ]
     while len(insights) < 3:
         for item in cautious_fallback:
@@ -8110,14 +8144,15 @@ def new_day_context_header(profile: Dict[str, Any]) -> str:
     if has_previous_day_evidence(profile):
         return (
             "🌱 Новый день.\n\n"
-            "Вчера мы увидели важное:\n"
+            "Вчера появились первые данные и рабочие гипотезы:\n"
             f"{new_day_insights_text(profile)}\n\n"
-            "Сегодня не начинаем с нуля.\n"
+            "Сегодня не начинаем с нуля: проверим гипотезы и приблизимся к рабочему решению.\n"
         )
     return (
         "🌱 Новый день.\n\n"
-        "Пока у нас мало фактических данных за прошлый день.\n"
-        "Начинаем с короткого теста без выводов про вчера.\n"
+        "Фактических данных пока мало, но стартовые гипотезы уже есть: "
+        "неясный первый шаг, напряжение или быстрый уход внимания.\n"
+        "Проверим их коротким действием и начнём собирать твоё решение.\n"
     )
 
 
@@ -9487,6 +9522,30 @@ async def maybe_show_day1_insight(m: Message, u: Dict[str, Any]) -> bool:
     return True
 
 
+def day_review_insight_text(review: Dict[str, Any]) -> str:
+    """Return a concrete, non-diagnostic takeaway for the closed day."""
+    focus = str(review.get("function") or "")
+    barrier = str(review.get("barrier") or "").strip()
+    state = str(review.get("state") or "").strip()
+    if review.get("skipped"):
+        return (
+            "Сегодня мы не собирали подробный разбор. Это тоже граница: день можно закрыть без отчёта, "
+            "а завтра проверить один короткий вход без долга."
+        )
+    focus_label = DAY_REVIEW_FUNCTION_LABELS.get(focus, "место сбоя ещё уточняется")
+    next_test = DAY_REVIEW_NEXT_TESTS.get(focus, "сделать первый шаг конкретным и видимым")
+    details = []
+    if barrier:
+        details.append(f"рабочая гипотеза — мешал фактор «{barrier}»")
+    if state:
+        details.append(f"фон дня — {state}")
+    evidence = "; ".join(details) if details else "для уточнения нужна ещё одна реальная попытка"
+    return (
+        f"Сегодня слабое место — {focus_label}. {evidence}. "
+        f"Завтра не начинаем заново: проверим, помогает ли {next_test}."
+    )
+
+
 async def day_close_metrics_text(u: Dict[str, Any]) -> str:
     counts = await get_honest_day_counts(u)
     profile = await get_user_profile(u["user_id"], DB_PATH)
@@ -9497,6 +9556,10 @@ async def day_close_metrics_text(u: Dict[str, Any]) -> str:
     profile_card = day1_profile_card_text(u, profile, attempts)
     focus = DAY_REVIEW_FUNCTION_LABELS.get(str(review.get("function") or ""), "узел ещё уточняется")
     state = str(review.get("state") or "не отмечено")
+    sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
+    skill = dict(SKILLS_DB.get(sid) or {})
+    skill.setdefault("skill_id", sid)
+    learning = daily_learning_text(skill)
     return (
         f"{trainer_style_line(u.get('trainer_key') or 'marsha', 'close')}\n\n"
         "🌙 Предварительное заключение за день\n\n"
@@ -9509,6 +9572,10 @@ async def day_close_metrics_text(u: Dict[str, Any]) -> str:
         f"— остановок после микрошагa: {counts['stopped_after_step_today']}\n"
         f"— возвратов после отвлечения: {counts['returns_today']}\n\n"
         "Это данные о поведении, а не оценка продуктивности.\n\n"
+        "🧠 Инсайт дня\n"
+        f"{day_review_insight_text(review)}\n\n"
+        "🧩 Навык / мысль, которую забираем с собой\n"
+        f"{learning}\n\n"
         "Статусы навыков:\n"
         f"{skill_map_lines(skill_map, 3)}\n\n"
         "Завтра проверим следующий тест из карты. Один повтор уточнит вывод лучше, чем ещё один общий совет."
@@ -9809,10 +9876,82 @@ async def reset_current_user(uid: int, chat_id: int) -> Dict[str, Any]:
         rows = await (await db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         )).fetchall()
+        table_columns: Dict[str, set[str]] = {}
         for row in rows:
             table = str(row["name"] if isinstance(row, aiosqlite.Row) else row[0])
             columns = await (await db.execute(f"PRAGMA table_info({_sqlite_ident(table)})")).fetchall()
-            column_names = {str(col["name"] if isinstance(col, aiosqlite.Row) else col[1]) for col in columns}
+            table_columns[table] = {
+                str(col["name"] if isinstance(col, aiosqlite.Row) else col[1]) for col in columns
+            }
+
+        async def ids_for(table: str, where: str, params: tuple[Any, ...]) -> List[int]:
+            if table not in table_columns or "id" not in table_columns[table]:
+                return []
+            found = await (await db.execute(
+                f"SELECT id FROM {_sqlite_ident(table)} WHERE {where}", params,
+            )).fetchall()
+            return [int(item[0]) for item in found]
+
+        def placeholders(values: List[int]) -> str:
+            return ",".join("?" for _ in values)
+
+        # Child evidence tables do not carry user_id. Resolve their exact
+        # ownership first, then delete leaf-to-root inside the same transaction.
+        situation_ids = await ids_for("situation_snapshots", "user_id=?", (uid,))
+        experiment_ids = await ids_for("behavioral_experiments", "user_id=?", (uid,))
+        mechanism_ids: List[int] = []
+        if situation_ids and "mechanism_hypotheses" in table_columns:
+            mechanism_ids = await ids_for(
+                "mechanism_hypotheses",
+                f"situation_id IN ({placeholders(situation_ids)})",
+                tuple(situation_ids),
+            )
+        outcome_ids: List[int] = []
+        if experiment_ids and "behavioral_experiment_outcomes" in table_columns:
+            outcome_ids = await ids_for(
+                "behavioral_experiment_outcomes",
+                f"experiment_id IN ({placeholders(experiment_ids)})",
+                tuple(experiment_ids),
+            )
+
+        if experiment_ids and "behavioral_experiment_decisions" in table_columns:
+            marks = placeholders(experiment_ids)
+            params: tuple[Any, ...] = (*experiment_ids, *experiment_ids)
+            clause = f"experiment_id IN ({marks}) OR next_experiment_id IN ({marks})"
+            if outcome_ids:
+                clause += f" OR outcome_id IN ({placeholders(outcome_ids)})"
+                params = (*params, *outcome_ids)
+            await db.execute(
+                f"DELETE FROM behavioral_experiment_decisions WHERE {clause}", params,
+            )
+        if experiment_ids and "experiment_outcomes" in table_columns:
+            await db.execute(
+                f"DELETE FROM experiment_outcomes WHERE experiment_id IN ({placeholders(experiment_ids)})",
+                tuple(experiment_ids),
+            )
+        if experiment_ids and "behavioral_experiment_outcomes" in table_columns:
+            await db.execute(
+                f"DELETE FROM behavioral_experiment_outcomes WHERE experiment_id IN ({placeholders(experiment_ids)})",
+                tuple(experiment_ids),
+            )
+        if situation_ids and "mechanism_hypotheses" in table_columns:
+            await db.execute(
+                f"DELETE FROM mechanism_hypotheses WHERE situation_id IN ({placeholders(situation_ids)})",
+                tuple(situation_ids),
+            )
+        if "legacy_migration_links" in table_columns:
+            clauses = ["(source_table='users.profile_json' AND source_id=?)"]
+            params: tuple[Any, ...] = (str(uid),)
+            if experiment_ids:
+                clauses.append(
+                    f"(target_type='behavioral_experiment' AND target_id IN ({placeholders(experiment_ids)}))"
+                )
+                params = (*params, *experiment_ids)
+            await db.execute(
+                "DELETE FROM legacy_migration_links WHERE " + " OR ".join(clauses), params,
+            )
+
+        for table, column_names in table_columns.items():
             if "user_id" in column_names:
                 await db.execute(f"DELETE FROM {_sqlite_ident(table)} WHERE user_id=?", (uid,))
             elif table == "users" and "telegram_id" in column_names:
@@ -10619,6 +10758,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             "OK\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
+            f"Voice transcription ready {str(bool(OPENAI_API_KEY and client is not None)).lower()}\n"
             f"Sheets configured {str(bool(SHEETS_WEBHOOK_URL)).lower()}\n"
             f"Sheets sync enabled {str(bool(SHEETS_SYNC_ENABLED)).lower()}\n"
             f"Sheets interval {SHEETS_SYNC_INTERVAL_SECONDS}s batch {SHEETS_SYNC_BATCH_SIZE}\n"
@@ -11370,7 +11510,11 @@ async def finalize_day_review(m: Message, u: Dict[str, Any], review: Dict[str, A
         "skipped": bool(review.get("skipped")),
         "calendar_date": local_date_for_user(u),
     }
-    await record_profile_signal(u["user_id"], "training", {"last_day_review": review}, source="day_review")
+    await record_profile_signal(
+        u["user_id"], "training",
+        {"last_day_review": review, "last_memory_anchor": day_review_insight_text(review)},
+        source="day_review",
+    )
     await mark_day_closed(u, source)
     set_legacy_stage(u, "day_core_stop")
     await save_user(u, DB_PATH)
@@ -11483,13 +11627,14 @@ async def handle_full_mode_buttons(m: Message, u: Dict[str, Any], text: str) -> 
     return False
 
 async def handle_global_button(m: Message, u: Dict[str, Any], text: str) -> bool:
-    # During primary diagnostics the user is entering free-form problem text.
-    # Global button routing must not intercept it — the stage-specific handler
-    # at `await_problem_text` / `await_problem_voice` is the only valid consumer.
-    if u.get("stage") in DIAGNOSTIC_INPUT_STAGES:
-        return False
     low = (text or "").lower().strip()
     kind = global_button_kind(text, low)
+    # During primary diagnostics the user is entering free-form problem text.
+    # Free text still belongs to the prompt, but explicit persistent navigation
+    # buttons must never become dead because a stale keyboard survived a state
+    # transition.
+    if u.get("stage") in DIAGNOSTIC_INPUT_STAGES and kind not in {"map", "trainer_switch", "change_skill"}:
+        return False
     if not kind:
         return False
     if kind == "map":
@@ -11758,11 +11903,6 @@ async def cmd_start(m: Message):
     u["chat_id"] = m.chat.id
     if uid in INTERNAL_TEST_USER_IDS:
         u["is_test_user"] = 1
-    if FREE_BETA_ACCESS:
-        await save_user(u, DB_PATH)
-        await m.answer(
-            "🟢 Открытый beta-тест: все функции SKILLER сейчас доступны бесплатно. Оплата не нужна."
-        )
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
         return
@@ -11880,7 +12020,7 @@ async def main_flow(m: Message):
         await m.answer("Слушаю голосовое и сначала проверяю безопасность…")
         global_voice_text = await whisper_transcribe(m)
         if not global_voice_text:
-            await m.answer("Не смог разобрать голосовое. Напиши коротко текстом, что сейчас мешает начать.")
+            await m.answer(voice_transcription_failure_text())
             return
         text = global_voice_text.strip()
         low = text.lower()
@@ -11919,6 +12059,17 @@ async def main_flow(m: Message):
             return
         await m.answer("Подтверди сброс отдельной кнопкой или вернись назад.", reply_markup=kb_restart_confirm)
         return
+
+    # Persistent navigation outranks every conversational sub-router. Telegram
+    # can keep an old reply keyboard after a state change; these buttons must
+    # therefore remain actionable from analysis, post-exercise and closed-day
+    # screens instead of being consumed as free text.
+    priority_kind = global_button_kind(text, (text or "").lower().strip()) if text else ""
+    if priority_kind in {"map", "trainer_switch"} or (
+        priority_kind == "change_skill" and not day_closed_today(u)
+    ):
+        if await handle_global_button(m, u, text):
+            return
 
     # A callback may put the action router into a dedicated text/voice state.
     # Consume that input here before every legacy intake or story-analysis path.
@@ -12679,6 +12830,9 @@ async def main_flow(m: Message):
         }
         if text in {"🌙 Закрыть без разбора", "🌙 Не хочу разбирать, просто закрыть день"}:
             await finalize_day_review(m, u, {"kind": "day_review", "skipped": True}, "evening_review_skipped")
+            return
+        if text == "🌙 Подвести итоги дня":
+            await start_day_review(m, u, "evening_checkin_button")
             return
         if text in DAY_REVIEW_FUNCTION_BY_BUTTON:
             remember_checkin_state(u, "last_evening_state", text)
@@ -15351,6 +15505,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     if FREE_BETA_ACCESS and data not in {
         OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
         OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
+        OFFER_CALLBACKS["beta_purchase_intent"],
         "show_map", "continue_free",
     }:
         await c.message.answer(
@@ -15375,6 +15530,28 @@ async def on_offer_callbacks(c: CallbackQuery):
     if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
         await log_event(uid, "offer", "offer_menu_left", {"source": data}, DB_PATH, SHEETS_WEBHOOK_URL)
         await leave_offer_menu(c.message, u, data)
+        await c.answer()
+        return
+
+    if data == OFFER_CALLBACKS["beta_purchase_intent"]:
+        # Test willingness to pay without creating a payment, pending status,
+        # checkout URL or access mutation. The free-beta disclosure appears
+        # only after the explicit purchase-intent click.
+        u["last_payment_click"] = data
+        await save_user(u, DB_PATH)
+        await log_event(
+            uid, "offer", "beta_purchase_intent_recorded",
+            {"source": "manual_offer", "amount": float(BASE_OFFER_EUR), "charged": False},
+            DB_PATH, SHEETS_WEBHOOK_URL,
+        )
+        await c.message.answer(
+            "Спасибо — готовность оплатить записана.\n\n"
+            "Сейчас идёт открытый beta-тест, поэтому списания не будет: весь бот уже доступен тебе бесплатно. "
+            "Можно продолжать без ограничений.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"]),
+            ]]),
+        )
         await c.answer()
         return
 
@@ -15768,7 +15945,7 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
 # ============================================================
 
 async def whisper_transcribe(m: Message) -> Optional[str]:
-    if not (AI_ANALYSIS_ENABLED and client):
+    if client is None:
         log.warning("[AI] Whisper disabled: OpenAI client or API key is not configured")
         try:
             await log_event(m.from_user.id, "voice", "whisper_error", {"error_type": "not_configured", "error_source": "whisper_transcribe"}, DB_PATH, SHEETS_WEBHOOK_URL)

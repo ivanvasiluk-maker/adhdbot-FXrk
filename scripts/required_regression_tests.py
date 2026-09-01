@@ -282,16 +282,16 @@ async def test_show_offer_force_enables_offer_prerequisites():
         fresh = await get_user(uid, bot.DB_PATH)
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh["stage"] != bot.OFFER_PREVIEW_STAGE
+        assert fresh["stage"] == bot.OFFER_MENU_STAGE
         assert fresh["day"] == 1
-        assert not fresh.get("offer_mode")
+        assert fresh.get("offer_mode") == "manual_beta_intent"
         assert not profile.get("offer_shown")
         assert not profile.get("offer_seen_at")
         assert msg.answers
         joined = "\n".join(msg.answers)
-        assert "beta-тест" in joined
-        assert "бесплат" in joined
-        assert "€" not in joined
+        assert "SKILLER Full" in joined
+        assert f"€{bot.BASE_OFFER_EUR_LABEL}" in joined
+        assert "доступен бесплатно" not in joined
 
 
 async def test_stale_offer_callbacks_are_blocked_in_free_beta():
@@ -314,7 +314,8 @@ async def test_stale_offer_callbacks_are_blocked_in_free_beta():
         msg = FakeMessage(uid, "/show_offer")
         assert await bot.handle_user_command(msg, u, msg.text) is True
         fresh = await get_user(uid, bot.DB_PATH)
-        assert fresh["stage"] == "training"
+        assert fresh["stage"] == bot.OFFER_MENU_STAGE
+        assert fresh.get("offer_mode") == "manual_beta_intent"
 
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
@@ -339,12 +340,12 @@ async def test_stale_offer_callbacks_are_blocked_in_free_beta():
         resumed = await get_user(uid, bot.DB_PATH)
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert resumed["stage"] == "training_main"
+        assert resumed["stage"] == "training"
         assert resumed.get("last_offer_action") == bot.OFFER_CALLBACKS["continue_training"]
         assert not profile.get("offer_shown")
 
 
-async def test_auto_and_manual_offers_are_suppressed_in_free_beta():
+async def test_auto_offer_is_suppressed_but_manual_offer_tests_intent_in_free_beta():
     with tempfile.TemporaryDirectory() as td:
         old = bot.DB_PATH; bot.DB_PATH = str(Path(td) / "bot.db")
         await init_db(bot.DB_PATH); await migrate_db(bot.DB_PATH)
@@ -363,7 +364,10 @@ async def test_auto_and_manual_offers_are_suppressed_in_free_beta():
         await bot.show_day3_offer(auto_msg, u, "test_auto", mode="auto")
         user_after_auto = await get_user(uid, bot.DB_PATH)
         assert not user_after_auto.get("last_offer_shown_at")
-        assert "бесплат" in "\n".join(auto_msg.answers)
+        auto_text = "\n".join(auto_msg.answers)
+        assert auto_text == "Продолжаем тренировку."
+        assert "бесплат" not in auto_text
+        assert "оплат" not in auto_text.lower()
 
         second_auto_msg = FakeMessage(uid, "")
         fresh = await get_user(uid, bot.DB_PATH)
@@ -373,8 +377,9 @@ async def test_auto_and_manual_offers_are_suppressed_in_free_beta():
         assert await bot.handle_user_command(manual_msg, fresh, manual_msg.text) is True
         manual_user = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert not manual_user.get("offer_mode")
-        assert "бесплат" in "\n".join(manual_msg.answers)
+        assert manual_user.get("offer_mode") == "manual_beta_intent"
+        assert f"€{bot.BASE_OFFER_EUR_LABEL}" in "\n".join(manual_msg.answers)
+        assert "доступен бесплатно" not in "\n".join(manual_msg.answers)
 
 
 async def test_stale_paid_request_form_is_blocked_in_free_beta():
@@ -575,13 +580,14 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     assert "Базовый режим остаётся доступным." in text
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
-    assert "🟢 Продолжить beta бесплатно" in keyboard_text
+    assert f"💳 Оплатить €{bot.BASE_OFFER_EUR_LABEL}/мес" in keyboard_text
+    assert "Продолжить тренировку" in keyboard_text
     assert "🧭 План на следующие 7 дней" in keyboard_text
     assert "📖 Почему такой вывод" in keyboard_text
     assert "Другие форматы поддержки" not in keyboard_text
     assert "👥 Группа навыков" not in keyboard_text
     assert "👤 Потренировать навык с человеком" not in keyboard_text
-    assert "€" not in keyboard_text
+    assert f"€{bot.BASE_OFFER_EUR_LABEL}" in keyboard_text
 
     map_text = render_short_user_map({
         "attention_pattern": "scroll_autopilot",
@@ -1242,7 +1248,7 @@ def run():
         test_skinny_uses_direct_respectful_phrases,
         test_offer_gate_requires_attempts_and_respects_cooldown,
         test_offer_text_and_map_are_specific_without_curator_button,
-        test_bot_tariff_is_free_during_beta,
+        test_bot_tariff_keeps_real_copy_but_no_checkout_during_beta,
         test_extra_two_minutes_prompt_is_action_not_stop_copy,
         test_combined_crisis_three_plus_states_uses_short_synthesis,
         test_marsha_general_line_shows_assessment_phrase_once_per_day,
@@ -1260,7 +1266,7 @@ def run():
         test_curator_notification_sends_dm_to_ivan,
         test_show_offer_force_enables_offer_prerequisites,
         test_stale_offer_callbacks_are_blocked_in_free_beta,
-        test_auto_and_manual_offers_are_suppressed_in_free_beta,
+        test_auto_offer_is_suppressed_but_manual_offer_tests_intent_in_free_beta,
         test_stale_paid_request_form_is_blocked_in_free_beta,
         test_day_intro_is_not_sent_twice,
         test_completed_profile_start_resumes_without_onboarding,
@@ -1289,13 +1295,13 @@ def run():
 
 
 
-def test_bot_tariff_is_free_during_beta():
+def test_bot_tariff_keeps_real_copy_but_no_checkout_during_beta():
     kb = bot.tariff_bot_inline_keyboard(94023)
     buttons = [button for row in kb.inline_keyboard for button in row]
     pay_buttons = [button for button in buttons if getattr(button, "text", "") == f"💳 Оформить за €{bot.BASE_OFFER_EUR_LABEL}"]
     assert not pay_buttons
     assert any("beta бесплатно" in getattr(button, "text", "") for button in buttons)
-    assert "€" not in bot.tariff_bot_text()
+    assert f"€{bot.BASE_OFFER_EUR_LABEL}" in bot.tariff_bot_text()
 
 
 async def test_successful_payment_does_not_mutate_free_beta_access():

@@ -1060,20 +1060,22 @@ def payment_includes_text() -> str:
 
 
 def morning_checkin_text(name: str = "", day_skill_name: str = "") -> str:
-    skill_line = f"\nТвой навык дня: **{day_skill_name}**.\n" if day_skill_name else "\n"
+    greeting = f"Доброе утро, {name}." if name else "Доброе утро."
+    skill_line = f"\nНавык на сегодня: **{day_skill_name}**.\n" if day_skill_name else "\n"
     return (
-        "Доброе утро.\n"
-        "Сегодня не надо «наверстать жизнь».\n"
-        "Достаточно проверить один навык и заметить, где именно становится трудно."
+        f"{greeting}\n"
+        "Как ты сегодня — что сильнее всего мешает начать?\n"
+        "Можно нажать кнопку или ответить своими словами / голосом."
         f"{skill_line}\n"
-        "Что сейчас ближе?"
+        "Я подберу один короткий вход под твоё состояние."
     )
 
 
 def evening_checkin_text() -> str:
     return (
-        "Добрый вечер. Коротко закроем день по фактам.\n\n"
-        "Где сегодня чаще ломалась цепочка?"
+        "Добрый вечер. Если готов, за 3 коротких ответа разберём день: "
+        "что мешало, что происходило с состоянием и какой вывод взять на завтра.\n\n"
+        "Начать вечерний разбор?"
     )
 
 
@@ -1124,20 +1126,16 @@ def reactivation_text(count: int) -> str:
 
 kb_morning_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="⚡ Есть силы начать")],
-        [KeyboardButton(text="😶 Пока не включился")],
-        [KeyboardButton(text="😣 Уже тревожно")],
-        [KeyboardButton(text="📱 Уже унесло в телефон")],
+        [KeyboardButton(text="📱 Залипаю"), KeyboardButton(text="🚪 Не могу начать")],
+        [KeyboardButton(text="😵 Нет сил"), KeyboardButton(text="😬 Тревога")],
+        [KeyboardButton(text="🌀 Всё слишком большое")],
     ],
     resize_keyboard=True,
 )
 
 kb_evening_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="START — не начал")],
-        [KeyboardButton(text="STAY — начал и остановился")],
-        [KeyboardButton(text="RETURN — отвлёкся и не вернулся")],
-        [KeyboardButton(text="Вернулся и продолжил")],
+        [KeyboardButton(text="🌙 Подвести итоги дня")],
         [KeyboardButton(text="🌙 Закрыть без разбора")],
     ],
     resize_keyboard=True,
@@ -1468,6 +1466,8 @@ kb_stuck_aftercare = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Ещё 2 минуты")],
         [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,

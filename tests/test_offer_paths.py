@@ -21,11 +21,12 @@ class OfferPathTests(unittest.TestCase):
         self.assertFalse(bot.can_show_offer(user, profile))
         self.assertFalse(bot.scheduled_offer_due(user, profile))
 
-    def test_free_beta_screen_only_shows_plan_proof_and_continue(self):
+    def test_free_beta_manual_offer_shows_price_intent_plan_proof_and_continue(self):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
             rows = offer_inline_keyboard(123).inline_keyboard[:4]
         callbacks = [row[0].callback_data for row in rows]
         self.assertEqual(callbacks, [
+            OFFER_CALLBACKS["beta_purchase_intent"],
             OFFER_CALLBACKS["next_plan"], OFFER_CALLBACKS["conclusion_full"],
             OFFER_CALLBACKS["continue_training"],
         ])
@@ -49,11 +50,11 @@ class OfferPathTests(unittest.TestCase):
             self.assertNotIn(OFFER_CALLBACKS["bot"], callbacks)
             self.assertEqual(bot.payment_month_url(), "")
 
-    def test_subscription_screen_is_free_during_beta(self):
+    def test_subscription_screen_keeps_real_proposition_during_beta(self):
         text = tariff_bot_text()
-        self.assertIn("бесплатно", text)
-        self.assertIn("Оплата не нужна", text)
-        self.assertNotIn("€", text)
+        self.assertIn(f"€{BASE_OFFER_EUR_LABEL} / месяц", text)
+        self.assertIn("Founding Member", text)
+        self.assertNotIn("beta", text.lower())
 
     def test_dormant_subscription_is_founding_offer_at_configured_price(self):
         with patch.object(bot, "FREE_BETA_ACCESS", False):
