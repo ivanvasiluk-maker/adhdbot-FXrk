@@ -4,7 +4,10 @@ from unittest.mock import AsyncMock, patch
 
 import bot
 from core.trainer_voice import VoiceContent, render_message
-from db import init_db, record_action_event, sync_user_state_aliases
+from db import (
+    get_user, get_user_profile, init_db, log_event, migrate_db, record_action_event,
+    save_user, sync_user_state_aliases, update_user_profile,
+)
 
 
 class _User:
@@ -14,9 +17,11 @@ class _User:
 
 
 class _Message:
-    def __init__(self):
+    def __init__(self, text=""):
         self.from_user = _User()
         self.chat = type("Chat", (), {"id": self.from_user.id})()
+        self.text = text
+        self.voice = None
         self.answers = []
 
     async def answer(self, text, **kwargs):
@@ -24,6 +29,12 @@ class _Message:
 
 
 class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
+    def test_dispatcher_serializes_rapid_updates_per_user(self):
+        dispatcher = bot.build_dispatcher()
+        self.assertEqual(
+            dispatcher.fsm.events_isolation.__class__.__name__, "SimpleEventIsolation",
+        )
+
     def test_internal_codes_and_markdown_aliases_never_reach_user(self):
         self.assertEqual(bot.public_enum_text("unclear_instruction"), "первое действие было непонятно")
         self.assertEqual(bot.public_enum_text("unclear*instruction*"), "первое действие было непонятно")
@@ -91,6 +102,7 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
     async def test_honest_counts_use_post_action_outcomes(self):
         with tempfile.NamedTemporaryFile(suffix=".db") as file:
             await init_db(file.name)
+            await migrate_db(file.name)
             user = bot.default_user(71001)
             user["current_day_id"] = "release-day"
             await record_action_event(
@@ -108,6 +120,37 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(counts["continued_actions_today"], 1)
         self.assertEqual(counts["stopped_after_step_today"], 1)
         self.assertEqual(counts["returns_today"], 1)
+
+    async def test_restart_confirmation_fully_erases_user_and_owns_router_message(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            await init_db(file.name)
+            await migrate_db(file.name)
+            user = bot.default_user(_User.id)
+            user.update({
+                "name": "Иван",
+                "first_start_date": "2026-08-01",
+                "has_started_training": 1,
+                "done_count": 9,
+                "stage": "restart_onboarding_confirm",
+                "analysis_json": '{"_skiller_session":{"state":"DAY1_CLARIFY"}}',
+            })
+            await save_user(user, file.name)
+            await update_user_profile(
+                _User.id, {"main_hypothesis": "старый вывод"}, file.name, source="restart_test",
+            )
+            await log_event(_User.id, "old_event", {}, db_path=file.name)
+            message = _Message("Да, начать всё заново")
+            with patch.object(bot, "DB_PATH", file.name):
+                await bot.main_flow(message)
+                fresh = await get_user(_User.id, file.name)
+                profile = await get_user_profile(_User.id, file.name)
+
+            self.assertEqual(fresh["stage"], "ask_name")
+            self.assertFalse(fresh.get("name"))
+            self.assertFalse(fresh.get("first_start_date"))
+            self.assertEqual(int(fresh.get("done_count") or 0), 0)
+            self.assertNotIn("main_hypothesis", profile)
+            self.assertTrue(any("полностью удалён" in text for text, _ in message.answers))
 
     async def test_day_close_collects_dbt_style_card_before_conclusion(self):
         user = bot.default_user(_User.id)

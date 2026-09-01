@@ -800,6 +800,40 @@ async def test_repeat_start_shows_existing_user_menu_without_onboarding_restart(
         assert not any("Как к тебе обращаться" in answer for answer in m.answers)
 
 
+async def test_repeat_start_confirm_performs_full_user_reset():
+    with tempfile.TemporaryDirectory() as td:
+        old = bot.DB_PATH
+        bot.DB_PATH = str(Path(td) / "bot.db")
+        await init_db(bot.DB_PATH)
+        await migrate_db(bot.DB_PATH)
+        uid = 98011
+        u = default_user(uid)
+        u.update({
+            "name": "Иван", "first_start_date": "2026-01-01",
+            "stage": "training_main", "has_started_training": 1, "done_count": 8,
+            "analysis_json": '{"_skiller_session":{"state":"DAY1_CLARIFY"}}',
+        })
+        await save_user(u, bot.DB_PATH)
+        await update_user_profile(
+            uid, {"main_hypothesis": "старый вывод"}, bot.DB_PATH, source="restart_regression",
+        )
+
+        await bot.cmd_start(FakeMessage(uid, "/start"))
+        await bot.main_flow(FakeMessage(uid, "Начать всё заново"))
+        confirm = FakeMessage(uid, "Да, начать всё заново")
+        await bot.main_flow(confirm)
+        fresh = await get_user(uid, bot.DB_PATH)
+        profile = await bot.get_user_profile(uid, bot.DB_PATH)
+        bot.DB_PATH = old
+
+        assert fresh.get("stage") == "ask_name"
+        assert not fresh.get("name")
+        assert not fresh.get("first_start_date")
+        assert int(fresh.get("done_count") or 0) == 0
+        assert "main_hypothesis" not in profile
+        assert "полностью удалён" in "\n".join(confirm.answers)
+
+
 async def test_internal_user_events_are_marked_non_analytics():
     with tempfile.TemporaryDirectory() as td:
         db_path = str(Path(td) / "bot.db")
@@ -1236,6 +1270,7 @@ def run():
         test_simplified_done_recovery_asks_effect_without_technical_route_message,
         test_successful_payment_does_not_mutate_free_beta_access,
         test_repeat_start_shows_existing_user_menu_without_onboarding_restart,
+        test_repeat_start_confirm_performs_full_user_reset,
         test_internal_user_events_are_marked_non_analytics,
         test_product_once_events_keep_duplicates_technical_only,
         test_background_notification_persists_restore_context,

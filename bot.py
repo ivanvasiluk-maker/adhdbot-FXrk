@@ -31,6 +31,7 @@ from aiogram.types import Message, CallbackQuery, KeyboardButton, ReplyKeyboardM
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from dotenv import load_dotenv
 
 # Deployment-provided staging/production secrets must win over a local .env file.
@@ -11735,16 +11736,20 @@ async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
         reply_markup=kb_existing_user_start,
     )
 
-async def reset_user_to_onboarding(u: Dict[str, Any]) -> None:
-    keep = {"user_id", "telegram_id", "chat_id", "username", "timezone", "notifications_enabled", "notification_consent", "is_test_user"}
-    fresh = default_user(int(u.get("user_id") or 0))
-    for key in keep:
-        if u.get(key) is not None:
-            fresh[key] = u.get(key)
+async def reset_user_to_onboarding(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Erase every durable row for this user and start a genuinely clean run."""
+    uid = int(u.get("user_id") or u.get("telegram_id") or 0)
+    chat_id = int(u.get("chat_id") or uid)
+    username = u.get("username")
+    fresh = await reset_current_user(uid, chat_id)
+    if username:
+        fresh["username"] = username
+    set_legacy_stage(fresh, "ask_name")
+    set_current_state(fresh, STATE_ONBOARDING, close_action=True)
+    await save_user(fresh, DB_PATH)
     u.clear()
     u.update(fresh)
-    set_legacy_stage(u, "ask_name")
-    set_current_state(u, STATE_ONBOARDING, close_action=True)
+    return u
 
 @router.message(CommandStart())
 async def cmd_start(m: Message):
@@ -11893,6 +11898,28 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    # Reset confirmation owns the message before the action router and every
+    # diagnostic/free-text branch. Otherwise an old router session can consume
+    # the confirmation as user content and leave the button apparently dead.
+    if u.get("stage") == "restart_onboarding_confirm":
+        if text == "Да, начать всё заново":
+            await reset_user_to_onboarding(u)
+            await log_event(uid, "onboarding_restart_confirmed", {
+                "source": "existing_user_start_menu", "analytics_event": False,
+            }, db_path=DB_PATH)
+            await m.answer(
+                "Ок, предыдущий прогресс полностью удалён. Начинаем заново. Как к тебе обращаться? (1 слово)",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True,
+                ),
+            )
+            return
+        if text == "Нет, вернуться":
+            await show_existing_user_start_menu(m, u)
+            return
+        await m.answer("Подтверди сброс отдельной кнопкой или вернись назад.", reply_markup=kb_restart_confirm)
+        return
+
     # A callback may put the action router into a dedicated text/voice state.
     # Consume that input here before every legacy intake or story-analysis path.
     skiller_session = _skiller_session(u)
@@ -11956,16 +11983,6 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await log_event(uid, "start_menu_restart_requested", {"analytics_event": False}, db_path=DB_PATH)
             await m.answer("Начать всё заново? Текущий прогресс будет сброшен. Подтверди отдельно.", reply_markup=kb_restart_confirm)
-            return
-        await show_existing_user_start_menu(m, u)
-        return
-
-    if u.get("stage") == "restart_onboarding_confirm":
-        if text == "Да, начать всё заново":
-            await log_event(uid, "onboarding_restart_confirmed", {"analytics_event": False}, db_path=DB_PATH)
-            await reset_user_to_onboarding(u)
-            await save_user(u, DB_PATH)
-            await m.answer("Ок, начинаем заново. Как к тебе обращаться? (1 слово)", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True))
             return
         await show_existing_user_start_menu(m, u)
         return
@@ -16035,6 +16052,11 @@ def start_sheets_sync_background_task(db_path: str):
     return asyncio.create_task(loop_fn(db_path))
 
 
+def build_dispatcher() -> Dispatcher:
+    """Build a dispatcher that serializes updates for each user/chat."""
+    return Dispatcher(events_isolation=SimpleEventIsolation())
+
+
 async def main() -> int:
     global ACTIVE_FILE_SKILL_REGISTRY
     try:
@@ -16042,7 +16064,10 @@ async def main() -> int:
             raise RuntimeError("BOT_TOKEN is empty; set the BOT_TOKEN environment variable before starting the bot")
 
         bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
-        dp = Dispatcher()
+        # Serialize updates per Telegram user/chat. Rapid taps such as
+        # "Открыть карту" -> "Начать всё заново" must not overwrite each
+        # other's persisted stage with stale snapshots.
+        dp = build_dispatcher()
         dp.include_router(router)
         await init_db(DB_PATH)
         await migrate_db(DB_PATH)
