@@ -63,7 +63,7 @@ SKILL_LIBRARY_FAIL_CLOSED=1
 SKILL_LIBRARY_COHORT_PERCENT=0
 SKILL_LIBRARY_MANIFEST_PATH=data/skills_manifest.json
 TEST_MODE=0
-TEST_CHEAT_CODE=SKILLER_TEST_1498
+TEST_CHEAT_CODE=replace-with-a-random-staging-only-secret
 LEARNING_ENGINE_ENABLED=false
 RANKING_ENGINE_ENABLED=false
 ACTIVE_SKILL_QUALITY_LEVEL=validated
@@ -76,6 +76,7 @@ BOT_STARTUP_CHECK=0
 ADMIN_IDS=
 ```
 Notes:
+- New users must explicitly accept the in-bot privacy notice before analysis. `/privacy` repeats it and `/reset_me` deletes the profile.
 - `OPENAI_API_KEY` is required for Telegram voice transcription. If it is absent, the text/button flows still work and `/health` reports `Voice transcription ready false`.
 - `FREE_BETA_ACCESS=1` is the current launch mode: all bot capabilities are enabled for every user. The day-3 screen is a sales funnel for the paid ADHD skills group and individual work with Ivan; the bot itself remains free. Keep `ENABLE_PAYMENTS=0` and `ENABLE_PAID_PLAN=false` during this beta.
 - Product development is governed by [the Product Constitution](docs/PRODUCT_CONSTITUTION.md). New user-facing scenarios must pass its executable feature gate.
