@@ -194,7 +194,9 @@ async def run() -> None:
             note_text = last_text(note_msg).lower()
             assert (
                 "старый экран" in note_text
+                or "экран уже не актуален" in note_text
                 or "день уже закрыт" in note_text
+                or "основная тренировка" in note_text
                 or "основную тренировку" in note_text
             ), last_text(note_msg)
 
@@ -231,6 +233,7 @@ async def run() -> None:
         assert (
             "сегодняшний подход уже закрыт" in last_text(why_msg).lower()
             or "основную тренировку на сегодня мы закончили" in last_text(why_msg).lower()
+            or "основная тренировка на сегодня закончена" in last_text(why_msg).lower()
         ), last_text(why_msg)
 
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
@@ -238,6 +241,7 @@ async def run() -> None:
         assert (
             "День уже закрыт." in all_text(tomorrow_msg)
             or "Основную тренировку на сегодня мы закончили" in all_text(tomorrow_msg)
+            or "Основная тренировка на сегодня закончена" in all_text(tomorrow_msg)
         ), all_text(tomorrow_msg)
         assert "Сегодня ты сделал:" not in all_text(tomorrow_msg), all_text(tomorrow_msg)
 
@@ -281,7 +285,10 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         more_msg = await send(uid, "Ещё")
-        assert "старый экран" in last_text(more_msg).lower(), last_text(more_msg)
+        assert (
+            "старый экран" in last_text(more_msg).lower()
+            or "экран уже не актуален" in last_text(more_msg).lower()
+        ), last_text(more_msg)
 
 
         await set_post_action_user(uid, db_path, "training", rounds=1)

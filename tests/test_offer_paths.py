@@ -18,18 +18,20 @@ class OfferPathTests(unittest.TestCase):
             "personalized_insight_exists": True,
             "value_report_seen_at": "2026-08-01T00:00:00+00:00",
         }
-        self.assertFalse(bot.can_show_offer(user, profile))
+        with patch.object(bot, "FREE_BETA_ACCESS", False):
+            self.assertFalse(bot.can_show_offer(user, profile))
         self.assertFalse(bot.scheduled_offer_due(user, profile))
 
-    def test_free_beta_manual_offer_shows_price_intent_plan_proof_and_continue(self):
+    def test_free_beta_offer_sells_group_and_personal_support(self):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
-            rows = offer_inline_keyboard(123).inline_keyboard[:4]
+            rows = offer_inline_keyboard(123).inline_keyboard
         callbacks = [row[0].callback_data for row in rows]
         self.assertEqual(callbacks, [
-            OFFER_CALLBACKS["beta_purchase_intent"],
+            OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
             OFFER_CALLBACKS["next_plan"], OFFER_CALLBACKS["conclusion_full"],
             OFFER_CALLBACKS["continue_training"],
         ])
+        self.assertNotIn(OFFER_CALLBACKS["beta_purchase_intent"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["bot"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["paid_test"], callbacks)
 
@@ -76,17 +78,18 @@ class OfferPathTests(unittest.TestCase):
 
     def test_group_and_consultation_terms_are_explicit(self):
         group = tariff_group_text()
-        self.assertIn("12 недель", group)
-        self.assertIn("€240–288", group)
-        self.assertIn("€80–96 в месяц", group)
+        self.assertIn("8 недель", group)
+        self.assertIn("€240", group)
+        self.assertIn("двумя частями по €120", group)
         self.assertIn("Иван Василюк", group)
         self.assertIn("от €39", tariff_live_text())
         self.assertIn("45–60 минут", tariff_live_text())
 
-    def test_comparison_names_all_four_paths(self):
+    def test_beta_comparison_names_free_group_and_personal_paths(self):
         text = offer_details_full_mode_text()
-        for label in ("Бесплатно", "Подписка", "Группа навыков", "Потренировать навык с человеком"):
+        for label in ("Бесплатно", "Группа навыков", "Личная работа"):
             self.assertIn(label, text)
+        self.assertNotIn("Подписка", text)
 
 
 if __name__ == "__main__":
