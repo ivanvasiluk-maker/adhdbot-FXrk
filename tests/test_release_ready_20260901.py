@@ -70,7 +70,7 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.default_user(1)["reminder_mode"], "evening_only")
         self.assertEqual(bot.MAX_PROACTIVE_PER_DAY, 2)
 
-    def test_open_beta_unlocks_every_user_but_manual_offer_tests_purchase_intent(self):
+    def test_open_beta_unlocks_bot_but_sells_group_and_personal_support(self):
         user = bot.default_user(99001)
         self.assertEqual(user["payment_status"], "beta_free")
         self.assertEqual(user["full_mode"], 1)
@@ -79,7 +79,9 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bot.can_show_offer(user, {}))
         self.assertFalse(bot.paid_plan_available())
         labels = [button.text for row in bot.offer_inline_keyboard(user["user_id"]).inline_keyboard for button in row]
-        self.assertTrue(any("€" in label and "оплат" in label.lower() for label in labels))
+        self.assertIn("👥 Хочу в группу — €240", labels)
+        self.assertIn(f"👤 Хочу личную работу — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", labels)
+        self.assertFalse(any("оплат" in label.lower() for label in labels))
 
     def test_open_beta_upgrades_existing_unpaid_state_without_reset(self):
         user = bot.default_user(99002)

@@ -134,20 +134,20 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
             result = await bot.transcribe_voice_for_current_prompt(message, user)
         self.assertEqual(result, "главный стопор — страх ошибки")
 
-    async def test_manual_offer_shows_real_price_before_free_beta_disclosure(self):
+    async def test_manual_offer_sells_group_and_personal_work_while_bot_is_free(self):
         user = bot.default_user(29004)
         show = AsyncMock()
         with patch.object(bot, "FREE_BETA_ACCESS", True), patch.object(
             bot, "log_event", AsyncMock()
         ), patch.object(bot, "show_day3_offer", show):
             await bot.force_show_offer(AsyncMock(), user, "test")
-        self.assertEqual(show.await_args.kwargs["mode"], "manual_beta_intent")
-        self.assertIn(f"€{bot.BASE_OFFER_EUR_LABEL}/мес", bot.short_offer_text())
-        self.assertNotIn("доступен бесплатно", bot.short_offer_text())
-        self.assertIn(
-            bot.OFFER_CALLBACKS["beta_purchase_intent"],
-            inline_callbacks(bot.offer_inline_keyboard(user["user_id"])),
-        )
+        self.assertEqual(show.await_args.kwargs["mode"], "manual_sales")
+        self.assertIn("€240", bot.short_offer_text())
+        self.assertIn(f"от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", bot.short_offer_text())
+        callbacks = inline_callbacks(bot.offer_inline_keyboard(user["user_id"]))
+        self.assertIn(bot.OFFER_CALLBACKS["group"], callbacks)
+        self.assertIn(bot.OFFER_CALLBACKS["live"], callbacks)
+        self.assertNotIn(bot.OFFER_CALLBACKS["beta_purchase_intent"], callbacks)
 
     async def test_start_does_not_disclose_free_beta_before_payment_click(self):
         user = bot.default_user(29008)
@@ -168,17 +168,28 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("beta", rendered.lower())
         self.assertNotIn("бесплат", rendered.lower())
 
-    async def test_automatic_offer_is_silent_about_beta_and_payment(self):
-        user = bot.default_user(29009)
-        message = SimpleNamespace(answer=AsyncMock())
-        with patch.object(bot, "FREE_BETA_ACCESS", True), patch.object(
-            bot, "log_event", AsyncMock()
-        ):
-            await bot.show_day3_offer(message, user, "day3", mode="auto")
-        rendered = message.answer.await_args.args[0]
-        self.assertEqual(rendered, "Продолжаем тренировку.")
-        self.assertNotIn("beta", rendered.lower())
-        self.assertNotIn("оплат", rendered.lower())
+    async def test_automatic_day3_offer_sells_support_without_charging_for_bot(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            old_db_path = bot.DB_PATH
+            bot.DB_PATH = file.name
+            try:
+                await init_db(file.name)
+                await migrate_db(file.name)
+                user = bot.default_user(29009)
+                user.update({"day": 3, "stage": "day_core_stop"})
+                await save_user(user, file.name)
+                message = SimpleNamespace(answer=AsyncMock())
+                await bot.show_day3_offer(message, user, "day3", mode="auto")
+            finally:
+                bot.DB_PATH = old_db_path
+        rendered = "\n".join(call.args[0] for call in message.answer.await_args_list)
+        self.assertIn("Группа навыков", rendered)
+        self.assertIn("€240", rendered)
+        self.assertIn("Личная работа", rendered)
+        self.assertIn("тест SKILLER пока остаётся бесплатным", rendered)
+        self.assertNotIn("Оплатить", rendered)
+        self.assertEqual(user.get("offer_mode"), "auto")
+        self.assertTrue(user.get("last_offer_shown_at"))
 
     async def test_beta_payment_click_records_intent_without_access_mutation(self):
         user = bot.default_user(29005)

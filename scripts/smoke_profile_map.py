@@ -124,12 +124,19 @@ async def run():
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
-        has_adaptive_payment = any("€4.99" in t and ("SKILLER Full" in t or "Оформить" in t or "Полный режим" in t) for t in kb_texts)
+        has_group_offer = "👥 Хочу в группу — €240" in kb_texts
+        has_live_offer = any("👤 Хочу личную работу" in t for t in kb_texts)
         has_primary_map = "📌 Краткое заключение" in offer_text and "Как держится проблема" in offer_text
         has_day3_conclusion = "Главный узел" in offer_text and "лучший сигнал" in offer_text.lower()
-        has_personal_offer = "Продолжить бесплатно" in " ".join(kb_texts) and "Потренировать навык с человеком" in " ".join(kb_texts)
+        has_personal_offer = (
+            "Продолжить бесплатный тест" in kb_texts
+            and has_group_offer and has_live_offer
+        )
         has_model_value = "START → STAY → RETURN" in offer_text
-        has_selling_specifics = "Выбери, как закрепить результат" in offer_text and "Подробное заключение" in " ".join(kb_texts)
+        has_selling_specifics = (
+            "выбери формат и напиши Ивану" in offer_text
+            and "📖 Почему такой вывод" in kb_texts
+        )
         assert int(task_start.get("value") or 0) >= 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
         assert int(dev_map.get("behavior_events_count") or 0) >= 1, dev_map
@@ -148,13 +155,15 @@ async def run():
         assert "эта модель будет уточняться" in daily_explanation.lower(), daily_explanation
         assert "точный показатель" not in daily_explanation.lower(), daily_explanation
         assert "USER PROFILE" not in offer_text, offer_text
-        assert has_adaptive_payment, kb_texts
+        assert has_group_offer, kb_texts
+        assert has_live_offer, kb_texts
         assert has_primary_map, offer_text
         assert has_day3_conclusion, offer_text
         assert has_personal_offer, offer_text
         assert has_model_value, offer_text
         assert has_selling_specifics, offer_text
-        print("[SMOKE] offer has adaptive payment button:", has_adaptive_payment)
+        print("[SMOKE] offer has group button:", has_group_offer)
+        print("[SMOKE] offer has personal-work button:", has_live_offer)
         print("[SMOKE] offer contains primary map title:", has_primary_map)
         print("[SMOKE] offer contains day3 conclusion:", has_day3_conclusion)
         print("[SMOKE] offer contains personal profile:", has_personal_offer)

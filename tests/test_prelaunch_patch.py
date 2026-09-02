@@ -77,9 +77,11 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn(f"💳 Оплатить €{bot.BASE_OFFER_EUR_LABEL}/мес", labels)
-        self.assertIn("Продолжить тренировку", labels)
+        self.assertIn("👥 Хочу в группу — €240", labels)
+        self.assertIn(f"👤 Хочу личную работу — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", labels)
+        self.assertIn("Продолжить бесплатный тест", labels)
         self.assertNotIn("Другие форматы поддержки", labels)
+        self.assertFalse(any("Оплатить" in label for label in labels))
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
             bot, "ENABLE_PAID_PLAN", True,
@@ -89,7 +91,8 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
                 for row in bot.offer_inline_keyboard(1).inline_keyboard
                 for button in row
             ]
-        self.assertIn(f"💳 Оплатить €{bot.BASE_OFFER_EUR_LABEL}/мес", enabled_labels)
+        self.assertIn("👥 Хочу в группу — €240", enabled_labels)
+        self.assertFalse(any("Оплатить" in label for label in enabled_labels))
 
     def test_manual_beta_offer_advertises_product_without_live_checkout(self):
         with patch.object(bot, "ENABLE_PAYMENTS", False), patch.object(
@@ -97,11 +100,11 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(bot, "ENABLE_HUMAN_OFFER", False):
             text = bot.short_offer_text()
             labels = [button.text for row in bot.offer_details_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("SKILLER Full", text)
-        self.assertIn(f"€{bot.BASE_OFFER_EUR_LABEL}/мес", text)
+        self.assertIn("Сам тест SKILLER", text)
+        self.assertNotIn("€", text)
         self.assertNotIn("Группа навыков", text)
         self.assertNotIn("С человеком", labels)
-        self.assertEqual(labels, ["🟢 Продолжить beta бесплатно", "↩️ Назад"])
+        self.assertEqual(labels, ["Продолжить бесплатный тест", "↩️ Назад"])
 
     def test_day1_completion_can_unlock_offer_after_value_report(self):
         user = bot.default_user(1)
@@ -163,8 +166,11 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Что будем делать", text)
         self.assertIn("Что надо развивать", text)
         self.assertIn("START → STAY → RETURN", text)
-        self.assertIn(f"€{bot.BASE_OFFER_EUR_LABEL}/мес", text)
-        self.assertNotIn("доступен бесплатно", text)
+        self.assertIn("Группа навыков", text)
+        self.assertIn("€240", text)
+        self.assertIn("Личная работа", text)
+        self.assertIn(f"от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", text)
+        self.assertIn("тест SKILLER пока остаётся бесплатным", text)
 
     def test_day_one_skill_names_the_problem_and_solution_route(self):
         user = bot.default_user(1)

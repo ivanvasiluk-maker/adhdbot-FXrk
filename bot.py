@@ -235,8 +235,8 @@ if PAYMENT_ACCEPT_ANY:
     log.warning("PAYMENT_ACCEPT_ANY is enabled: test payment confirmations can grant paid access; disable it before production.")
 if FREE_BETA_ACCESS:
     log.info(
-        "FREE_BETA_ACCESS is enabled: all capabilities are free; automatic sales are suppressed "
-        "and manual offer screens only record purchase intent."
+        "FREE_BETA_ACCESS is enabled: all bot capabilities are free; day-3 screens may offer "
+        "the separate paid group or personal work, while bot checkout remains disabled."
     )
 if STARTUP_CHECK:
     log.info("BOT_STARTUP_CHECK is enabled: startup will validate init and exit before Telegram polling.")
@@ -906,11 +906,14 @@ def has_unfinished_exercise_for_offer(u: Dict[str, Any]) -> bool:
 
 def can_show_offer(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> bool:
     profile = profile or {}
-    if FREE_BETA_ACCESS:
+    beta_support_offer = bool(FREE_BETA_ACCESS and (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER))
+    if FREE_BETA_ACCESS and not beta_support_offer:
         return False
-    if int(u.get("free_mode") or 0) == 1:
+    if int(u.get("free_mode") or 0) == 1 and not beta_support_offer:
         return False
     current_day = int(u.get("day") or u.get("current_day") or 1)
+    if beta_support_offer and current_day < 3:
+        return False
     working_model = profile.get("personal_working_model") if isinstance(profile.get("personal_working_model"), dict) else {}
     day1_completion_signal = bool(
         current_day == 1 and day_closed_today(u, profile)
@@ -6841,16 +6844,14 @@ def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -
             "Базовый режим остаётся доступным."
         )
     return (
-        render_base_unlock_offer()
-        + "\n\n"
-        "Полный режим — это не давление. Он помогает не начинать каждый день с нуля.\n"
-        "Пока это не окончательные выводы.\n\n"
-        "За первые попытки уже видно:\n"
+        "🎯 Три дня — уже достаточно, чтобы перестать гадать и начать собирать систему.\n\n"
+        "Пока это не окончательные выводы. Но уже видно:\n"
         "— что мешает тебе начать;\n"
-        "— какие шаги помогают сдвинуться;\n"
+        "— какие шаги дают движение;\n"
         "— где чаще происходит срыв.\n\n"
-        "Можно продолжать самостоятельно или выбрать формат с живой поддержкой.\n\n"
-        "Выбери, что тебе подходит:"
+        "Если хочешь не просто получать подсказки, а устойчиво изменить способ работы — "
+        "можно идти дальше в группе или лично с Иваном Василюком.\n\n"
+        "Выбери формат сейчас: заявку можно оставить без оплаты, а Иван напишет тебе лично."
         + evidence
     )
 
@@ -6861,13 +6862,24 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
 
 def short_offer_text() -> str:
     if FREE_BETA_ACCESS:
-        return (
-            f"🔵 Персональная тренировка SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.\n\n"
-            "Ещё 7 дней бот будет проверять карту на реальных задачах, сохранять результаты попыток, "
-            "не повторять нерабочие советы и собирать твой протокол START → STAY → RETURN.\n\n"
-            "Внутри: персональная карта, история попыток, адаптивные следующие тесты, "
-            "до двух напоминаний в день и все новые навыки.\n\n"
-            "Нажатие «Оплатить» сейчас проверяет готовность купить. До подтверждения списания не будет."
+        options = []
+        if ENABLE_GROUP_OFFER:
+            options.append(
+                "👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €240.\n"
+                "8 недель, онлайн-встреча раз в неделю, практика, домашние эксперименты и поддержка в чате. "
+                "Работаем с вниманием, реальным планированием, тревогой, импульсивностью и возвратом после срывов."
+            )
+        if ENABLE_HUMAN_OFFER:
+            options.append(
+                f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу.\n"
+                "Разберём именно твою карту, соберём персональный план и потренируем навыки на реальной задаче."
+            )
+        options.append(
+            "🟢 Сам тест SKILLER пока остаётся бесплатным. Группа и личная работа — отдельные платные форматы."
+        )
+        return "\n\n".join(options) + (
+            "\n\nЕсли хочешь результат быстрее и с живой поддержкой — выбери формат и напиши Ивану."
+            if ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER else ""
         )
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
     if paid_plan_available():
@@ -6946,16 +6958,6 @@ OFFER_STAGES = {"offer", OFFER_MENU_STAGE, OFFER_PREVIEW_STAGE}
 
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: str = "auto"):
     """Show the adaptive day-3 map and paid continuation offer."""
-    if FREE_BETA_ACCESS and mode == "auto":
-        await log_event(
-            u["user_id"], u.get("stage", ""), "offer_suppressed_free_beta",
-            {"source": source, "mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL,
-        )
-        # Do not disclose the free beta proactively. The bot keeps training
-        # normally; the disclosure is shown only after an explicit click on
-        # the purchase-intent button in the manual offer.
-        await m.answer("Продолжаем тренировку.", reply_markup=kb_training_main)
-        return
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
         previous_flow["resume_after_offer"] = True
@@ -6975,10 +6977,10 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
     set_last_explanation_context(
         u,
         "offer",
-        "полный режим после карты",
+        "живая поддержка после первых результатов",
         "Предложение появляется после накопления первых данных: что сработало, где был срыв и какой тип поддержки нужен дальше.",
-        ["карта уже содержит первые поведенческие сигналы", "полный режим нужен для системы, а не для разового совета", "можно остаться в коротком режиме без стыда"],
-        "Реши: продолжать коротко или включить полный режим."
+        ["карта уже содержит первые поведенческие сигналы", "группа и личная работа помогают закреплять навыки на реальных задачах", "бесплатный тест остаётся доступным"],
+        "Реши: продолжать бесплатный тест, пойти в группу или обсудить личную работу."
     )
     await save_user(u, DB_PATH)
     if is_auto:
@@ -7024,6 +7026,9 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
         "source": source,
         "day": int(u.get("day") or 0),
         "price_month": BASE_OFFER_EUR_LABEL,
+        "funnel_goal": "group_or_personal" if FREE_BETA_ACCESS else "subscription_or_support",
+        "group_price": 240 if FREE_BETA_ACCESS else float(GROUP_PROGRAM_TOTAL_MIN_EUR),
+        "personal_price_from": float(HUMAN_SKILL_SESSION_EUR),
         **profile_patch,
     }
     await log_event(u["user_id"], "offer", "offer_shown" if is_auto else "offer_preview_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -7105,12 +7110,6 @@ def _profile_from_user_for_offer(u: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
-    if FREE_BETA_ACCESS:
-        await log_event(
-            u["user_id"], u.get("stage", ""), "offer_suppressed_free_beta",
-            {"source": source}, DB_PATH, SHEETS_WEBHOOK_URL,
-        )
-        return False
     profile = await get_user_profile(u["user_id"], DB_PATH)
     metrics = await get_value_proof_metrics(DB_PATH, user_id=u["user_id"])
     summary = build_profile_map_summary(u, profile)
@@ -7184,16 +7183,17 @@ async def maybe_show_offer(m: Message, u: Dict[str, Any], source: str) -> bool:
 async def force_show_offer(m: Message, u: Dict[str, Any], source: str) -> None:
     """QA/manual command: show the offer without changing day/progress prerequisites."""
     day = int(u.get("day") or u.get("day_number") or 1)
-    mode = "manual_beta_intent" if FREE_BETA_ACCESS else ("preview" if day < 3 else "manual")
+    mode = "manual_sales" if FREE_BETA_ACCESS else ("preview" if day < 3 else "manual")
     await log_event(u["user_id"], u.get("stage", ""), "show_offer_manual", {"source": source, "day": day, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
     await show_day3_offer(m, u, source, mode=mode)
 
 
 def should_show_day3_offer(u: Dict[str, Any], day: int) -> bool:
     """Value-proof gate: day three or the first confirmed working skill."""
-    if FREE_BETA_ACCESS:
+    commercial_support_enabled = bool(ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER)
+    if FREE_BETA_ACCESS and commercial_support_enabled and int(day or 1) < 3:
         return False
-    if int(u.get("full_mode") or 0) == 1:
+    if int(u.get("full_mode") or 0) == 1 and not (FREE_BETA_ACCESS and commercial_support_enabled):
         return False
     has_payment_url = bool(configured_payment_url())
     has_offer_path = ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER or (ENABLE_PAYMENTS and ENABLE_PAID_PLAN and has_payment_url)
@@ -7534,12 +7534,17 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> InlineKeyboardMarkup:
     if FREE_BETA_ACCESS:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💳 Оплатить €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["beta_purchase_intent"])],
+        rows = []
+        if ENABLE_GROUP_OFFER:
+            rows.append([InlineKeyboardButton(text="👥 Хочу в группу — €240", callback_data=OFFER_CALLBACKS["group"])])
+        if ENABLE_HUMAN_OFFER:
+            rows.append([InlineKeyboardButton(text=f"👤 Хочу личную работу — от €{HUMAN_SKILL_SESSION_EUR_LABEL}", callback_data=OFFER_CALLBACKS["live"])])
+        rows.extend([
             [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
             [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
-            [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+            [InlineKeyboardButton(text="Продолжить бесплатный тест", callback_data=OFFER_CALLBACKS["continue_training"])],
         ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     keyboard = []
     if paid_plan_available():
         keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить персональную тренировку — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
@@ -7558,10 +7563,16 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     if FREE_BETA_ACCESS:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 Продолжить beta бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+        rows = []
+        if ENABLE_GROUP_OFFER:
+            rows.append([InlineKeyboardButton(text="👥 Группа — €240", callback_data=OFFER_CALLBACKS["group"])])
+        if ENABLE_HUMAN_OFFER:
+            rows.append([InlineKeyboardButton(text=f"👤 Личная работа — от €{HUMAN_SKILL_SESSION_EUR_LABEL}", callback_data=OFFER_CALLBACKS["live"])])
+        rows.extend([
+            [InlineKeyboardButton(text="Продолжить бесплатный тест", callback_data=OFFER_CALLBACKS["continue_training"])],
             [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
         ])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     rows = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
     if paid_plan_available():
         rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
@@ -7664,30 +7675,33 @@ def tariff_bot_text() -> str:
 
 def tariff_live_text() -> str:
     return (
-        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n\n"
-        "Если хочется не разбираться одному, можно взять одну встречу с человеком.\n\n"
+        f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n\n"
+        "Если ты устал разбираться в одиночку, можно начать с одной индивидуальной встречи.\n\n"
         "За 45–60 минут:\n"
         "— разберём конкретный стопор;\n"
         "— найдём, где ломается цепочка;\n"
         "— выберем 1–2 навыка;\n"
         "— потренируем их прямо на вашей ситуации.\n\n"
-        f"От €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу. Если окажется, что вопрос глубже и нужна терапия — обсудим отдельно.\n"
+        f"От €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу. Можно начать с одной встречи, без обязательства покупать пакет.\n\n"
+        "Нажми «Хочу личную работу» — заявка уйдёт Ивану, и он напишет тебе лично."
     )
 
 
 def tariff_group_text() -> str:
     return (
-        f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие\n\n"
-        "Полная программа рассчитана на 12 недель.\n"
-        "Ведущий — Иван Василюк. Программа основана на КПТ и ДБТ.\n\n"
-        "Что получает участник:\n"
-        "— еженедельные занятия;\n"
-        "— домашние поведенческие эксперименты;\n"
-        "— поддержку группы;\n"
-        "— использование SKILLER между встречами.\n\n"
-        f"Полная программа: €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_TOTAL_MAX_EUR)} "
-        f"(€{format_eur_compact(GROUP_PROGRAM_MONTH_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_MONTH_MAX_EUR)} в месяц).\n"
-        "Перед участием — короткое собеседование."
+        "👥 Группа навыков для взрослых с СДВГ — €240\n\n"
+        "8 недель, 8 онлайн-встреч по одной в неделю. Небольшая группа до 12 человек.\n"
+        "Ведущий — психолог Иван Василюк. Основа — КПТ, ДБТ и метакогнитивные протоколы Safren/Solanto.\n\n"
+        "За программу ты соберёшь рабочую систему:\n"
+        "— как удерживать внимание и уменьшать отвлечения;\n"
+        "— как планировать реалистично, без перегруза;\n"
+        "— как проходить тревогу, перфекционизм и прокрастинацию;\n"
+        "— как регулировать эмоции и импульсивность;\n"
+        "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
+        "Внутри: практика на своих задачах, домашние эксперименты, чат-поддержка и материалы после встреч.\n\n"
+        "Стоимость всей программы — €240. Можно оплатить двумя частями по €120. "
+        "Перед участием — короткая бесплатная встреча, чтобы понять, подходит ли формат.\n\n"
+        "Если хочешь место — нажми кнопку ниже. Иван напишет тебе лично."
     )
 
 
@@ -7723,7 +7737,12 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return offer_variant_inline_keyboard(user_id, OFFER_CALLBACKS["request_live"])
+    rows = [
+        [InlineKeyboardButton(text="👤 Хочу личную работу", callback_data=OFFER_CALLBACKS["request_live"])],
+        [InlineKeyboardButton(text="💬 Написать Ивану", url="https://t.me/Ivan_Vasiliuk")],
+    ]
+    rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def tariff_group_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -7748,6 +7767,19 @@ def stay_free_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def offer_details_full_mode_text() -> str:
+    if FREE_BETA_ACCESS:
+        options = ["🟢 Бесплатно: SKILLER — тест навыков и личной карты."]
+        if ENABLE_GROUP_OFFER:
+            options.append(
+                "👥 Группа навыков для взрослых с СДВГ — €240\n"
+                "8 недель: внимание, планирование, прокрастинация, эмоции, импульсивность и возврат после срывов."
+            )
+        if ENABLE_HUMAN_OFFER:
+            options.append(
+                f"👤 Личная работа с Иваном — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n"
+                "Одна встреча 45–60 минут: разбор твоего стопора, персональный план и практика навыков."
+            )
+        return "📚 Что можно выбрать дальше\n\n" + "\n\n".join(options)
     return (
         "📚 Форматы SKILLER\n\n"
         "🟢 Бесплатно — базовая версия для самостоятельного движения.\n\n"
@@ -15506,6 +15538,9 @@ async def on_offer_callbacks(c: CallbackQuery):
         OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
         OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
         OFFER_CALLBACKS["beta_purchase_intent"],
+        OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
+        OFFER_CALLBACKS["request_group"], OFFER_CALLBACKS["request_live"],
+        OFFER_CALLBACKS["compare"], OFFER_CALLBACKS["back"],
         "show_map", "continue_free",
     }:
         await c.message.answer(
@@ -15559,7 +15594,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         format_label = {
             OFFER_CALLBACKS["request_live"]: "Тренировка навыка с человеком",
             OFFER_CALLBACKS["request_guided"]: "Бот + специалист",
-            OFFER_CALLBACKS["request_group"]: "Группа КПТ — собеседование",
+            OFFER_CALLBACKS["request_group"]: "Группа навыков для взрослых с СДВГ — собеседование",
         }[data]
         set_legacy_stage(u, "offer_request_form")
         u["pending_offer_request_format"] = format_label

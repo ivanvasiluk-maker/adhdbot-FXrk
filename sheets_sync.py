@@ -11,7 +11,7 @@ import asyncio
 import logging
 import hashlib
 import hmac
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 import aiosqlite
@@ -199,7 +199,7 @@ def event_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
     data = sanitize_event_data(event.get("event_data") or event.get("meta") or {})
     user = user or {}
     return [
-        event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
+        event.get("created_at") or event.get("ts") or datetime.now(timezone.utc).isoformat(),
         event.get("event_name") or event.get("event"),
         anonymous_analytics_id(event.get("user_id")),
         "",
@@ -229,7 +229,7 @@ def error_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
     data = sanitize_event_data(event.get("event_data") or event.get("meta") or {})
     user = user or {}
     return [
-        event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
+        event.get("created_at") or event.get("ts") or datetime.now(timezone.utc).isoformat(),
         event.get("event_name") or event.get("event"),
         anonymous_analytics_id(event.get("user_id")),
         "",
@@ -303,7 +303,7 @@ def payment_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = No
         offer_type = data.get("payment_click") or data.get("source") or ""
         amount = data.get("amount") or ""
     return [
-        event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
+        event.get("created_at") or event.get("ts") or datetime.now(timezone.utc).isoformat(),
         anonymous_analytics_id(event.get("user_id")),
         "",
         name,
@@ -535,7 +535,7 @@ async def _sync_legacy_events_disabled(db_path: str, limit: int = SHEETS_SYNC_BA
             if not ok:
                 supplemental_warnings.append(f"users: {msg}")
 
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         ok, msg = await post_rows([daily_summary_to_sheet_row(today, all_users, all_events)], sheet="daily_summary")
         if not ok:
             supplemental_warnings.append(f"daily_summary: {msg}")
@@ -597,11 +597,11 @@ async def _record_sheets_sync_error(db_path: str, error: Exception):
                     "sheets_sync_error",
                     json.dumps({"error_type": type(error).__name__, "error_source": "sheets_sync_loop"}, ensure_ascii=False),
                     "background",
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     0,
                     0,
                     None,
-                    datetime.utcnow().timestamp(),
+                    datetime.now(timezone.utc).timestamp(),
                     "sheets_sync_error",
                     json.dumps({"error_type": type(error).__name__, "error_source": "sheets_sync_loop"}, ensure_ascii=False),
                 ),
