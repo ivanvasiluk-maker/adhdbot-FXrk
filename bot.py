@@ -14,6 +14,7 @@ import sys
 import io
 import re
 import json
+import hmac
 import random
 import time
 import asyncio
@@ -185,7 +186,11 @@ PAYMENT_URL_DISCOUNT = os.getenv("PAYMENT_URL_DISCOUNT", "").strip()
 PAYMENT_URL_FULL = os.getenv("PAYMENT_URL_FULL", "").strip()
 PAYMENT_URL_MONTH_1498 = os.getenv("PAYMENT_URL_MONTH_1498", "").strip()
 PAYMENT_BOT_999_URL = os.getenv("PAYMENT_BOT_999_URL", "").strip()
-INTERNAL_TEST_USER_IDS = {312112015}
+INTERNAL_TEST_USER_IDS = {
+    int(value.strip())
+    for value in os.getenv("INTERNAL_TEST_USER_IDS", "").split(",")
+    if value.strip().isdigit()
+}
 PAYMENT_MONTH_URL = os.getenv("PAYMENT_MONTH_URL", "").strip()
 PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
 PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
@@ -207,7 +212,7 @@ def curator_path_reply_markup() -> ReplyKeyboardRemove:
 # Unlock full flow while testing (set TEST_MODE=1)
 TEST_MODE = env_bool("TEST_MODE")
 IS_TEST_MODE = TEST_MODE
-TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "SKILLER_TEST_1498").strip()
+TEST_CHEAT_CODE = os.getenv("TEST_CHEAT_CODE", "").strip()
 STARTUP_CHECK = env_bool("BOT_STARTUP_CHECK")
 MAX_CRISIS_MATCHES_PER_DAY = 3
 CRISIS_WAITING_INPUT = "crisis_waiting_input"
@@ -10331,7 +10336,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/test_access":
         code = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) == 2 else ""
-        if TEST_CHEAT_CODE and code == TEST_CHEAT_CODE:
+        if TEST_CHEAT_CODE and code and hmac.compare_digest(code, TEST_CHEAT_CODE):
             await activate_test_cheat(m, u, "command")
         else:
             await log_event(uid, u.get("stage", ""), "test_cheat_failed", {"source": "command"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -10342,7 +10347,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         parts = text.split()
         code = parts[1].strip() if len(parts) >= 2 else ""
         days = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() and int(parts[2]) in {7, 14, 30} else 30
-        if code and code.lower() in {TEST_CHEAT_CODE.lower(), "skiller_test"}:
+        if TEST_CHEAT_CODE and code and hmac.compare_digest(code, TEST_CHEAT_CODE):
             await activate_test_cheat(m, u, "testmode_on_code", days)
         else:
             await log_event(uid, u.get("stage", ""), "testmode_on_failed", {"source": "user_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -10371,6 +10376,11 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     if command == "/help":
         await log_event(uid, u.get("stage", ""), "help_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(user_help_text())
+        return True
+
+    if command == "/privacy":
+        await log_event(uid, u.get("stage", ""), "privacy_notice_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await m.answer(privacy_notice_text())
         return True
 
     if command == "/progress":
@@ -13590,27 +13600,66 @@ async def main_flow(m: Message):
         if text in {"✅ Только вечером", "✅ Ок, можно писать"} or "только вечером" in low:
             u["notifications_enabled"] = 1
             u["reminder_mode"] = "evening_only"
-            set_legacy_stage(u, "trainer_intro")
+            set_legacy_stage(u, "privacy_consent")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 1, "reminder_mode": "evening_only"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
             return
         if text == "☀️ Утром и вечером" or ("утром" in low and "вечер" in low):
             u["notifications_enabled"] = 1
             u["reminder_mode"] = "normal"
-            set_legacy_stage(u, "trainer_intro")
+            set_legacy_stage(u, "privacy_consent")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 1, "reminder_mode": "normal"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
             return
         if text == "🔕 Без напоминаний" or "без" in low or "напомин" in low:
             u["notifications_enabled"] = 0
-            set_legacy_stage(u, "trainer_intro")
+            set_legacy_stage(u, "privacy_consent")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 0}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Ок, без напоминаний. Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            await m.answer("Ок, без напоминаний.\n\n" + privacy_notice_text(), reply_markup=kb_privacy_consent)
             return
         await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
+        return
+
+    if u.get("stage") == "privacy_consent":
+        if text == "✅ Согласен(на), продолжить":
+            consent_at = dt.datetime.now(dt.timezone.utc).isoformat()
+            updated_profile = await update_user_profile(u["user_id"], {
+                "privacy_consent": True,
+                "privacy_consent_at": consent_at,
+                "privacy_notice_version": "2026-09-02",
+            }, DB_PATH)
+            u["profile_json"] = updated_profile
+            set_legacy_stage(u, "trainer_intro")
+            await save_user(u, DB_PATH)
+            await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
+                "notice_version": "2026-09-02",
+            }, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer("Спасибо. Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            return
+        if text == "❌ Не согласен(на)":
+            u["notifications_enabled"] = 0
+            set_legacy_stage(u, "privacy_declined")
+            await save_user(u, DB_PATH)
+            await update_user_profile(u["user_id"], {
+                "privacy_consent": False,
+                "privacy_notice_version": "2026-09-02",
+            }, DB_PATH)
+            await log_event(u["user_id"], "onboarding", "privacy_consent_declined", {
+                "notice_version": "2026-09-02",
+            }, DB_PATH, SHEETS_WEBHOOK_URL)
+            await m.answer(
+                "Понял. Без согласия я не буду начинать анализ. "
+                "Если захочешь удалить созданный профиль, отправь /reset_me."
+            )
+            return
+        await m.answer("Выбери один из двух вариантов.", reply_markup=kb_privacy_consent)
+        return
+
+    if u.get("stage") == "privacy_declined":
+        await m.answer("Анализ не запущен. Информация о данных — /privacy, удаление профиля — /reset_me.")
         return
 
     # ============================================================

@@ -25,10 +25,10 @@ Production is never deployed directly from an AI-generated commit.
 
 1. Ensure staging smoke tests passed and the candidate commit is reviewed.
 2. Open and review a PR from `develop`/`staging` to `main`.
-3. Run the full suite on the exact candidate commit: `python -m pytest -q`.
+3. Run the full suite on the exact candidate commit: `python scripts/regression_gate.py`.
 4. Merge to `main` only after review.
 5. Copy `.env.production.example` to the production secret store. Use the production Telegram token and `DB_PATH=data/skiller-production.db`; set `PAYMENT_ACCEPT_ANY=0` and `TEST_MODE=0`.
 6. Back up the production database: `python scripts/backup_sqlite.py`.
 7. Run `BOT_STARTUP_CHECK=1 python bot.py` against production configuration.
-8. Deploy `main`, then smoke-test `/health`, `/whoami`, free navigation, and one real payment callback without modifying user history.
+8. Deploy `main`, then smoke-test `/health`, `/whoami`, `/privacy`, free navigation, voice transcription, and both support-request paths. Bot payment remains disabled during the free beta.
 9. Roll back to the previous reviewed commit and database backup if startup, routing, or payment smoke checks fail.

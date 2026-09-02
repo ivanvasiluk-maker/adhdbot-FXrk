@@ -23,6 +23,54 @@ def inline_callbacks(markup):
 
 
 class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_legacy_qa_code_cannot_enable_test_mode(self):
+        user = bot.default_user(28990)
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=user["user_id"]),
+            answer=AsyncMock(),
+        )
+        with patch.object(bot, "TEST_CHEAT_CODE", ""), patch.object(
+            bot, "log_event", AsyncMock()
+        ):
+            handled = await bot.handle_user_command(message, user, "/testmode_on skiller_test")
+        self.assertTrue(handled)
+        self.assertEqual(user.get("is_test_user"), 0)
+        self.assertIn("Код не подошёл", message.answer.await_args.args[0])
+
+    def test_privacy_notice_discloses_processing_and_user_controls(self):
+        notice = bot.privacy_notice_text()
+        for required in ("OpenAI", "/privacy", "/reset_me", "18 лет", "не диагностика"):
+            self.assertIn(required, notice)
+        self.assertEqual(keyboard_texts(bot.kb_privacy_consent), {
+            "✅ Согласен(на), продолжить", "❌ Не согласен(на)",
+        })
+
+    async def test_privacy_consent_is_recorded_before_diagnosis(self):
+        user = bot.default_user(28991)
+        user["stage"] = "privacy_consent"
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=user["user_id"]),
+            chat=SimpleNamespace(id=user["user_id"]),
+            text="✅ Согласен(на), продолжить",
+            voice=None,
+            answer=AsyncMock(),
+        )
+        saved_profile = {}
+
+        async def update_profile(_uid, patch_data, _db_path):
+            saved_profile.update(patch_data)
+            return dict(saved_profile)
+
+        with patch.object(bot, "get_user", AsyncMock(return_value=user)), patch.object(
+            bot, "save_user", AsyncMock()
+        ), patch.object(bot, "update_user_profile", update_profile), patch.object(
+            bot, "log_event", AsyncMock()
+        ):
+            await bot.main_flow(message)
+        self.assertEqual(user["stage"], "trainer_intro")
+        self.assertTrue(saved_profile["privacy_consent"])
+        self.assertTrue(saved_profile["privacy_consent_at"])
+
     def test_morning_buttons_match_router_and_evening_starts_by_button(self):
         self.assertLessEqual(
             keyboard_texts(bot.kb_morning_checkin),
