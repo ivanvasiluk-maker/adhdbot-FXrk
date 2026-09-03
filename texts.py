@@ -1377,7 +1377,7 @@ kb_trainers = ReplyKeyboardMarkup(
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🆘 Кризис прокрастинации")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="⚡ Сильно застрял")],
         [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
@@ -2113,7 +2113,7 @@ kb_skip_data = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💳 Продолжить полный режим")],
+        [KeyboardButton(text="💬 Узнать о поддержке")],
         [KeyboardButton(text="📚 Что входит")],
         [KeyboardButton(text="🧭 Показать карту")],
         [KeyboardButton(text="🤔 Остаться в коротком режиме")],
