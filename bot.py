@@ -193,6 +193,7 @@ INTERNAL_TEST_USER_IDS = {
 }
 PAYMENT_MONTH_URL = os.getenv("PAYMENT_MONTH_URL", "").strip()
 PAYMENT_TEST_URL = os.getenv("PAYMENT_TEST_URL", "").strip()
+VOLUNTARY_SUPPORT_URL = os.getenv("VOLUNTARY_SUPPORT_URL", "").strip()
 PAYMENT_ACCEPT_ANY = env_bool("PAYMENT_ACCEPT_ANY")
 assert_production_payment_safety(payment_accept_any=PAYMENT_ACCEPT_ANY)
 ENABLE_PAYMENTS = env_bool("ENABLE_PAYMENTS")
@@ -7291,6 +7292,11 @@ def paid_plan_available() -> bool:
     return bool(not FREE_BETA_ACCESS and ENABLE_PAYMENTS and ENABLE_PAID_PLAN and configured_payment_url())
 
 
+def voluntary_support_available() -> bool:
+    """A Stripe Payment Link may fund the beta, but never gates beta access."""
+    return bool(FREE_BETA_ACCESS and is_ready_payment_url(VOLUNTARY_SUPPORT_URL))
+
+
 def schedule_not_ready_text() -> str:
     return "Запись скоро будет подключена. Пока можно написать Ивану напрямую или продолжить тренировку."
 
@@ -7517,6 +7523,7 @@ OFFER_CALLBACKS = {
     "conclusion_full": "offer:conclusion_full",
     "next_plan": "offer:next_plan",
     "beta_purchase_intent": "offer:beta_purchase_intent",
+    "voluntary_support": "offer:voluntary_support",
 }
 
 def test_payment_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -7561,6 +7568,8 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
             rows.append([InlineKeyboardButton(text="👥 Хочу в группу — €240", callback_data=OFFER_CALLBACKS["group"])])
         if ENABLE_HUMAN_OFFER:
             rows.append([InlineKeyboardButton(text=f"👤 Хочу личную работу — от €{HUMAN_SKILL_SESSION_EUR_LABEL}", callback_data=OFFER_CALLBACKS["live"])])
+        if voluntary_support_available():
+            rows.append([InlineKeyboardButton(text="💚 Поддержать SKILLER — €4,99/мес", callback_data=OFFER_CALLBACKS["voluntary_support"])])
         rows.extend([
             [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
             [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
@@ -15608,7 +15617,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     if FREE_BETA_ACCESS and data not in {
         OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
         OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
-        OFFER_CALLBACKS["beta_purchase_intent"],
+        OFFER_CALLBACKS["beta_purchase_intent"], OFFER_CALLBACKS["voluntary_support"],
         OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
         OFFER_CALLBACKS["request_group"], OFFER_CALLBACKS["request_live"],
         OFFER_CALLBACKS["compare"], OFFER_CALLBACKS["back"],
@@ -15657,6 +15666,29 @@ async def on_offer_callbacks(c: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"]),
             ]]),
+        )
+        await c.answer()
+        return
+
+    if data == OFFER_CALLBACKS["voluntary_support"]:
+        if not voluntary_support_available():
+            await c.message.answer("Ссылка поддержки пока не подключена. Бесплатный beta-доступ продолжает работать без ограничений.")
+            await c.answer()
+            return
+        await log_event(
+            uid, "offer", "voluntary_support_clicked",
+            {"source": "day3_offer", "amount": 4.99, "currency": "EUR", "access_gated": False},
+            DB_PATH, SHEETS_WEBHOOK_URL,
+        )
+        await c.message.answer(
+            "💚 Добровольная поддержка SKILLER — €4,99 в месяц.\n\n"
+            "Это не обязательная оплата: во время beta-теста все функции останутся доступны, даже если не оформлять поддержку. "
+            "Если продукт уже полезен и хочешь помочь его развивать — можно оформить поддержку по кнопке.\n\n"
+            "Подпиской и её отменой можно управлять через платёжный сервис.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💚 Поддержать за €4,99/мес", url=VOLUNTARY_SUPPORT_URL)],
+                [InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+            ]),
         )
         await c.answer()
         return
