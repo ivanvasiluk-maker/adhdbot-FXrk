@@ -155,7 +155,7 @@ async def run() -> None:
     assert action_context["skill_history"]["did_not_work"] == ["open_only"]
     assert action_context["trainer_key"] == "beck"
 
-    assert {"💪 Сделать следующий шаг", "⚡ Я застрял", "🆘 Кризис прокрастинации", "🧭 Моя карта", "🌙 Закрыть день"}.issubset(keyboard_texts(kb_training_main))
+    assert {"💪 Сделать следующий шаг", "⚡ Я застрял", "⚡ Сильно застрял", "🧭 Моя карта", "🌙 Закрыть день"}.issubset(keyboard_texts(kb_training_main))
     assert "🆘 Кризис" not in keyboard_texts(kb_training_main)
     assert "🆘 Мне небезопасно" not in keyboard_texts(kb_training_main)
     assert "📊 Прогресс" not in keyboard_texts(kb_more_actions)
