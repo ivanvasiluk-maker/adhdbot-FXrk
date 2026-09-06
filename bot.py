@@ -6283,6 +6283,10 @@ async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt
     metadata.setdefault("day_id", str(u.get("current_day_id") or ""))
     metadata.setdefault("attempt_id", str(attempt_id or active_attempt(u).get("attempt_id") or ""))
     metadata.setdefault("state_version", int(u.get("state_version") or 0))
+    # Snapshot only bounded analytics taxonomy. Never put task text or user messages here.
+    metadata.setdefault("stage", str(u.get("stage") or "")[:80])
+    metadata.setdefault("day", int(u.get("day") or 0))
+    metadata.setdefault("trainer_key", str(u.get("trainer_key") or "")[:80])
     await record_action_event(
         u["user_id"],
         DB_PATH,
