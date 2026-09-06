@@ -10,6 +10,7 @@ Create a Google Sheet with these tabs:
 - `payments`
 - `errors`
 - `behavioral_kpi`
+- `skill_results`
 
 ## Headers
 
@@ -41,6 +42,14 @@ Each user is appended once. Telegram ID, username, name, free text, diagnosis, a
 
 This tab never receives Telegram identity, raw text, voice/crisis content, prompts, or personal stories.
 
+### skill_results
+
+`export_id | created_at | anonymous_user_id | day | stage | trainer_key | event_type | skill_id | result_status | effect | effect_status | reason | source | attempt_id | day_id | is_internal_test`
+
+This is the operational product stream: where a user is in the flow, which skill was attempted,
+whether it was completed, and whether it helped. Free-form feedback, task text, Telegram identity,
+voice transcripts, medical details, and crisis content are never exported.
+
 ## Apps Script webhook
 
 Open the sheet, then go to **Extensions → Apps Script** and deploy a web app with this code:
@@ -53,7 +62,8 @@ function doPost(e) {
     const sheetName = payload.sheet || "events";
     const allowedHeaders = {
       users: ["first_seen", "last_seen", "anonymous_user_id", "current_day", "is_test_user"],
-      behavioral_kpi: ["created_at", "event_name", "anonymous_user_id", "situation_id", "experiment_id", "skill_id", "mechanism_code", "context_domain", "outcome_label", "count_value", "policy_version", "ranking_version", "skill_version"]
+      behavioral_kpi: ["created_at", "event_name", "anonymous_user_id", "situation_id", "experiment_id", "skill_id", "mechanism_code", "context_domain", "outcome_label", "count_value", "policy_version", "ranking_version", "skill_version"],
+      skill_results: ["export_id", "created_at", "anonymous_user_id", "day", "stage", "trainer_key", "event_type", "skill_id", "result_status", "effect", "effect_status", "reason", "source", "attempt_id", "day_id", "is_internal_test"]
     };
     if (!allowedHeaders[sheetName]) {
       throw new Error("Unsupported sheet: " + sheetName);
@@ -72,11 +82,29 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length)
-      .setValues(rows);
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    let rowsToInsert = rows;
+    const keyColumn = sheetName === "skill_results" ? 1 : (sheetName === "users" ? 3 : 0);
+    if (keyColumn && sheet.getLastRow() > 1) {
+      const existing = new Set(
+        sheet.getRange(2, keyColumn, sheet.getLastRow() - 1, 1).getValues().flat().filter(String)
+      );
+      rowsToInsert = rows.filter(row => {
+        const key = row[keyColumn - 1];
+        if (!key || existing.has(key)) return false;
+        existing.add(key);
+        return true;
+      });
+    }
+    if (rowsToInsert.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, rowsToInsert.length, rowsToInsert[0].length)
+        .setValues(rowsToInsert);
+    }
+    lock.releaseLock();
 
     return ContentService
-      .createTextOutput(JSON.stringify({ ok: true, inserted: rows.length }))
+      .createTextOutput(JSON.stringify({ ok: true, inserted: rowsToInsert.length }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return ContentService
@@ -108,4 +136,4 @@ Do not commit the real webhook URL. Store it only in Railway/env.
 
 - `TelegramConflictError: Conflict: terminated by other getUpdates request` means the same `BOT_TOKEN` is already being polled by another running bot process. Stop the duplicate local/Railway/container instance and leave only one active deployment.
 - If no users appear, verify all three Railway variables are set: `SHEETS_WEBHOOK_URL`, `SHEETS_SYNC_ENABLED=true`, and a non-empty private `ANALYTICS_ID_SALT`.
-- Redeploy the Apps Script after replacing the old webhook code. The current exporter uses only `users` and `behavioral_kpi`; the webhook creates either tab with safe headers when missing.
+- Redeploy the Apps Script after replacing the old webhook code. The current exporter uses `users`, `skill_results`, and `behavioral_kpi`; the webhook creates these safe tabs when missing.
