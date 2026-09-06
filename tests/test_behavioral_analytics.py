@@ -8,13 +8,14 @@ from core.behavioral_analytics import (
     BehavioralAnalyticsEvent, build_kpis, safe_sheet_payload,
 )
 from db import (
-    get_behavioral_kpis, init_db, record_action_event,
+    get_behavioral_kpis, init_db, log_event, record_action_event,
     record_behavioral_analytics_event,
 )
 from sheets_sync import (
     action_event_to_sheet_row, behavioral_analytics_to_sheet_row,
     event_to_sheet_row, payment_to_sheet_row, sanitize_event_data,
-    sync_action_events, sync_new_user_snapshots, user_to_sheet_row,
+    journey_event_to_sheet_row, sync_action_events, sync_journey_events,
+    sync_new_user_snapshots, user_to_sheet_row,
 )
 
 
@@ -90,6 +91,19 @@ class BehavioralAnalyticsUnitTests(unittest.TestCase):
             123456789, "private-task-text", "private story",
             "Мой личный ответ", "Private Name", "private_user",
         ):
+            self.assertNotIn(private_value, row)
+
+    def test_journey_export_contains_stage_but_not_private_content(self):
+        event = {
+            "id": 8, "user_id": 123456789, "event_name": "analysis_action_started",
+            "stage": "training", "created_at": "2026-09-06T12:00:00+00:00",
+            "event_data": '{"day":1,"skill_id":"open_only","source":"working_map",'
+                          '"user_text":"private story","text":"private task"}',
+        }
+        row = journey_event_to_sheet_row(event, secret_salt="private-salt")
+        for expected in ("analysis_action_started", "training", "open_only", "working_map"):
+            self.assertIn(expected, row)
+        for private_value in (123456789, "private story", "private task"):
             self.assertNotIn(private_value, row)
 
 
@@ -189,6 +203,33 @@ class BehavioralAnalyticsPersistenceTests(unittest.IsolatedAsyncioTestCase):
                 result = await sync_action_events(file.name, 50)
             self.assertEqual(result["synced"], 0)
             post.assert_not_awaited()
+
+    async def test_journey_events_export_once_and_include_returns(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            await init_db(file.name)
+            async with aiosqlite.connect(file.name) as db:
+                await db.execute(
+                    "INSERT INTO users(user_id, day, stage, trainer_key, pending_skill_id) VALUES(?,?,?,?,?)",
+                    (123456789, 2, "training", "marsha", "open_only"),
+                )
+                await db.commit()
+            await log_event(
+                123456789, "start_resume", {"day": 2, "user_text": "private"},
+                db_path=file.name,
+            )
+            with patch("sheets_sync.ANALYTICS_ID_SALT", "private-salt"), patch(
+                "sheets_sync.post_rows", new_callable=AsyncMock, return_value=(True, '{"ok":true}')
+            ) as post:
+                first = await sync_journey_events(file.name, 50)
+                second = await sync_journey_events(file.name, 50)
+            self.assertEqual(first["synced"], 1)
+            self.assertEqual(second["synced"], 0)
+            post.assert_awaited_once()
+            self.assertEqual(post.await_args.kwargs["sheet"], "journey_events")
+            row = post.await_args.args[0][0]
+            self.assertIn("start_resume", row)
+            self.assertNotIn(123456789, row)
+            self.assertNotIn("private", row)
 
 
 if __name__ == "__main__":
