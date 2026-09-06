@@ -87,6 +87,7 @@ class BehavioralAnalyticsUnitTests(unittest.TestCase):
         self.assertIn("done", row)
         self.assertIn("started_task", row)
         self.assertIn("too_hard", row)
+        self.assertNotIn("day-2", row)
         for private_value in (
             123456789, "private-task-text", "private story",
             "Мой личный ответ", "Private Name", "private_user",
