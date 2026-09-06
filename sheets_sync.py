@@ -449,6 +449,13 @@ def _journey_export_id(event: Dict[str, Any], *, secret_salt: str) -> str:
     return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:24]
 
 
+def _anonymous_scope_id(value: Any, *, secret_salt: str, namespace: str) -> str:
+    if value in {None, ""}:
+        return ""
+    identity = f"{namespace}:{value}"
+    return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:16]
+
+
 def journey_event_to_sheet_row(
     event: Dict[str, Any], user: Dict[str, Any] | None = None, *, secret_salt: str,
 ) -> List[Any]:
@@ -549,7 +556,7 @@ def action_event_to_sheet_row(
         _safe_taxonomy(metadata.get("reason")),
         _safe_taxonomy(metadata.get("source")),
         _safe_int(event.get("attempt_id")),
-        _safe_taxonomy(event.get("day_id")),
+        _anonymous_scope_id(event.get("day_id"), secret_salt=secret_salt, namespace="day"),
         bool(metadata.get("is_internal_test")),
     ]
 
