@@ -80,7 +80,7 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bot.paid_plan_available())
         labels = [button.text for row in bot.offer_inline_keyboard(user["user_id"]).inline_keyboard for button in row]
         self.assertIn("👥 Хочу в группу — €240", labels)
-        self.assertIn(f"👤 Хочу личную работу — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", labels)
+        self.assertIn(f"👤 Личная терапия — €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес", labels)
         self.assertFalse(any("оплат" in label.lower() for label in labels))
 
     def test_open_beta_upgrades_existing_unpaid_state_without_reset(self):

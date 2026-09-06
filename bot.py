@@ -2389,26 +2389,16 @@ def trainer_key_from_text(text: str) -> Optional[str]:
 def trainer_mode_preview_text(current_key: str, switch_count: int, comp: Optional[Dict[str, Any]] = None) -> str:
     current = TRAINERS.get(current_key, TRAINERS["marsha"])
     mode_lines = (
-        "🤍 Марша — мягко\n"
-        "🐈‍⬛ Скинни — чётко\n"
-        "🧠 Бек — с объяснениями"
+        "🤍 Марша — уменьшает давление и шаг, если растёт напряжение; частичная попытка тоже считается данными.\n"
+        "🐈‍⬛ Скинни — даёт одно действие и чёткий финиш; объяснение оставляет до результата.\n"
+        "🧠 Бек — называет гипотезу и отдельно проверяет выполнение, субъективный эффект и продолжение задачи."
     )
-    snippets = ""
-    if isinstance(comp, dict) and comp.get("analysis_result"):
-        parts = []
-        for key in ("skinny", "marsha", "beck"):
-            trainer = TRAINERS.get(key, TRAINERS["marsha"])
-            sample = format_comprehensive_analysis(comp, trainer_key=key)
-            sample = clamp_str(" ".join(sample.split()), 170)
-            parts.append(f"{trainer['emoji']} {trainer['name']}: {sample}")
-        snippets = "\n\nКак будет звучать этот же разбор:\n" + "\n\n".join(parts)
     return (
         f"Твой текущий тренер: {current['emoji']} {current['name']}.\n"
         "Можно сменить стиль поддержки в любой момент.\n"
         "Задача, карта и прогресс сохранятся.\n\n"
-        f"{mode_lines}"
-        f"{snippets}\n\n"
-        "Выбери режим. Смена попадёт в карту как факт выбора стиля, не как доказательство, что этот тренер помогает."
+        f"{mode_lines}\n\n"
+        "Факты и карта сохранятся. Изменятся способ ведения шага и подача обратной связи. Выбери режим."
     )
 
 
@@ -2764,6 +2754,7 @@ def extract_task_context_from_text(text: str) -> Dict[str, str]:
             result["current_deadline"] = match.group(1).strip()
 
     object_patterns = (
+        ("реклам", "реклама бота" if "бот" in low else "реклама"),
         ("презентац", "презентация"),
         ("слайд", "слайд"),
         ("отч", "отчёт"),
@@ -2783,6 +2774,15 @@ def extract_task_context_from_text(text: str) -> Dict[str, str]:
         flags=re.IGNORECASE,
     )
     task_name = task_match.group(1).strip(" ,;:—-") if task_match else ""
+    if not task_name:
+        blocked_match = re.search(
+            r"(?:не\s+могу|никак\s+не\s+могу)\s+(?:сесть\s+за|начать|приступить\s+к|взяться\s+за)\s+([^.!?\n]+)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        task_name = blocked_match.group(1).strip(" ,;:—-") if blocked_match else ""
+        if task_name and result["current_task_object"] == "реклама бота":
+            task_name = "реклама бота"
     if not task_name and result["current_task_object"]:
         sentence = next((part.strip() for part in re.split(r"[.!?]", raw) if result["current_task_object"][:6].lower() in part.lower()), "")
         task_name = sentence
@@ -2807,17 +2807,23 @@ def extract_task_context_from_text(text: str) -> Dict[str, str]:
     return result
 
 
-async def save_extracted_task_context(u: Dict[str, Any], text: str, *, source: str) -> Dict[str, str]:
+async def save_extracted_task_context(
+    u: Dict[str, Any], text: str, *, source: str, persist_task_record: bool = True,
+) -> Dict[str, str]:
     context = extract_task_context_from_text(text)
     task_name = context.get("current_task_name") or ""
     if not task_name:
         return context
+    previous_task_name = current_task_title(u, "")
     u["current_task_name"] = task_name
     u["current_task_object"] = context.get("current_task_object") or None
     u["current_deadline"] = context.get("current_deadline") or None
     u["current_task_next_step"] = context.get("current_task_next_step") or None
     u["current_task_fear"] = context.get("current_task_fear") or None
-    if not u.get("current_task_title"):
+    # A fresh diagnosis can describe a new task. Do not keep the old active
+    # task merely because a previous title exists in the user row.
+    task_changed = not previous_task_name or previous_task_name.casefold() != task_name.casefold()
+    if task_changed and persist_task_record:
         await save_current_task(
             u,
             DB_PATH,
@@ -2827,6 +2833,12 @@ async def save_extracted_task_context(u: Dict[str, Any], text: str, *, source: s
             deadline=context.get("current_deadline") or "",
             fear=context.get("current_task_fear") or "",
         )
+    else:
+        u["current_task_title"] = task_name
+        u["today_target"] = task_name
+        if task_changed:
+            u["current_task_id"] = None
+            u["current_next_physical_step"] = context.get("current_task_next_step") or None
     await log_event(u["user_id"], "analysis", "task_context_extracted", {"source": source, **context}, DB_PATH, SHEETS_WEBHOOK_URL)
     return context
 
@@ -3611,7 +3623,7 @@ ACTION_BUTTON_ALIASES = {
     "⚡ Дать короткий навык",
 }
 CLOSE_DAY_BUTTON_ALIASES = {
-    "🌙 Закрыть день", "✅ Закрыть день", "🌙 Завершить",
+    "Закрыть день", "🌙 Закрыть день", "✅ Закрыть день", "🌙 Завершить",
     "🌙 На сегодня хватит", "🌙 На сегодня достаточно",
 }
 
@@ -3920,7 +3932,10 @@ def record_skill_attempt_start(u: Dict[str, Any], skill_id: str, *, source: str 
     u["skill_attempts"] = attempts[-50:]
 
 
-def update_latest_skill_attempt_result(u: Dict[str, Any], *, result: str, effect: str) -> None:
+def update_latest_skill_attempt_result(
+    u: Dict[str, Any], *, result: str, effect: str,
+    experiment_result: str = "", after_action: str = "", target_function: str = "",
+) -> None:
     attempts = user_skill_attempts(u)
     if not attempts:
         sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
@@ -3929,6 +3944,12 @@ def update_latest_skill_attempt_result(u: Dict[str, Any], *, result: str, effect
     if attempts:
         attempts[-1]["result"] = result
         attempts[-1]["effect"] = effect
+        if experiment_result:
+            attempts[-1]["experiment_result"] = experiment_result
+        if after_action:
+            attempts[-1]["after_action"] = after_action
+        if target_function:
+            attempts[-1]["target_function"] = target_function
         attempts[-1]["completed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         u["skill_attempts"] = attempts[-50:]
 
@@ -3941,21 +3962,21 @@ CONSOLIDATION_BRANCHES = [
         "keyboard": "hold",
     },
     {
-        "id": "remove_obstacle",
-        "title": "🧱 Убери одну помеху перед следующим шагом.",
-        "body": "Например: телефон, лишние вкладки, уведомления, список из 15 задач.",
+        "id": "finished_fragment",
+        "title": "🧩 Один законченный фрагмент",
+        "body": "Выбери один слайд, абзац или письмо. Оставайся только с ним до черновой точки готовности — остальную задачу пока не трогай.",
         "keyboard": "action",
     },
     {
-        "id": "external_support",
-        "title": "👥 Не надо тащить это в одиночку.",
-        "body": "Напиши одному человеку:\n«Я начинаю задачу на 5 минут. Через 10 минут напишу, что получилось».",
+        "id": "protect_switch",
+        "title": "🧱 Защита от переключения",
+        "body": "На 5 минут оставь одно рабочее окно. Телефон положи туда, откуда его нельзя взять автоматически.",
         "keyboard": "action",
     },
     {
-        "id": "easy_return",
-        "title": "🧭 Сделай возвращение лёгким.",
-        "body": "Оставь файл открытым, курсор в следующем месте и одну заметку: «продолжить с…».",
+        "id": "finish_line",
+        "title": "🏁 Конкретная точка завершения",
+        "body": "До старта назови финиш подхода: «остановлюсь после одного слайда / абзаца / пяти минут». Не работай без видимой границы.",
         "keyboard": "action",
     },
 ]
@@ -3970,15 +3991,31 @@ def should_switch_to_consolidation(u: Dict[str, Any]) -> bool:
     if str(u.get("stage") or "") in {"consolidation", "consolidation_running"}:
         return False
     attempts = user_skill_attempts(u)[-3:]
+    if not attempts:
+        return False
+    latest = attempts[-1]
+    # A weak success is already evidence that START moved while STAY did not.
+    # Route the very next experiment to retention instead of offering another
+    # opening ritual. Older rows keep their legacy effect/result fallback.
+    if str(latest.get("experiment_result") or "") == "WEAK_SUCCESS":
+        return True
     if len(attempts) < 2:
         return False
-    started = recent_effect_count(u, {"started_task", "done_started_task"}, limit=3)
-    easier = recent_effect_count(u, {"easier", "became_easier", "done_relief"}, limit=3)
-    return started >= 2 or easier >= 2
+    lost_after_start = sum(
+        1 for item in attempts
+        if str(item.get("after_action") or "") in {"stopped_after_step", "did_something_else"}
+    )
+    started = recent_effect_count(u, {"started_task", "done_started_task", "STRONG_SUCCESS"}, limit=3)
+    easier = recent_effect_count(u, {"easier", "became_easier", "done_relief", "WEAK_SUCCESS"}, limit=3)
+    return lost_after_start >= 2 or started >= 2 or easier >= 2
 
 
 def consolidation_branch_for_user(u: Dict[str, Any]) -> Dict[str, Any]:
-    return CONSOLIDATION_BRANCHES[0]
+    used = {
+        str(item.get("skill_id") or "").removeprefix("consolidation_")
+        for item in user_skill_attempts(u)
+    }
+    return next((branch for branch in CONSOLIDATION_BRANCHES if branch["id"] not in used), CONSOLIDATION_BRANCHES[0])
 
 
 def consolidation_transition_text(branch: Dict[str, Any]) -> str:
@@ -4727,7 +4764,7 @@ async def persist_personal_working_model(
     sid = str(feedback.get("skill_id") or current_skill_for_action(u) or "")
     skill = SKILLS_DB.get(sid) or {}
     result = classify_experiment_result(
-        completed=feedback.get("completed") is True,
+        completed=feedback.get("completed") is True or feedback.get("partial") is True,
         subjective_effect={"helped": "helped", "some": "a_little", "not_helped": "did_not_help"}.get(
             str(feedback.get("helpfulness") or ""), "unknown"),
         after_action={
@@ -4807,18 +4844,31 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         "helped": "helped", "some": "a_little", "not_helped": "did_not_help",
     }.get(helpfulness, "unknown")
     experiment_result = classify_experiment_result(
-        completed=completed, subjective_effect=subjective_effect, after_action=after_action,
+        completed=completed or partial, subjective_effect=subjective_effect, after_action=after_action,
     )
     feedback.update({"experiment_result": experiment_result, "subjective_effect": subjective_effect,
                      "after_action": after_action})
     effect_status = effect_status_from_minimal_feedback(helpfulness, continued)
-    sync_active_attempt(u, bump=True, attempt_status="completed" if completed else "failed", effect_status=effect_status, is_closed=True)
-    update_latest_skill_attempt_result(u, result="completed" if completed else "partial" if partial else "not_completed", effect=helpfulness)
+    sync_active_attempt(
+        u, bump=True,
+        attempt_status="completed" if completed or partial else "failed",
+        effect_status=effect_status,
+        is_closed=True,
+    )
+    current_target_function = skill_target_function(sid)
+    update_latest_skill_attempt_result(
+        u,
+        result="completed" if completed else "partial" if partial else "not_completed",
+        effect=helpfulness,
+        experiment_result=experiment_result,
+        after_action=after_action,
+        target_function=current_target_function,
+    )
     await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "minimal_feedback": True})
     profile = await get_user_profile(u["user_id"], DB_PATH)
     patch = {
         "last_skill_feedback": feedback,
-        "last_skill_completed": completed,
+        "last_skill_completed": completed or partial,
         "last_skill_effect": helpfulness,
         "last_continued_after_skill": continued,
     }
@@ -4831,7 +4881,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     await _process_normalized_feedback(u, feedback)
     reflection = build_user_post_action_reflection(u, feedback, profile)
     profile = await persist_personal_working_model(u, feedback, profile)
-    if completed and not profile.get("first_experiment_completed_at"):
+    if (completed or partial) and not profile.get("first_experiment_completed_at"):
         completed_at = dt.datetime.now(dt.timezone.utc).isoformat()
         await update_user_profile(u["user_id"], {"first_experiment_completed_at": completed_at}, DB_PATH, source="first_experiment_completed")
         await log_event(u["user_id"], "training", "first_experiment_completed", {"skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -6882,13 +6932,13 @@ def short_offer_text() -> str:
         if ENABLE_GROUP_OFFER:
             options.append(
                 "👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €240.\n"
-                "8 недель, онлайн-встреча раз в неделю, практика, домашние эксперименты и поддержка в чате. "
+                "8 недель, онлайн-встреча раз в неделю, задания каждый день и поддержка в чате. "
                 "Работаем с вниманием, реальным планированием, тревогой, импульсивностью и возвратом после срывов."
             )
         if ENABLE_HUMAN_OFFER:
             options.append(
-                f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу.\n"
-                "Разберём именно твою карту, соберём персональный план и потренируем навыки на реальной задаче."
+                f"👤 Личная терапия с Иваном Василюком — €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц.\n"
+                "В пакет входят терапия, персональная карта и задания каждый день."
             )
         options.append(
             "🟢 Сам тест SKILLER пока остаётся бесплатным. Группа и личная работа — отдельные платные форматы."
@@ -7003,7 +7053,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
         "живая поддержка после первых результатов",
         "Предложение появляется после накопления первых данных: что сработало, где был срыв и какой тип поддержки нужен дальше.",
         ["карта уже содержит первые поведенческие сигналы", "группа и личная работа помогают закреплять навыки на реальных задачах", "бесплатный тест остаётся доступным"],
-        "Реши: продолжать бесплатный тест, пойти в группу или обсудить личную работу."
+        "Реши: продолжать бесплатный тест, пойти в группу или обсудить личную терапию."
     )
     await save_user(u, DB_PATH)
     if is_auto:
@@ -7051,7 +7101,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
         "price_month": BASE_OFFER_EUR_LABEL,
         "funnel_goal": "group_or_personal" if FREE_BETA_ACCESS else "subscription_or_support",
         "group_price": 240 if FREE_BETA_ACCESS else float(GROUP_PROGRAM_TOTAL_MIN_EUR),
-        "personal_price_from": float(HUMAN_SKILL_SESSION_EUR),
+        "personal_price_month": float(HUMAN_SKILL_SESSION_EUR),
         **profile_patch,
     }
     await log_event(u["user_id"], "offer", "offer_shown" if is_auto else "offer_preview_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -7567,7 +7617,7 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
         if ENABLE_GROUP_OFFER:
             rows.append([InlineKeyboardButton(text="👥 Хочу в группу — €240", callback_data=OFFER_CALLBACKS["group"])])
         if ENABLE_HUMAN_OFFER:
-            rows.append([InlineKeyboardButton(text=f"👤 Хочу личную работу — от €{HUMAN_SKILL_SESSION_EUR_LABEL}", callback_data=OFFER_CALLBACKS["live"])])
+            rows.append([InlineKeyboardButton(text=f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
         if voluntary_support_available():
             rows.append([InlineKeyboardButton(text="💚 Поддержать SKILLER — €4,99/мес", callback_data=OFFER_CALLBACKS["voluntary_support"])])
         rows.extend([
@@ -7598,7 +7648,7 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
         if ENABLE_GROUP_OFFER:
             rows.append([InlineKeyboardButton(text="👥 Группа — €240", callback_data=OFFER_CALLBACKS["group"])])
         if ENABLE_HUMAN_OFFER:
-            rows.append([InlineKeyboardButton(text=f"👤 Личная работа — от €{HUMAN_SKILL_SESSION_EUR_LABEL}", callback_data=OFFER_CALLBACKS["live"])])
+            rows.append([InlineKeyboardButton(text=f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
         rows.extend([
             [InlineKeyboardButton(text="Продолжить бесплатный тест", callback_data=OFFER_CALLBACKS["continue_training"])],
             [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
@@ -7706,15 +7756,15 @@ def tariff_bot_text() -> str:
 
 def tariff_live_text() -> str:
     return (
-        f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n\n"
-        "Если ты устал разбираться в одиночку, можно начать с одной индивидуальной встречи.\n\n"
-        "За 45–60 минут:\n"
-        "— разберём конкретный стопор;\n"
-        "— найдём, где ломается цепочка;\n"
-        "— выберем 1–2 навыка;\n"
-        "— потренируем их прямо на вашей ситуации.\n\n"
-        f"От €{HUMAN_SKILL_SESSION_EUR_LABEL} за встречу. Можно начать с одной встречи, без обязательства покупать пакет.\n\n"
-        "Нажми «Хочу личную работу» — заявка уйдёт Ивану, и он напишет тебе лично."
+        f"👤 Личная терапия с Иваном Василюком — €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц\n\n"
+        "Формат для тех, кому нужен не разовый совет, а личная работа с сопровождением.\n\n"
+        "Внутри:\n"
+        "— терапия с Иваном Василюком;\n"
+        "— разбор твоей рабочей карты;\n"
+        "— персональные задания каждый день;\n"
+        "— обновление плана по результатам реальных попыток.\n\n"
+        f"Стоимость — €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц.\n\n"
+        "Нажми «Хочу личную терапию» — заявка уйдёт Ивану, и он напишет тебе лично."
     )
 
 
@@ -7729,7 +7779,7 @@ def tariff_group_text() -> str:
         "— как проходить тревогу, перфекционизм и прокрастинацию;\n"
         "— как регулировать эмоции и импульсивность;\n"
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
-        "Внутри: практика на своих задачах, домашние эксперименты, чат-поддержка и материалы после встреч.\n\n"
+        "Внутри: практика на своих задачах, задания каждый день, чат-поддержка и материалы после встреч.\n\n"
         "Стоимость всей программы — €240. Можно оплатить двумя частями по €120. "
         "Перед участием — короткая бесплатная встреча, чтобы понять, подходит ли формат.\n\n"
         "Если хочешь место — нажми кнопку ниже. Иван напишет тебе лично."
@@ -7769,7 +7819,7 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="👤 Хочу личную работу", callback_data=OFFER_CALLBACKS["request_live"])],
+        [InlineKeyboardButton(text="👤 Хочу личную терапию", callback_data=OFFER_CALLBACKS["request_live"])],
         [InlineKeyboardButton(text="💬 Написать Ивану", url="https://t.me/Ivan_Vasiliuk")],
     ]
     rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
@@ -7803,12 +7853,12 @@ def offer_details_full_mode_text() -> str:
         if ENABLE_GROUP_OFFER:
             options.append(
                 "👥 Группа навыков для взрослых с СДВГ — €240\n"
-                "8 недель: внимание, планирование, прокрастинация, эмоции, импульсивность и возврат после срывов."
+                "8 недель: еженедельная встреча, задания каждый день и поддержка в чате."
             )
         if ENABLE_HUMAN_OFFER:
             options.append(
-                f"👤 Личная работа с Иваном — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n"
-                "Одна встреча 45–60 минут: разбор твоего стопора, персональный план и практика навыков."
+                f"👤 Личная терапия с Иваном — €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц\n"
+                "Терапия, персональная карта и задания каждый день."
             )
         return "📚 Что можно выбрать дальше\n\n" + "\n\n".join(options)
     return (
@@ -7818,8 +7868,8 @@ def offer_details_full_mode_text() -> str:
         "Персональная карта, история попыток, адаптивные следующие тесты и напоминания.\n\n"
         f"👥 Группа навыков — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL} за занятие\n"
         "Еженедельные занятия, эксперименты, поддержка и SKILLER между встречами.\n\n"
-        f"👤 Потренировать навык с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}\n"
-        "Одна встреча 45–60 минут: конкретный стопор и практика 1–2 навыков."
+        f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц\n"
+        "Терапия, персональная карта и задания каждый день."
     )
 
 
@@ -9399,6 +9449,12 @@ def render_prelaunch_full_map(u: Dict[str, Any], profile: Dict[str, Any], skill_
     failed = _top_specific_signal(model.get("unhelpful_interventions"), "") or _first_specific_signal([
         profile.get("failed_skill"), profile.get("worst_skill"),
     ], "пока нет устойчивого отрицательного сигнала")
+    # A skill has one current evidence status. Legacy profile lists can still
+    # overlap, but the user-facing map must never contradict itself.
+    if helped == failed and helped not in {
+        "пока нет подтверждённого способа", "пока нет устойчивого отрицательного сигнала",
+    }:
+        failed = "по этому навыку есть смешанные данные — нужен повторный тест"
     start = "есть первый сигнал" if profile.get("last_skill_completed") else "ещё проверяем"
     stay = "продолжение подтверждено" if profile.get("last_continued_after_skill") is True else "продолжение пока не подтверждено"
     returned = "возврат наблюдался" if int(profile.get("return_count") or u.get("return_count") or 0) else "данных о возврате мало"
@@ -12115,6 +12171,13 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    # Closing the day is a global destination. It must outrank the action
+    # router and every completed-experiment menu, otherwise a stale keyboard
+    # can consume it as case text or answer with "Эксперимент уже выполнен".
+    if text in CLOSE_DAY_BUTTON_ALIASES and not str(u.get("stage") or "").startswith("day_review_"):
+        await close_day_from_global_button(m, u, "global_close_priority")
+        return
+
     # Reset confirmation owns the message before the action router and every
     # diagnostic/free-text branch. Otherwise an old router session can consume
     # the confirmation as user content and leave the button apparently dead.
@@ -12181,9 +12244,6 @@ async def main_flow(m: Message):
             await apply_conclusion_correction(m, u, text)
         else:
             await m.answer("Напиши или скажи короткую поправку к выводу.")
-        return
-    if text == "🌙 Завершить":
-        await close_day_from_global_button(m, u, "finish_command")
         return
     if is_known_reply_button(text) and u.get("stage") in DIAGNOSTIC_INPUT_STAGES and text not in {"Пропустить", "Назад"}:
         await show_context_fallback(m, u, "button_during_free_text_prompt")
@@ -13797,6 +13857,9 @@ async def main_flow(m: Message):
             user_text = "Прокрастинация/избегание, хочу начать, но откладываю."
         else:
             user_text = text
+            await save_extracted_task_context(
+                u, user_text, source="problem_text", persist_task_record=False,
+            )
         u["analysis_json"] = json.dumps(safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         set_legacy_stage(u, "run_analysis")
         await save_user(u, DB_PATH)
@@ -13822,6 +13885,9 @@ async def main_flow(m: Message):
             await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
             return
         await m.answer(f"Распознал: {clamp_str(t, 700)}")
+        await save_extracted_task_context(
+            u, t, source="problem_voice", persist_task_record=False,
+        )
         u["analysis_json"] = json.dumps(safe_analysis_memory(t, {"bucket": u.get("bucket") or "mixed"}), ensure_ascii=False)
         set_legacy_stage(u, "run_analysis")
         await save_user(u, DB_PATH)
@@ -15203,7 +15269,17 @@ async def handle_legacy_crisis_redirect_button(m: Message, u: Dict[str, Any], te
     return True
 
 
+def skill_target_function(skill_id: str) -> str:
+    sid = str(skill_id or "")
+    if sid.startswith("consolidation_") or sid in {"one_tab_focus", "focus_one_tab"}:
+        return "STAY"
+    if sid in {"return_after_slip", "restart_after_slip"}:
+        return "RETURN"
+    return "START"
+
+
 def default_active_attempt(u: Dict[str, Any]) -> Dict[str, Any]:
+    active_skill_id = str(u.get("current_skill") or u.get("daily_skill_id") or "")
     return {
         "attempt_id": str(u.get("current_action_id") or uuid.uuid4().hex),
         "screen_version": 0,
@@ -15212,6 +15288,7 @@ def default_active_attempt(u: Dict[str, Any]) -> Dict[str, Any]:
         "last_user_mechanism": u.get("last_user_mechanism"),
         "current_skill_id": current_skill_for_action(u) if "current_skill_for_action" in globals() else (u.get("current_skill") or u.get("daily_skill_id")),
         "current_skill_title": u.get("daily_skill_name"),
+        "target_function": skill_target_function(active_skill_id),
         "current_step": u.get("current_next_physical_step"),
         "attempt_status": "not_tried",
         "effect_status": "unknown",
@@ -15286,6 +15363,7 @@ def sync_active_attempt(
     attempt["task_title"] = u.get("current_task_title") or u.get("today_target")
     attempt["last_user_mechanism"] = u.get("last_user_mechanism") or attempt.get("last_user_mechanism")
     attempt["current_skill_id"] = current_skill_for_action(u) if "current_skill_for_action" in globals() else (u.get("current_skill") or u.get("daily_skill_id"))
+    attempt["target_function"] = skill_target_function(str(attempt.get("current_skill_id") or ""))
     attempt["current_skill_title"] = u.get("daily_skill_name") or attempt.get("current_skill_title")
     attempt["current_step"] = u.get("current_next_physical_step") or attempt.get("current_step")
     if current_mechanism is not None:
@@ -15475,6 +15553,17 @@ async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup:
         set_active_flow(u, prefix, source="inline_edit")
     await save_user_best_effort(u)
 
+
+async def replace_offer_inline_screen(message, u: Dict[str, Any], text: str, markup: InlineKeyboardMarkup):
+    """Replace the current offer card instead of stacking another menu."""
+    if callable(getattr(message, "edit_text", None)):
+        try:
+            await edit_with_inline_screen(message, u, text, markup, "offer")
+            return
+        except Exception as exc:
+            log.info("offer_inline_edit_fallback: %s", type(exc).__name__)
+    await answer_with_inline_screen(message, u, text, markup, "offer")
+
 # ============================================================
 # CALLBACKS
 # ============================================================
@@ -15613,6 +15702,8 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if await handle_safety_callback(c, u, data):
         return
+    if not await claim_callback_once(c, u, "offer"):
+        return
     data, _, _ = split_versioned_callback(data)
     if FREE_BETA_ACCESS and data not in {
         OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
@@ -15695,7 +15786,7 @@ async def on_offer_callbacks(c: CallbackQuery):
 
     if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"], OFFER_CALLBACKS["request_group"]}:
         format_label = {
-            OFFER_CALLBACKS["request_live"]: "Тренировка навыка с человеком",
+            OFFER_CALLBACKS["request_live"]: "Личная терапия с ежедневными заданиями",
             OFFER_CALLBACKS["request_guided"]: "Бот + специалист",
             OFFER_CALLBACKS["request_group"]: "Группа навыков для взрослых с СДВГ — собеседование",
         }[data]
@@ -15717,36 +15808,38 @@ async def on_offer_callbacks(c: CallbackQuery):
             await c.answer()
             return
         await log_event(uid, "offer", "tariff_details_opened", {"format": "subscription_founding", "amount": float(BASE_OFFER_EUR)}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, tariff_bot_text(), tariff_bot_inline_keyboard(uid), "offer")
+        await replace_offer_inline_screen(c.message, u, tariff_bot_text(), tariff_bot_inline_keyboard(uid))
         await c.answer()
         return
 
     if data == OFFER_CALLBACKS["group"]:
         await log_event(uid, "offer", "tariff_details_opened", {
-            "format": "cbt_group", "unit": "session", "sessions": GROUP_SESSION_COUNT,
-            "amount_from": float(GROUP_SESSION_EUR_MIN), "amount_to": float(GROUP_SESSION_EUR_MAX),
+            "format": "cbt_group", "unit": "program", "sessions": GROUP_SESSION_COUNT,
+            "amount": float(GROUP_PROGRAM_TOTAL_MIN_EUR),
+            "daily_assignments": True,
         }, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, tariff_group_text(), tariff_group_inline_keyboard(uid), "offer")
+        await replace_offer_inline_screen(c.message, u, tariff_group_text(), tariff_group_inline_keyboard(uid))
         await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["live"], "offer_live"}:
         await log_event(uid, "offer", "tariff_details_opened", {
-            "format": "live_review", "unit": "session", "amount_from": float(HUMAN_SKILL_SESSION_EUR),
+            "format": "personal_therapy", "unit": "month", "amount": float(HUMAN_SKILL_SESSION_EUR),
+            "daily_assignments": True,
         }, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, tariff_live_text(), tariff_live_inline_keyboard(uid), "offer")
+        await replace_offer_inline_screen(c.message, u, tariff_live_text(), tariff_live_inline_keyboard(uid))
         await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["guided"], "offer_specialist"}:
         await log_event(uid, "offer", "tariff_details_opened", {"format": "bot_specialist", "amount": 149}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, tariff_specialist_text(), tariff_specialist_inline_keyboard(uid), "offer")
+        await replace_offer_inline_screen(c.message, u, tariff_specialist_text(), tariff_specialist_inline_keyboard(uid))
         await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["compare"], "offer_details"}:
         await log_event(uid, "offer", "profile_map_details_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, offer_details_full_mode_text(), offer_details_inline_keyboard(uid), "offer")
+        await replace_offer_inline_screen(c.message, u, offer_details_full_mode_text(), offer_details_inline_keyboard(uid))
         await c.answer()
         return
 
@@ -15755,9 +15848,9 @@ async def on_offer_callbacks(c: CallbackQuery):
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         summary = build_profile_map_summary(u, profile)
         await log_event(uid, "offer", "offer_full_conclusion_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(
+        await replace_offer_inline_screen(
             c.message, u, trainer_wrap(u, offer_detailed_conclusion_text(u, summary, profile), "map"),
-            offer_variant_inline_keyboard(uid), "offer",
+            offer_variant_inline_keyboard(uid),
         )
         await c.answer()
         return
@@ -15767,17 +15860,17 @@ async def on_offer_callbacks(c: CallbackQuery):
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         summary = build_profile_map_summary(u, profile)
         await log_event(uid, "offer", "offer_next_plan_opened", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(
+        await replace_offer_inline_screen(
             c.message, u, trainer_wrap(u, offer_next_plan_text(summary, profile), "map"),
-            offer_variant_inline_keyboard(uid), "offer",
+            offer_variant_inline_keyboard(uid),
         )
         await c.answer()
         return
 
     if data in {OFFER_CALLBACKS["back"], "offer_back"}:
-        await answer_with_inline_screen(
+        await replace_offer_inline_screen(
             c.message, u, offer_menu_text(),
-            offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer",
+            offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))),
         )
         await c.answer()
         return
@@ -15868,7 +15961,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         await log_event(uid, "offer", "profile_signals_opened", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
+        await replace_offer_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))))
         await c.answer()
         return
 
@@ -15889,7 +15982,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     profile = await get_user_profile(uid, DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
     summary = build_profile_map_summary(u, profile)
-    await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
+    await replace_offer_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))))
 
 
 @router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"yes", "no", "noop"})

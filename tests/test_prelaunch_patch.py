@@ -78,7 +78,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
         self.assertIn("👥 Хочу в группу — €240", labels)
-        self.assertIn(f"👤 Хочу личную работу — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", labels)
+        self.assertIn(f"👤 Личная терапия — €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес", labels)
         self.assertIn("Продолжить бесплатный тест", labels)
         self.assertNotIn("Другие форматы поддержки", labels)
         self.assertFalse(any("Оплатить" in label for label in labels))
@@ -168,8 +168,8 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("START → STAY → RETURN", text)
         self.assertIn("Группа навыков", text)
         self.assertIn("€240", text)
-        self.assertIn("Личная работа", text)
-        self.assertIn(f"от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}", text)
+        self.assertIn("Личная терапия", text)
+        self.assertIn(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц", text)
         self.assertIn("тест SKILLER пока остаётся бесплатным", text)
 
     def test_day_one_skill_names_the_problem_and_solution_route(self):

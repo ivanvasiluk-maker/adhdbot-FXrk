@@ -291,7 +291,7 @@ async def test_show_offer_force_enables_offer_prerequisites():
         joined = "\n".join(msg.answers)
         assert "Группа навыков" in joined
         assert "€240" in joined
-        assert "Личная работа" in joined
+        assert "Личная терапия" in joined
         assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}" in joined
         assert "тест SKILLER пока остаётся бесплатным" in joined
 
@@ -322,8 +322,9 @@ async def test_free_beta_allows_support_offers_but_blocks_bot_checkout():
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
         live_text = "\n".join(live_cb.message.answers)
-        assert "Личная работа с Иваном Василюком" in live_text
-        assert f"от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}" in live_text
+        assert "Личная терапия с Иваном Василюком" in live_text
+        assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц" in live_text
+        assert "задания каждый день" in live_text
 
         bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
         old_payment_url, old_payments_enabled = bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS
@@ -370,7 +371,7 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
         auto_text = "\n".join(auto_msg.answers)
         assert "Группа навыков" in auto_text
         assert "€240" in auto_text
-        assert "Личная работа" in auto_text
+        assert "Личная терапия" in auto_text
         assert "тест SKILLER пока остаётся бесплатным" in auto_text
         assert "Оплатить" not in auto_text
 
@@ -401,10 +402,10 @@ async def test_support_request_form_remains_available_during_free_beta():
         opened = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
         assert opened["stage"] == "offer_request_form"
-        assert opened.get("pending_offer_request_format") == "Тренировка навыка с человеком"
+        assert opened.get("pending_offer_request_format") == "Личная терапия с ежедневными заданиями"
         joined = "\n".join(request_cb.message.answers)
         assert "соберём заявку" in joined
-        assert "Тренировка навыка с человеком" in joined
+        assert "Личная терапия с ежедневными заданиями" in joined
 
 
 async def test_day_intro_is_not_sent_twice():
@@ -582,7 +583,7 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
     assert "👥 Хочу в группу — €240" in keyboard_text
-    assert f"👤 Хочу личную работу — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}" in keyboard_text
+    assert f"👤 Личная терапия — €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in keyboard_text
     assert "Продолжить бесплатный тест" in keyboard_text
     assert "🧭 План на следующие 7 дней" in keyboard_text
     assert "📖 Почему такой вывод" in keyboard_text

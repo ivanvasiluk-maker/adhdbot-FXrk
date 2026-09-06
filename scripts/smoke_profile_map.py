@@ -125,7 +125,7 @@ async def run():
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
         has_group_offer = "👥 Хочу в группу — €240" in kb_texts
-        has_live_offer = any("👤 Хочу личную работу" in t for t in kb_texts)
+        has_live_offer = any("👤 Личная терапия" in t for t in kb_texts)
         has_primary_map = "📌 Краткое заключение" in offer_text and "Как держится проблема" in offer_text
         has_day3_conclusion = "Главный узел" in offer_text and "лучший сигнал" in offer_text.lower()
         has_personal_offer = (
