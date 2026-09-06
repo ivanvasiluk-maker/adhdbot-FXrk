@@ -406,6 +406,9 @@ JOURNEY_EVENT_EXPORT_TYPES = {
     "privacy_consent_granted",
     "privacy_consent_declined",
     "diagnosis_completed",
+    "profile_map_updated",
+    "recommended_track_shown",
+    "analysis_shown",
     "day1_started",
     "analysis_action_started",
     "attempt_started",
@@ -474,6 +477,11 @@ def journey_event_to_sheet_row(
         _safe_taxonomy(metadata.get("skill_id") or user.get("pending_skill_id")),
         _safe_taxonomy(metadata.get("trainer_key") or user.get("trainer_key")),
         _safe_taxonomy(metadata.get("source")),
+        _safe_taxonomy(metadata.get("problem_category")),
+        _safe_taxonomy(metadata.get("bucket")),
+        _safe_taxonomy(metadata.get("main_pattern") or metadata.get("avoidance_pattern")),
+        _safe_taxonomy(metadata.get("mechanism_code")),
+        _safe_taxonomy(metadata.get("recommended_track")),
         bool(event.get("is_internal_test") or metadata.get("is_internal_test")),
     ]
 
