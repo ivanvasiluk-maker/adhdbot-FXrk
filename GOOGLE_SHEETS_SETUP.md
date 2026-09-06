@@ -19,7 +19,9 @@ Create a Google Sheet with these tabs:
 
 ### users
 
-`first_seen | last_seen | user_id | telegram_username | telegram_name | trainer_key | language | bucket | main_pattern | payment_status | current_day | is_test_user`
+`first_seen | last_seen | anonymous_user_id | current_day | is_test_user`
+
+Each user is appended once. Telegram ID, username, name, free text, diagnosis, and profile content are never exported.
 
 ### daily_summary
 
@@ -49,10 +51,18 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const payload = JSON.parse(e.postData.contents);
     const sheetName = payload.sheet || "events";
-    const sheet = ss.getSheetByName(sheetName);
-
+    const allowedHeaders = {
+      users: ["first_seen", "last_seen", "anonymous_user_id", "current_day", "is_test_user"],
+      behavioral_kpi: ["created_at", "event_name", "anonymous_user_id", "situation_id", "experiment_id", "skill_id", "mechanism_code", "context_domain", "outcome_label", "count_value", "policy_version", "ranking_version", "skill_version"]
+    };
+    if (!allowedHeaders[sheetName]) {
+      throw new Error("Unsupported sheet: " + sheetName);
+    }
+    let sheet = ss.getSheetByName(sheetName);
     if (!sheet) {
-      throw new Error("Sheet not found: " + sheetName);
+      sheet = ss.insertSheet(sheetName);
+      sheet.getRange(1, 1, 1, allowedHeaders[sheetName].length)
+        .setValues([allowedHeaders[sheetName]]);
     }
 
     const rows = payload.rows || [];
@@ -97,4 +107,5 @@ Do not commit the real webhook URL. Store it only in Railway/env.
 ## Troubleshooting
 
 - `TelegramConflictError: Conflict: terminated by other getUpdates request` means the same `BOT_TOKEN` is already being polled by another running bot process. Stop the duplicate local/Railway/container instance and leave only one active deployment.
-- `Sheet not found: daily_summary` means the optional analytics tab is missing. Core `events` sync can still work; create the `daily_summary` tab with the headers above if you want daily aggregate rows.
+- If no users appear, verify all three Railway variables are set: `SHEETS_WEBHOOK_URL`, `SHEETS_SYNC_ENABLED=true`, and a non-empty private `ANALYTICS_ID_SALT`.
+- Redeploy the Apps Script after replacing the old webhook code. The current exporter uses only `users` and `behavioral_kpi`; the webhook creates either tab with safe headers when missing.
