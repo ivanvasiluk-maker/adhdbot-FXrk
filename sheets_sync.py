@@ -383,6 +383,50 @@ def behavioral_analytics_to_sheet_row(event: Dict[str, Any], *, secret_salt: str
     ]
 
 
+async def sync_new_user_snapshots(db_path: str, limit: int) -> Dict[str, Any]:
+    """Append each user once using a pseudonymous id and a minimal safe snapshot."""
+    if not ANALYTICS_ID_SALT:
+        return {"synced": 0, "failed": 0, "error": "", "warning": "ANALYTICS_ID_SALT is empty"}
+
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sheets_exported_users (
+                user_id INTEGER PRIMARY KEY,
+                exported_at TEXT NOT NULL
+            )
+            """
+        )
+        rows = await (await db.execute(
+            """
+            SELECT u.*
+            FROM users AS u
+            LEFT JOIN sheets_exported_users AS exported ON exported.user_id = u.user_id
+            WHERE exported.user_id IS NULL AND u.user_id > 0
+            ORDER BY u.user_id
+            LIMIT ?
+            """,
+            (limit,),
+        )).fetchall()
+        if not rows:
+            await db.commit()
+            return {"synced": 0, "failed": 0, "error": ""}
+
+        users = [dict(row) for row in rows]
+        ok, message = await post_rows([user_to_sheet_row(user) for user in users], sheet="users")
+        if not ok:
+            return {"synced": 0, "failed": len(users), "error": message[:500]}
+
+        exported_at = datetime.now(timezone.utc).isoformat()
+        await db.executemany(
+            "INSERT OR IGNORE INTO sheets_exported_users(user_id, exported_at) VALUES(?, ?)",
+            [(int(user["user_id"]), exported_at) for user in users],
+        )
+        await db.commit()
+        return {"synced": len(users), "failed": 0, "error": ""}
+
+
 async def sync_behavioral_analytics_events(db_path: str, limit: int) -> Dict[str, Any]:
     """Export only the normalized PATCH-16 table; legacy events stay local."""
     if not ANALYTICS_ID_SALT:
@@ -479,9 +523,19 @@ async def _mark_events_failed(db: aiosqlite.Connection, event_ids: List[int], er
 
 
 async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
-    # The old multi-tab exporter mixed identity/profile snapshots with events.
-    # Keep it unreachable: production sync is normalized behavioral analytics only.
-    return await sync_behavioral_analytics_events(db_path, limit)
+    """Sync safe new-user snapshots and normalized behavioral analytics independently."""
+    users = await sync_new_user_snapshots(db_path, limit)
+    analytics = await sync_behavioral_analytics_events(db_path, limit)
+    errors = [part.get("error", "") for part in (users, analytics) if part.get("error")]
+    warnings = [part.get("warning", "") for part in (users, analytics) if part.get("warning")]
+    return {
+        "synced": int(users.get("synced", 0)) + int(analytics.get("synced", 0)),
+        "failed": int(users.get("failed", 0)) + int(analytics.get("failed", 0)),
+        "error": "; ".join(errors)[:500],
+        "warning": "; ".join(dict.fromkeys(warnings))[:500],
+        "users_synced": int(users.get("synced", 0)),
+        "analytics_synced": int(analytics.get("synced", 0)),
+    }
 
 
 async def _sync_legacy_events_disabled(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
