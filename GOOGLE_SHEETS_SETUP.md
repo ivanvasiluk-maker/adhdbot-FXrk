@@ -53,11 +53,12 @@ voice transcripts, medical details, and crisis content are never exported.
 
 ### journey_events
 
-`export_id | created_at | anonymous_user_id | event_name | stage | day | skill_id | trainer_key | source | is_internal_test`
+`export_id | created_at | anonymous_user_id | event_name | stage | day | skill_id | trainer_key | source | problem_category | bucket | main_pattern | mechanism_code | recommended_track | is_internal_test`
 
 This tab is the privacy-safe funnel timeline: onboarding, exercise start, next-day return,
-reactivation, and offer steps. It never receives message text, voice transcripts, Telegram identity,
-profile conclusions, or crisis events.
+reactivation, and offer steps. The bounded category columns show which problem bucket and pattern
+were matched to the final recommended route. It never receives message text, voice transcripts,
+Telegram identity, free-form profile conclusions, or crisis events.
 
 ## Apps Script webhook
 
@@ -73,7 +74,7 @@ function doPost(e) {
       users: ["first_seen", "last_seen", "anonymous_user_id", "current_day", "is_test_user"],
       behavioral_kpi: ["created_at", "event_name", "anonymous_user_id", "situation_id", "experiment_id", "skill_id", "mechanism_code", "context_domain", "outcome_label", "count_value", "policy_version", "ranking_version", "skill_version"],
       skill_results: ["export_id", "created_at", "anonymous_user_id", "day", "stage", "trainer_key", "event_type", "skill_id", "result_status", "effect", "effect_status", "reason", "source", "attempt_id", "day_id", "is_internal_test"],
-      journey_events: ["export_id", "created_at", "anonymous_user_id", "event_name", "stage", "day", "skill_id", "trainer_key", "source", "is_internal_test"]
+      journey_events: ["export_id", "created_at", "anonymous_user_id", "event_name", "stage", "day", "skill_id", "trainer_key", "source", "problem_category", "bucket", "main_pattern", "mechanism_code", "recommended_track", "is_internal_test"]
     };
     if (!allowedHeaders[sheetName]) {
       throw new Error("Unsupported sheet: " + sheetName);
