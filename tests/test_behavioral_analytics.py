@@ -107,6 +107,25 @@ class BehavioralAnalyticsUnitTests(unittest.TestCase):
         for private_value in (123456789, "private story", "private task"):
             self.assertNotIn(private_value, row)
 
+    def test_journey_export_keeps_only_bounded_map_matching_fields(self):
+        event = {
+            "id": 9, "user_id": 123456789, "event_name": "profile_map_updated",
+            "stage": "analysis", "created_at": "2026-09-06T12:00:00+00:00",
+            "event_data": '{"source":"initial_map","problem_category":"procrastination",'
+                          '"bucket":"start_block","main_pattern":"anxiety_avoidance",'
+                          '"mechanism_code":"overwhelm","recommended_track":"procrastination",'
+                          '"main_hypothesis":"my very personal free-form conclusion",'
+                          '"user_text":"private story"}',
+        }
+        row = journey_event_to_sheet_row(event, secret_salt="private-salt")
+        for expected in (
+            "profile_map_updated", "initial_map", "procrastination", "start_block",
+            "anxiety_avoidance", "overwhelm",
+        ):
+            self.assertIn(expected, row)
+        self.assertNotIn("my very personal free-form conclusion", row)
+        self.assertNotIn("private story", row)
+
 
 class BehavioralAnalyticsPersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_funnel_events_and_reproducibility_versions_are_queryable(self):
