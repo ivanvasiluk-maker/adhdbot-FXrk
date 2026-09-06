@@ -1,5 +1,8 @@
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
+
+import aiosqlite
 
 from core.behavioral_analytics import (
     BehavioralAnalyticsEvent, build_kpis, safe_sheet_payload,
@@ -7,7 +10,7 @@ from core.behavioral_analytics import (
 from db import get_behavioral_kpis, init_db, record_behavioral_analytics_event
 from sheets_sync import (
     behavioral_analytics_to_sheet_row, event_to_sheet_row, payment_to_sheet_row,
-    sanitize_event_data, user_to_sheet_row,
+    sanitize_event_data, sync_new_user_snapshots, user_to_sheet_row,
 )
 
 
@@ -79,6 +82,32 @@ class BehavioralAnalyticsPersistenceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["kpis"]["independent_use_rate"], 1.0)
             self.assertEqual(result["kpis"]["value_report_to_offer_rate"], 1.0)
             self.assertEqual(result["kpis"]["offer_to_verified_purchase_rate"], 1.0)
+
+
+    async def test_new_users_are_exported_once_without_telegram_identity(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            await init_db(file.name)
+            async with aiosqlite.connect(file.name) as db:
+                await db.execute(
+                    "INSERT INTO users(user_id, created_at, last_active, day, is_test_user) VALUES(?,?,?,?,?)",
+                    (123456789, 1720000000, 1720000100, 2, 0),
+                )
+                await db.commit()
+
+            with patch("sheets_sync.ANALYTICS_ID_SALT", "private-salt"), patch(
+                "sheets_sync.post_rows", new_callable=AsyncMock, return_value=(True, '{"ok":true}')
+            ) as post:
+                first = await sync_new_user_snapshots(file.name, 50)
+                second = await sync_new_user_snapshots(file.name, 50)
+
+            self.assertEqual(first["synced"], 1)
+            self.assertEqual(second["synced"], 0)
+            post.assert_awaited_once()
+            rows = post.await_args.args[0]
+            self.assertEqual(post.await_args.kwargs["sheet"], "users")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(len(rows[0]), 5)
+            self.assertNotIn(123456789, rows[0])
 
 
 if __name__ == "__main__":
