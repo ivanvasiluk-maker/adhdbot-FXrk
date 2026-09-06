@@ -399,6 +399,27 @@ ACTION_EVENT_EXPORT_TYPES = {
     "extra_step_after_day_closed",
 }
 
+JOURNEY_EVENT_EXPORT_TYPES = {
+    "onboarding_started",
+    "trainer_selected",
+    "notifications_consent_set",
+    "privacy_consent_granted",
+    "privacy_consent_declined",
+    "diagnosis_completed",
+    "day1_started",
+    "analysis_action_started",
+    "attempt_started",
+    "skill_replaced",
+    "new_day_started_from_morning",
+    "new_day_skill_opened",
+    "evening_review_started",
+    "start_resume",
+    "reactivation_opened",
+    "reactivation_success",
+    "offer_shown",
+    "offer_seen",
+}
+
 
 def _safe_taxonomy(value: Any, *, fallback: str = "") -> str:
     text = str(value or "").strip()
@@ -421,6 +442,77 @@ def _action_export_id(event: Dict[str, Any], *, secret_salt: str) -> str:
         str(event.get("id") or ""),
     ))
     return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def _journey_export_id(event: Dict[str, Any], *, secret_salt: str) -> str:
+    identity = f"journey:{event.get('user_id') or ''}:{event.get('event_name') or ''}:{event.get('id') or ''}"
+    return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def journey_event_to_sheet_row(
+    event: Dict[str, Any], user: Dict[str, Any] | None = None, *, secret_salt: str,
+) -> List[Any]:
+    """Serialize a bounded funnel event without text, Telegram identity, or profile content."""
+    if not secret_salt:
+        raise ValueError("ANALYTICS_ID_SALT is required for journey analytics export")
+    user = user or {}
+    metadata = _parse_json(event.get("event_data") or event.get("meta"))
+    return [
+        _journey_export_id(event, secret_salt=secret_salt),
+        event.get("created_at") or "",
+        anonymous_analytics_id(event.get("user_id"), secret_salt=secret_salt),
+        _safe_taxonomy(event.get("event_name") or event.get("event")),
+        _safe_taxonomy(event.get("stage") or metadata.get("stage") or user.get("stage")),
+        _safe_int(metadata.get("day") or user.get("day")),
+        _safe_taxonomy(metadata.get("skill_id") or user.get("pending_skill_id")),
+        _safe_taxonomy(metadata.get("trainer_key") or user.get("trainer_key")),
+        _safe_taxonomy(metadata.get("source")),
+        bool(event.get("is_internal_test") or metadata.get("is_internal_test")),
+    ]
+
+
+async def sync_journey_events(db_path: str, limit: int) -> Dict[str, Any]:
+    """Export privacy-minimal onboarding, stage, drop-off, and return signals."""
+    if not ANALYTICS_ID_SALT:
+        return {"synced": 0, "failed": 0, "error": "", "warning": "ANALYTICS_ID_SALT is empty"}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS sheets_exported_journey_events (
+                   event_id INTEGER PRIMARY KEY,
+                   exported_at TEXT NOT NULL
+               )"""
+        )
+        placeholders = ",".join("?" for _ in JOURNEY_EVENT_EXPORT_TYPES)
+        rows = await (await db.execute(
+            f"""SELECT e.*, u.day, u.pending_skill_id, u.trainer_key
+                FROM events AS e
+                LEFT JOIN users AS u ON u.user_id = e.user_id
+                LEFT JOIN sheets_exported_journey_events AS exported ON exported.event_id = e.id
+                WHERE exported.event_id IS NULL
+                  AND COALESCE(e.analytics_event, 1) != 0
+                  AND e.event_name IN ({placeholders})
+                ORDER BY e.id
+                LIMIT ?""",
+            [*sorted(JOURNEY_EVENT_EXPORT_TYPES), limit],
+        )).fetchall()
+        if not rows:
+            await db.commit()
+            return {"synced": 0, "failed": 0, "error": ""}
+        events = [dict(row) for row in rows]
+        ok, message = await post_rows(
+            [journey_event_to_sheet_row(event, event, secret_salt=ANALYTICS_ID_SALT) for event in events],
+            sheet="journey_events",
+        )
+        if not ok:
+            return {"synced": 0, "failed": len(events), "error": message[:500]}
+        exported_at = datetime.now(timezone.utc).isoformat()
+        await db.executemany(
+            "INSERT OR IGNORE INTO sheets_exported_journey_events(event_id, exported_at) VALUES(?, ?)",
+            [(int(event["id"]), exported_at) for event in events],
+        )
+        await db.commit()
+        return {"synced": len(events), "failed": 0, "error": ""}
 
 
 def action_event_to_sheet_row(
@@ -647,9 +739,10 @@ async def _mark_events_failed(db: aiosqlite.Connection, event_ids: List[int], er
 async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
     """Sync users, skill outcomes, and normalized behavioral analytics independently."""
     users = await sync_new_user_snapshots(db_path, limit)
+    journey = await sync_journey_events(db_path, limit)
     actions = await sync_action_events(db_path, limit)
     analytics = await sync_behavioral_analytics_events(db_path, limit)
-    parts = (users, actions, analytics)
+    parts = (users, journey, actions, analytics)
     errors = [part.get("error", "") for part in parts if part.get("error")]
     warnings = [part.get("warning", "") for part in parts if part.get("warning")]
     return {
@@ -658,6 +751,7 @@ async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE
         "error": "; ".join(errors)[:500],
         "warning": "; ".join(dict.fromkeys(warnings))[:500],
         "users_synced": int(users.get("synced", 0)),
+        "journey_events_synced": int(journey.get("synced", 0)),
         "skill_results_synced": int(actions.get("synced", 0)),
         "analytics_synced": int(analytics.get("synced", 0)),
     }
@@ -809,11 +903,12 @@ async def sheets_sync_loop(db_path: str):
             result = await sync_unsynced_events(db_path, SHEETS_SYNC_BATCH_SIZE)
             if first_cycle or result.get("synced") or result.get("failed") or result.get("warning"):
                 logging.info(
-                    "Sheets sync cycle: synced=%s failed=%s users=%s skill_results=%s "
+                    "Sheets sync cycle: synced=%s failed=%s users=%s journey_events=%s skill_results=%s "
                     "behavioral_kpi=%s warning=%s error=%s",
                     result.get("synced", 0),
                     result.get("failed", 0),
                     result.get("users_synced", 0),
+                    result.get("journey_events_synced", 0),
                     result.get("skill_results_synced", 0),
                     result.get("analytics_synced", 0),
                     result.get("warning") or "-",
