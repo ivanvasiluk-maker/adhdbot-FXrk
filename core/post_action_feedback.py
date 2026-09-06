@@ -58,17 +58,19 @@ def build_post_action_reflection(context: ReflectionContext) -> PostActionReflec
         reaction = f"Получилось: ты сделал конкретный вход — {action}. Заканчивать всю задачу для этого не понадобилось."
         if context.helpfulness in {"helped", "some"}:
             interpretation = f"В этой попытке сработал не общий призыв собраться, а навык «{skill}»: он снизил стоимость первого контакта с задачей."
+            principle = f"{skill} — {action}"
+            anchor = f"Когда снова возникнет «{situation}», начни с действия «{action}», а не со всей задачи."
         else:
             interpretation = "Действие состоялось, но заметного облегчения пока нет. Записываем запуск отдельно от субъективного эффекта."
+            principle = f"проверяли «{skill}», полезность пока не подтверждена"
+            anchor = "Этот навык пока не сохраняем. Проверим другой механизм."
         pattern = _short(context.known_pattern, f"в ситуации «{situation}» движение появилось после одного проверяемого действия", 180)
-        principle = f"{skill} — {action}"
-        anchor = f"Когда снова возникнет «{situation}», начни с действия «{action}», а не со всей задачи."
     else:
         reaction = f"Этот вход не сработал: действие «{action}» не началось. Это результат проверки, а не оценка тебя."
         interpretation = f"Похоже, одного уменьшения шага было недостаточно: {barrier}. Следующий заход должен изменить причину или способ входа, а не повторить то же самое."
         pattern = _short(context.known_pattern, f"в ситуации «{situation}» текущий вход не обошёл барьер: {barrier}", 180)
         principle = f"проверяли «{skill}», результат — нужен другой или более ясный вход"
-        anchor = f"Если «{action}» не запускается, сначала уточни барьер: {barrier}."
+        anchor = "Этот навык пока не сохраняем. Проверим другой механизм."
     return PostActionReflection(
         reaction, interpretation, pattern, _short(principle, principle, 180), _short(anchor, anchor, 180),
     )

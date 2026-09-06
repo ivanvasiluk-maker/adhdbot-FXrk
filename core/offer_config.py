@@ -21,7 +21,10 @@ def _env_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)).strip())
 
 
-HUMAN_SKILL_SESSION_EUR = _env_decimal("HUMAN_SKILL_SESSION_EUR", "39")
+# Kept under the legacy environment-variable name for deployment
+# compatibility, but this value now represents the complete monthly personal
+# therapy package rather than the price of one session.
+HUMAN_SKILL_SESSION_EUR = _env_decimal("HUMAN_SKILL_SESSION_EUR", "200")
 GROUP_SESSION_EUR_MIN = _env_decimal("GROUP_SESSION_EUR_MIN", "30")
 GROUP_SESSION_EUR_MAX = _env_decimal("GROUP_SESSION_EUR_MAX", "30")
 GROUP_SESSION_COUNT = _env_int("GROUP_SESSION_COUNT", 8)
