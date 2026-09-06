@@ -10911,6 +10911,10 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
             "Sheets sync\n"
             f"synced: {result.get('synced', 0)}\n"
             f"failed: {result.get('failed', 0)}\n"
+            f"users: {result.get('users_synced', 0)}\n"
+            f"skill results: {result.get('skill_results_synced', 0)}\n"
+            f"behavioral KPI: {result.get('analytics_synced', 0)}\n"
+            f"warning: {result.get('warning') or '-'}\n"
             f"error: {result.get('error') or '-'}"
         )
         return True

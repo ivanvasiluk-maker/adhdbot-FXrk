@@ -86,6 +86,7 @@ Notes:
 - Set `TEST_CHEAT_CODE` to a private code; entering `/test_access <code>` or the code as a plain message enables per-user QA helpers, including `/force_next_day` and `/set_day 3` (both immediately open that day’s training) plus `/show_offer`. Destructive/admin operations such as payment marking, stats, and Sheets sync stay ADMIN-only.
 - Set `BOT_STARTUP_CHECK=1` only for deploy/build sanity checks; in this mode the bot initializes and exits without starting Telegram polling.
 - `DB_PATH` points to the SQLite file; it is auto-created/migrated on start. Treat this file as persistent production data: deploy scripts must mount/keep it and must not delete or recreate it, otherwise users lose their current scenario step.
+- On Railway, mount a persistent Volume and point `DB_PATH` inside that mount (for example, mount `/data` and use `DB_PATH=/data/bot.db`). A relative `DB_PATH=bot.db` is container-local unless the whole `/app` directory is explicitly backed by a Volume. Back up or migrate the current database before changing an existing production mount/path.
 - User state is stored in the `users` table and migrated additively. The durable resume columns are `telegram_id`, `day_number`, `current_step`, `access_status`, `trainer`, `mode`, `created_at`, `updated_at`, and `schema_version`; legacy bot fields are kept in sync for compatibility.
 
 ## Mandatory regression gate

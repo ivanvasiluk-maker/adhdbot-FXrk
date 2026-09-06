@@ -797,9 +797,29 @@ async def sheets_sync_loop(db_path: str):
     if not SHEETS_WEBHOOK_URL:
         logging.info("Sheets sync disabled: SHEETS_WEBHOOK_URL is empty")
         return
+    logging.info(
+        "Sheets sync started: interval=%ss batch=%s analytics_salt=%s",
+        SHEETS_SYNC_INTERVAL_SECONDS,
+        SHEETS_SYNC_BATCH_SIZE,
+        bool(ANALYTICS_ID_SALT),
+    )
+    first_cycle = True
     while True:
         try:
-            await sync_unsynced_events(db_path, SHEETS_SYNC_BATCH_SIZE)
+            result = await sync_unsynced_events(db_path, SHEETS_SYNC_BATCH_SIZE)
+            if first_cycle or result.get("synced") or result.get("failed") or result.get("warning"):
+                logging.info(
+                    "Sheets sync cycle: synced=%s failed=%s users=%s skill_results=%s "
+                    "behavioral_kpi=%s warning=%s error=%s",
+                    result.get("synced", 0),
+                    result.get("failed", 0),
+                    result.get("users_synced", 0),
+                    result.get("skill_results_synced", 0),
+                    result.get("analytics_synced", 0),
+                    result.get("warning") or "-",
+                    result.get("error") or "-",
+                )
+            first_cycle = False
         except Exception as e:
             logging.exception("Sheets sync failed: %s", e)
             await _record_sheets_sync_error(db_path, e)

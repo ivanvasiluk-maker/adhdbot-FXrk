@@ -39,8 +39,9 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
 
     def test_privacy_notice_discloses_processing_and_user_controls(self):
         notice = bot.privacy_notice_text()
-        for required in ("OpenAI", "/privacy", "/reset_me", "18 лет", "не диагностика"):
+        for required in ("OpenAI", "/privacy", "/reset\\_me", "18 лет", "не диагностика"):
             self.assertIn(required, notice)
+        self.assertNotIn("/reset_me", notice)
         self.assertEqual(keyboard_texts(bot.kb_privacy_consent), {
             "✅ Согласен(на), продолжить", "❌ Не согласен(на)",
         })
