@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 import sqlite3
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import aiosqlite
 from aiogram import Bot, Router
@@ -22,8 +22,9 @@ router = Router(name="admin_broadcast")
 
 BROADCAST_MAX_LENGTH = 3500
 BROADCAST_SEND_INTERVAL_SECONDS = 0.05
-BROADCAST_PENDING: Dict[int, Dict[str, str]] = {}
+BROADCAST_PENDING: Dict[int, Dict[str, Any]] = {}
 BROADCAST_ACTIVE_ADMINS: set[int] = set()
+MANUAL_BROADCAST_MAX_RECIPIENTS = 500
 
 
 def database_candidates(configured_path: str) -> List[Path]:
@@ -200,13 +201,27 @@ async def record_delivery(
     await db.commit()
 
 
-async def run_broadcast(bot: Bot, admin_id: int, run_id: str, message_text: str) -> None:
+async def run_broadcast(
+    bot: Bot,
+    admin_id: int,
+    run_id: str,
+    message_text: str,
+    *,
+    recipients_override: Optional[List[Dict[str, int]]] = None,
+) -> None:
     """Deliver one confirmed broadcast in the background and report exact totals."""
     BROADCAST_ACTIVE_ADMINS.add(admin_id)
     stats = {"sent": 0, "blocked": 0, "failed": 0}
     try:
         await ensure_broadcast_tables(app.DB_PATH)
-        recipients, audience_counts = await broadcast_audience(app.DB_PATH)
+        if recipients_override is None:
+            recipients, audience_counts = await broadcast_audience(app.DB_PATH)
+        else:
+            recipients = list(recipients_override)
+            audience_counts = {
+                "total_users": len(recipients), "eligible": len(recipients),
+                "opted_out": 0, "no_chat": 0, "duplicate_chat": 0,
+            }
         async with aiosqlite.connect(app.DB_PATH) as db:
             await db.execute(
                 """
@@ -300,12 +315,74 @@ def is_broadcast_command(message: Message) -> bool:
     return app.normalize_slash_command((message.text or "").strip()) == "/broadcast"
 
 
+def parse_manual_broadcast(text: str) -> tuple[List[Dict[str, int]], str]:
+    """Parse an admin-supplied recovery audience without persisting it in users."""
+    parts = text.strip().split(maxsplit=1)
+    payload = parts[1].strip() if len(parts) == 2 else ""
+    if "|" not in payload:
+        raise ValueError("Формат: /broadcast_ids 123456789,987654321 | текст сообщения")
+    raw_ids, message_text = (part.strip() for part in payload.split("|", 1))
+    if not raw_ids or not message_text:
+        raise ValueError("Нужны и список Telegram ID, и текст сообщения после символа |.")
+
+    recipients: List[Dict[str, int]] = []
+    seen: set[int] = set()
+    for raw_id in raw_ids.replace(";", ",").split(","):
+        raw_id = raw_id.strip()
+        if not raw_id or not raw_id.isdecimal():
+            raise ValueError("Telegram ID должны быть положительными числами через запятую.")
+        chat_id = int(raw_id)
+        if chat_id <= 0:
+            raise ValueError("Telegram ID должны быть положительными числами.")
+        if chat_id not in seen:
+            seen.add(chat_id)
+            recipients.append({"user_id": chat_id, "chat_id": chat_id})
+    if len(recipients) > MANUAL_BROADCAST_MAX_RECIPIENTS:
+        raise ValueError(f"Слишком много получателей: максимум {MANUAL_BROADCAST_MAX_RECIPIENTS}.")
+    if len(message_text) > BROADCAST_MAX_LENGTH:
+        raise ValueError(
+            f"Сообщение слишком длинное: {len(message_text)} символов. Максимум: {BROADCAST_MAX_LENGTH}."
+        )
+    return recipients, message_text
+
+
 @router.message(lambda message: app.normalize_slash_command((message.text or "").strip()) == "/db_files")
 async def on_database_report_command(message: Message) -> None:
     if not app.is_admin(message.from_user.id):
         await message.answer("Админская команда недоступна для этого пользователя.")
         return
     await message.answer(database_report(app.DB_PATH), parse_mode=None)
+
+
+@router.message(lambda message: app.normalize_slash_command((message.text or "").strip()) == "/broadcast_ids")
+async def on_manual_broadcast_command(message: Message) -> None:
+    uid = message.from_user.id
+    if not app.is_admin(uid):
+        await message.answer("Админская команда недоступна для этого пользователя.")
+        return
+    if uid in BROADCAST_ACTIVE_ADMINS:
+        await message.answer("Предыдущая рассылка ещё выполняется. Дождись итогового отчёта.")
+        return
+    try:
+        recipients, message_text = parse_manual_broadcast(message.text or "")
+    except ValueError as exc:
+        await message.answer(str(exc), parse_mode=None)
+        return
+
+    token = uuid.uuid4().hex[:16]
+    BROADCAST_PENDING[uid] = {
+        "token": token,
+        "text": message_text,
+        "recipients": recipients,
+    }
+    await message.answer(
+        "Предпросмотр восстановительной рассылки:\n\n"
+        f"{message_text}\n\n"
+        "———\n"
+        f"Получателей из восстановленного списка: {len(recipients)}\n\n"
+        "После подтверждения отменить уже отправленные сообщения нельзя.",
+        reply_markup=preview_keyboard(token), parse_mode=None,
+    )
 
 
 @router.message(is_broadcast_command)
@@ -385,9 +462,14 @@ async def on_broadcast_callback(callback: CallbackQuery) -> None:
         return
 
     message_text = str(pending.get("text") or "")
+    recipients_override = pending.get("recipients")
     BROADCAST_PENDING.pop(uid, None)
     run_id = f"broadcast_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}_{token[:8]}"
-    recipients, counts = await broadcast_audience(app.DB_PATH)
+    if recipients_override is None:
+        recipients, counts = await broadcast_audience(app.DB_PATH)
+    else:
+        recipients = list(recipients_override)
+        counts = {"opted_out": 0, "no_chat": 0}
     BROADCAST_ACTIVE_ADMINS.add(uid)
     await callback.answer("Рассылка запущена")
     await callback.message.edit_text(
@@ -395,4 +477,9 @@ async def on_broadcast_callback(callback: CallbackQuery) -> None:
         f"\nИсключены из-за отключённых уведомлений: {counts['opted_out']}.",
         parse_mode=None,
     )
-    asyncio.create_task(run_broadcast(callback.bot, uid, run_id, message_text))
+    asyncio.create_task(
+        run_broadcast(
+            callback.bot, uid, run_id, message_text,
+            recipients_override=recipients if recipients_override is not None else None,
+        )
+    )
