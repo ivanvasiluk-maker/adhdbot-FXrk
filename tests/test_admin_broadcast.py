@@ -32,6 +32,23 @@ class FakeBot:
 
 
 class AdminBroadcastTests(unittest.IsolatedAsyncioTestCase):
+    def test_manual_broadcast_parser_deduplicates_ids(self):
+        recipients, message = broadcast_admin.parse_manual_broadcast(
+            "/broadcast_ids 1234567890, 987654321,1234567890 | Бот снова работает"
+        )
+        self.assertEqual(
+            recipients,
+            [
+                {"user_id": 1234567890, "chat_id": 1234567890},
+                {"user_id": 987654321, "chat_id": 987654321},
+            ],
+        )
+        self.assertEqual(message, "Бот снова работает")
+
+    def test_manual_broadcast_parser_rejects_invalid_ids(self):
+        with self.assertRaisesRegex(ValueError, "положительными числами"):
+            broadcast_admin.parse_manual_broadcast("/broadcast_ids 123,abc | Привет")
+
     def test_database_inspection_reports_only_count_and_file_metadata(self):
         with tempfile.NamedTemporaryFile(suffix=".db") as file:
             create_users_table(file.name)
@@ -100,6 +117,27 @@ class AdminBroadcastTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(deliveries, [(1, "sent"), (2, "sent")])
             self.assertEqual([message[0] for message in fake_bot.messages], [1001, 1002, 999])
             self.assertNotIn(999, broadcast_admin.BROADCAST_ACTIVE_ADMINS)
+
+    async def test_override_audience_does_not_require_users_rows(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            create_users_table(file.name)
+            fake_bot = FakeBot()
+            recipients = [{"user_id": 123456789, "chat_id": 123456789}]
+
+            with patch.object(broadcast_admin.app, "DB_PATH", file.name), patch.object(
+                broadcast_admin, "BROADCAST_SEND_INTERVAL_SECONDS", 0,
+            ):
+                await broadcast_admin.run_broadcast(
+                    fake_bot, 999, "run-recovery", "Снова работает",
+                    recipients_override=recipients,
+                )
+
+            self.assertEqual([message[0] for message in fake_bot.messages], [123456789, 999])
+            with sqlite3.connect(file.name) as db:
+                run = db.execute(
+                    "SELECT total,sent,blocked,failed FROM broadcast_runs WHERE run_id='run-recovery'"
+                ).fetchone()
+            self.assertEqual(run, (1, 1, 0, 0))
 
     def test_restart_button_uses_dedicated_callback(self):
         markup = broadcast_admin.restart_keyboard()
