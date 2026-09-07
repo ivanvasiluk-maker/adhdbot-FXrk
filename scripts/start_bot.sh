@@ -5,5 +5,5 @@ set -eu
 # incorrectly resolved deploy fail with a clear preflight message before the bot
 # starts looping on a SyntaxError.
 python scripts/check_build_sanity.py
-python -m py_compile bot.py db.py texts.py flows.py skills.py nlp_fallback.py sheets_sync.py core/engine.py scripts/check_build_sanity.py
-exec python bot.py
+python -m py_compile bot.py broadcast_admin.py run_bot.py db.py texts.py flows.py skills.py nlp_fallback.py sheets_sync.py core/engine.py scripts/check_build_sanity.py
+exec python run_bot.py
