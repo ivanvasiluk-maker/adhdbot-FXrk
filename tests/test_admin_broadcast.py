@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import broadcast_admin
@@ -31,6 +32,21 @@ class FakeBot:
 
 
 class AdminBroadcastTests(unittest.IsolatedAsyncioTestCase):
+    def test_database_inspection_reports_only_count_and_file_metadata(self):
+        with tempfile.NamedTemporaryFile(suffix=".db") as file:
+            create_users_table(file.name)
+            with sqlite3.connect(file.name) as db:
+                db.executemany(
+                    "INSERT INTO users VALUES (?, ?, ?, ?, ?)",
+                    [(1, 1, 1, 1, 1), (2, 2, 2, 1, 1)],
+                )
+                db.commit()
+            result = broadcast_admin.inspect_database(Path(file.name))
+            self.assertTrue(result["exists"])
+            self.assertEqual(result["users"], 2)
+            self.assertNotIn("telegram_id", result)
+            self.assertNotIn("chat_id", result)
+
     async def test_audience_excludes_opt_outs_and_deduplicates_chats(self):
         with tempfile.NamedTemporaryFile(suffix=".db") as file:
             create_users_table(file.name)
