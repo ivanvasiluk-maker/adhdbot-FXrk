@@ -4,6 +4,8 @@ import asyncio
 import datetime as dt
 import hmac
 import logging
+from pathlib import Path
+import sqlite3
 import uuid
 from typing import Any, Dict, List
 
@@ -22,6 +24,68 @@ BROADCAST_MAX_LENGTH = 3500
 BROADCAST_SEND_INTERVAL_SECONDS = 0.05
 BROADCAST_PENDING: Dict[int, Dict[str, str]] = {}
 BROADCAST_ACTIVE_ADMINS: set[int] = set()
+
+
+def database_candidates(configured_path: str) -> List[Path]:
+    """Find likely SQLite files without reading any user content."""
+    configured = Path(configured_path).expanduser()
+    roots = [configured.parent, Path.cwd(), Path.cwd() / "data", Path("/app"), Path("/app/data"), Path("/data")]
+    candidates = [configured]
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for pattern in ("*.db", "*.sqlite", "*.sqlite3"):
+            candidates.extend(root.glob(pattern))
+    unique: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate.absolute()
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+    return unique[:30]
+
+
+def inspect_database(path: Path) -> Dict[str, Any]:
+    """Return file metadata and a user count; never select user rows."""
+    result: Dict[str, Any] = {"path": str(path), "exists": path.is_file(), "users": None, "size": 0, "error": ""}
+    if not result["exists"]:
+        return result
+    try:
+        result["size"] = path.stat().st_size
+        uri = f"file:{path}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as db:
+            has_users = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+            ).fetchone()
+            result["users"] = int(db.execute("SELECT COUNT(*) FROM users").fetchone()[0]) if has_users else None
+    except Exception as exc:
+        result["error"] = type(exc).__name__
+    return result
+
+
+def database_report(configured_path: str) -> str:
+    configured = str(Path(configured_path).expanduser().absolute())
+    rows = [inspect_database(path) for path in database_candidates(configured_path)]
+    lines = [f"Активный DB_PATH: {configured}", "", "Найденные SQLite-файлы:"]
+    found = False
+    for row in rows:
+        if not row["exists"]:
+            if row["path"] == configured:
+                lines.append(f"— {row['path']} — файла нет")
+            continue
+        found = True
+        users = "нет таблицы users" if row["users"] is None else f"users: {row['users']}"
+        error = f", ошибка: {row['error']}" if row["error"] else ""
+        lines.append(f"— {row['path']} — {users}, {row['size']} байт{error}")
+    if not found:
+        lines.append("— других баз не найдено")
+    lines.append("\nКоманда ничего не изменяет и не показывает данные пользователей.")
+    return "\n".join(lines)
 
 
 async def ensure_broadcast_tables(db_path: str) -> None:
@@ -234,6 +298,14 @@ async def run_broadcast(bot: Bot, admin_id: int, run_id: str, message_text: str)
 
 def is_broadcast_command(message: Message) -> bool:
     return app.normalize_slash_command((message.text or "").strip()) == "/broadcast"
+
+
+@router.message(lambda message: app.normalize_slash_command((message.text or "").strip()) == "/db_files")
+async def on_database_report_command(message: Message) -> None:
+    if not app.is_admin(message.from_user.id):
+        await message.answer("Админская команда недоступна для этого пользователя.")
+        return
+    await message.answer(database_report(app.DB_PATH), parse_mode=None)
 
 
 @router.message(is_broadcast_command)
