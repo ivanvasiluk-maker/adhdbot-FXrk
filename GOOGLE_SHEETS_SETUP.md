@@ -10,6 +10,8 @@ Create a Google Sheet with these tabs:
 - `payments`
 - `errors`
 - `behavioral_kpi`
+- `skill_results`
+- `journey_events`
 
 ## Headers
 
@@ -19,7 +21,9 @@ Create a Google Sheet with these tabs:
 
 ### users
 
-`first_seen | last_seen | user_id | telegram_username | telegram_name | trainer_key | language | bucket | main_pattern | payment_status | current_day | is_test_user`
+`first_seen | last_seen | anonymous_user_id | current_day | is_test_user`
+
+Each user is appended once. Telegram ID, username, name, free text, diagnosis, and profile content are never exported.
 
 ### daily_summary
 
@@ -39,6 +43,23 @@ Create a Google Sheet with these tabs:
 
 This tab never receives Telegram identity, raw text, voice/crisis content, prompts, or personal stories.
 
+### skill_results
+
+`export_id | created_at | anonymous_user_id | day | stage | trainer_key | event_type | skill_id | result_status | effect | effect_status | reason | source | attempt_id | day_id | is_internal_test`
+
+This is the operational product stream: where a user is in the flow, which skill was attempted,
+whether it was completed, and whether it helped. Free-form feedback, task text, Telegram identity,
+voice transcripts, medical details, and crisis content are never exported.
+
+### journey_events
+
+`export_id | created_at | anonymous_user_id | event_name | stage | day | skill_id | trainer_key | source | problem_category | bucket | main_pattern | mechanism_code | recommended_track | is_internal_test`
+
+This tab is the privacy-safe funnel timeline: onboarding, exercise start, next-day return,
+reactivation, and offer steps. The bounded category columns show which problem bucket and pattern
+were matched to the final recommended route. It never receives message text, voice transcripts,
+Telegram identity, free-form profile conclusions, or crisis events.
+
 ## Apps Script webhook
 
 Open the sheet, then go to **Extensions → Apps Script** and deploy a web app with this code:
@@ -49,10 +70,20 @@ function doPost(e) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const payload = JSON.parse(e.postData.contents);
     const sheetName = payload.sheet || "events";
-    const sheet = ss.getSheetByName(sheetName);
-
+    const allowedHeaders = {
+      users: ["first_seen", "last_seen", "anonymous_user_id", "current_day", "is_test_user"],
+      behavioral_kpi: ["created_at", "event_name", "anonymous_user_id", "situation_id", "experiment_id", "skill_id", "mechanism_code", "context_domain", "outcome_label", "count_value", "policy_version", "ranking_version", "skill_version"],
+      skill_results: ["export_id", "created_at", "anonymous_user_id", "day", "stage", "trainer_key", "event_type", "skill_id", "result_status", "effect", "effect_status", "reason", "source", "attempt_id", "day_id", "is_internal_test"],
+      journey_events: ["export_id", "created_at", "anonymous_user_id", "event_name", "stage", "day", "skill_id", "trainer_key", "source", "problem_category", "bucket", "main_pattern", "mechanism_code", "recommended_track", "is_internal_test"]
+    };
+    if (!allowedHeaders[sheetName]) {
+      throw new Error("Unsupported sheet: " + sheetName);
+    }
+    let sheet = ss.getSheetByName(sheetName);
     if (!sheet) {
-      throw new Error("Sheet not found: " + sheetName);
+      sheet = ss.insertSheet(sheetName);
+      sheet.getRange(1, 1, 1, allowedHeaders[sheetName].length)
+        .setValues([allowedHeaders[sheetName]]);
     }
 
     const rows = payload.rows || [];
@@ -62,11 +93,29 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length)
-      .setValues(rows);
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+    let rowsToInsert = rows;
+    const keyColumn = ["skill_results", "journey_events"].includes(sheetName) ? 1 : (sheetName === "users" ? 3 : 0);
+    if (keyColumn && sheet.getLastRow() > 1) {
+      const existing = new Set(
+        sheet.getRange(2, keyColumn, sheet.getLastRow() - 1, 1).getValues().flat().filter(String)
+      );
+      rowsToInsert = rows.filter(row => {
+        const key = row[keyColumn - 1];
+        if (!key || existing.has(key)) return false;
+        existing.add(key);
+        return true;
+      });
+    }
+    if (rowsToInsert.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, rowsToInsert.length, rowsToInsert[0].length)
+        .setValues(rowsToInsert);
+    }
+    lock.releaseLock();
 
     return ContentService
-      .createTextOutput(JSON.stringify({ ok: true, inserted: rows.length }))
+      .createTextOutput(JSON.stringify({ ok: true, inserted: rowsToInsert.length }))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return ContentService
@@ -97,4 +146,5 @@ Do not commit the real webhook URL. Store it only in Railway/env.
 ## Troubleshooting
 
 - `TelegramConflictError: Conflict: terminated by other getUpdates request` means the same `BOT_TOKEN` is already being polled by another running bot process. Stop the duplicate local/Railway/container instance and leave only one active deployment.
-- `Sheet not found: daily_summary` means the optional analytics tab is missing. Core `events` sync can still work; create the `daily_summary` tab with the headers above if you want daily aggregate rows.
+- If no users appear, verify all three Railway variables are set: `SHEETS_WEBHOOK_URL`, `SHEETS_SYNC_ENABLED=true`, and a non-empty private `ANALYTICS_ID_SALT`.
+- Redeploy the Apps Script after replacing the old webhook code. The current exporter uses `users`, `journey_events`, `skill_results`, and `behavioral_kpi`; the webhook creates these safe tabs when missing.

@@ -136,6 +136,28 @@ def render_message(
         raise ValueError(f"Unknown trainer: {trainer}")
     if content.message_type in {"experiment_result", "failure"}:
         result = content.result or "UNKNOWN"
+        # Subjective attribution and observable task outcome are separate
+        # variables.  "Не помогло" + "Продолжил задачу" must never be rewritten
+        # as "к задаче не вернуло"; that contradiction was visible in the live
+        # product and destroyed trust in the map.
+        if (
+            result == "EXECUTED_ONLY"
+            and content.facts.get("after_action") == "continued_target_task"
+            and content.facts.get("effect") == "did_not_help"
+        ):
+            options = {
+                "skinny": (
+                    "Ты продолжил задачу, но не считаешь, что помог именно этот навык. Разделяем факты: задача продолжилась, эффект навыка не подтверждён.",
+                ),
+                "marsha": (
+                    "После шага ты продолжил задачу, но сам навык не почувствовал полезным. Сохраним оба факта и не будем приписывать навыку эффект без твоего подтверждения.",
+                ),
+                "beck": (
+                    "Наблюдаемое продолжение задачи есть, но субъективная полезность навыка не подтверждена. Поэтому не связываем продолжение с вмешательством причинно.",
+                ),
+            }[trainer]
+            text, template_id = _pick(options, f"{trainer}:{content.message_type}:continued_without_attribution", recent_template_ids)
+            return RenderedVoiceMessage(text, template_id, content.result, content.target_function)
         options = _RESULT_TEMPLATES[trainer][result]
         text, template_id = _pick(options, f"{trainer}:{content.message_type}:{result}", recent_template_ids)
         return RenderedVoiceMessage(text, template_id, content.result, content.target_function)

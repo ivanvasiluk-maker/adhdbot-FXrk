@@ -11,7 +11,7 @@ import asyncio
 import logging
 import hashlib
 import hmac
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 import aiosqlite
@@ -199,7 +199,7 @@ def event_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
     data = sanitize_event_data(event.get("event_data") or event.get("meta") or {})
     user = user or {}
     return [
-        event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
+        event.get("created_at") or event.get("ts") or datetime.now(timezone.utc).isoformat(),
         event.get("event_name") or event.get("event"),
         anonymous_analytics_id(event.get("user_id")),
         "",
@@ -229,7 +229,7 @@ def error_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = None
     data = sanitize_event_data(event.get("event_data") or event.get("meta") or {})
     user = user or {}
     return [
-        event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
+        event.get("created_at") or event.get("ts") or datetime.now(timezone.utc).isoformat(),
         event.get("event_name") or event.get("event"),
         anonymous_analytics_id(event.get("user_id")),
         "",
@@ -303,7 +303,7 @@ def payment_to_sheet_row(event: Dict[str, Any], user: Dict[str, Any] | None = No
         offer_type = data.get("payment_click") or data.get("source") or ""
         amount = data.get("amount") or ""
     return [
-        event.get("created_at") or event.get("ts") or datetime.utcnow().isoformat(),
+        event.get("created_at") or event.get("ts") or datetime.now(timezone.utc).isoformat(),
         anonymous_analytics_id(event.get("user_id")),
         "",
         name,
@@ -381,6 +381,279 @@ def behavioral_analytics_to_sheet_row(event: Dict[str, Any], *, secret_salt: str
         int(event.get("count_value") or 0), event.get("policy_version") or "",
         event.get("ranking_version") or "", int(event.get("skill_version") or 0),
     ]
+
+
+ACTION_EVENT_EXPORT_TYPES = {
+    "attempt_started",
+    "attempt_completed_self_reported",
+    "slip_reported",
+    "too_hard_reported",
+    "no_energy_reported",
+    "skill_changed",
+    "skill_skipped",
+    "step_reduced",
+    "returned_after_slip",
+    "day_closed",
+    "stuck_reason_selected",
+    "skill_result_reported",
+    "extra_step_after_day_closed",
+}
+
+JOURNEY_EVENT_EXPORT_TYPES = {
+    "onboarding_started",
+    "trainer_selected",
+    "notifications_consent_set",
+    "privacy_consent_granted",
+    "privacy_consent_declined",
+    "diagnosis_completed",
+    "profile_map_updated",
+    "recommended_track_shown",
+    "analysis_shown",
+    "day1_started",
+    "analysis_action_started",
+    "attempt_started",
+    "skill_replaced",
+    "new_day_started_from_morning",
+    "new_day_skill_opened",
+    "evening_review_started",
+    "start_resume",
+    "reactivation_opened",
+    "reactivation_success",
+    "offer_shown",
+    "offer_seen",
+}
+
+
+def _safe_taxonomy(value: Any, *, fallback: str = "") -> str:
+    text = str(value or "").strip()
+    return text if SAFE_TAXONOMY_VALUE.fullmatch(text) else fallback
+
+
+def _safe_int(value: Any, *, fallback: int = 0) -> int:
+    try:
+        return int(value or fallback)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _action_export_id(event: Dict[str, Any], *, secret_salt: str) -> str:
+    identity = ":".join((
+        str(event.get("user_id") or ""),
+        str(event.get("day_id") or ""),
+        str(event.get("attempt_id") or ""),
+        str(event.get("event_type") or ""),
+        str(event.get("id") or ""),
+    ))
+    return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def _journey_export_id(event: Dict[str, Any], *, secret_salt: str) -> str:
+    identity = f"journey:{event.get('user_id') or ''}:{event.get('event_name') or ''}:{event.get('id') or ''}"
+    return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def _anonymous_scope_id(value: Any, *, secret_salt: str, namespace: str) -> str:
+    if value in {None, ""}:
+        return ""
+    identity = f"{namespace}:{value}"
+    return hmac.new(secret_salt.encode(), identity.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def journey_event_to_sheet_row(
+    event: Dict[str, Any], user: Dict[str, Any] | None = None, *, secret_salt: str,
+) -> List[Any]:
+    """Serialize a bounded funnel event without text, Telegram identity, or profile content."""
+    if not secret_salt:
+        raise ValueError("ANALYTICS_ID_SALT is required for journey analytics export")
+    user = user or {}
+    metadata = _parse_json(event.get("event_data") or event.get("meta"))
+    return [
+        _journey_export_id(event, secret_salt=secret_salt),
+        event.get("created_at") or "",
+        anonymous_analytics_id(event.get("user_id"), secret_salt=secret_salt),
+        _safe_taxonomy(event.get("event_name") or event.get("event")),
+        _safe_taxonomy(event.get("stage") or metadata.get("stage") or user.get("stage")),
+        _safe_int(metadata.get("day") or user.get("day")),
+        _safe_taxonomy(metadata.get("skill_id") or user.get("pending_skill_id")),
+        _safe_taxonomy(metadata.get("trainer_key") or user.get("trainer_key")),
+        _safe_taxonomy(metadata.get("source")),
+        _safe_taxonomy(metadata.get("problem_category")),
+        _safe_taxonomy(metadata.get("bucket")),
+        _safe_taxonomy(metadata.get("main_pattern") or metadata.get("avoidance_pattern")),
+        _safe_taxonomy(metadata.get("mechanism_code")),
+        _safe_taxonomy(metadata.get("recommended_track")),
+        bool(event.get("is_internal_test") or metadata.get("is_internal_test")),
+    ]
+
+
+async def sync_journey_events(db_path: str, limit: int) -> Dict[str, Any]:
+    """Export privacy-minimal onboarding, stage, drop-off, and return signals."""
+    if not ANALYTICS_ID_SALT:
+        return {"synced": 0, "failed": 0, "error": "", "warning": "ANALYTICS_ID_SALT is empty"}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS sheets_exported_journey_events (
+                   event_id INTEGER PRIMARY KEY,
+                   exported_at TEXT NOT NULL
+               )"""
+        )
+        placeholders = ",".join("?" for _ in JOURNEY_EVENT_EXPORT_TYPES)
+        rows = await (await db.execute(
+            f"""SELECT e.*, u.day, u.pending_skill_id, u.trainer_key
+                FROM events AS e
+                LEFT JOIN users AS u ON u.user_id = e.user_id
+                LEFT JOIN sheets_exported_journey_events AS exported ON exported.event_id = e.id
+                WHERE exported.event_id IS NULL
+                  AND COALESCE(e.analytics_event, 1) != 0
+                  AND e.event_name IN ({placeholders})
+                ORDER BY e.id
+                LIMIT ?""",
+            [*sorted(JOURNEY_EVENT_EXPORT_TYPES), limit],
+        )).fetchall()
+        if not rows:
+            await db.commit()
+            return {"synced": 0, "failed": 0, "error": ""}
+        events = [dict(row) for row in rows]
+        ok, message = await post_rows(
+            [journey_event_to_sheet_row(event, event, secret_salt=ANALYTICS_ID_SALT) for event in events],
+            sheet="journey_events",
+        )
+        if not ok:
+            return {"synced": 0, "failed": len(events), "error": message[:500]}
+        exported_at = datetime.now(timezone.utc).isoformat()
+        await db.executemany(
+            "INSERT OR IGNORE INTO sheets_exported_journey_events(event_id, exported_at) VALUES(?, ?)",
+            [(int(event["id"]), exported_at) for event in events],
+        )
+        await db.commit()
+        return {"synced": len(events), "failed": 0, "error": ""}
+
+
+def action_event_to_sheet_row(
+    event: Dict[str, Any], user: Dict[str, Any] | None = None, *, secret_salt: str,
+) -> List[Any]:
+    """Serialize an action event without Telegram identity, task text, or free-form feedback."""
+    if not secret_salt:
+        raise ValueError("ANALYTICS_ID_SALT is required for action analytics export")
+    user = user or {}
+    metadata = _parse_json(event.get("metadata"))
+    event_type = _safe_taxonomy(event.get("event_type"))
+    result_status = _safe_taxonomy(metadata.get("result_status"))
+    if not result_status:
+        result_status = {
+            "attempt_started": "started",
+            "attempt_completed_self_reported": "completed",
+            "skill_changed": "replaced",
+            "skill_skipped": "skipped",
+            "step_reduced": "simplified",
+            "returned_after_slip": "returned",
+        }.get(event_type, "")
+    return [
+        _action_export_id(event, secret_salt=secret_salt),
+        event.get("created_at") or "",
+        anonymous_analytics_id(event.get("user_id"), secret_salt=secret_salt),
+        _safe_int(metadata.get("day") or user.get("day")),
+        _safe_taxonomy(metadata.get("stage") or user.get("stage")),
+        _safe_taxonomy(metadata.get("trainer_key") or user.get("trainer_key")),
+        event_type,
+        _safe_taxonomy(event.get("skill_id")),
+        result_status,
+        _safe_taxonomy(metadata.get("effect")),
+        _safe_taxonomy(metadata.get("effect_status")),
+        _safe_taxonomy(metadata.get("reason")),
+        _safe_taxonomy(metadata.get("source")),
+        _safe_int(event.get("attempt_id")),
+        _anonymous_scope_id(event.get("day_id"), secret_salt=secret_salt, namespace="day"),
+        bool(metadata.get("is_internal_test")),
+    ]
+
+
+async def sync_action_events(db_path: str, limit: int) -> Dict[str, Any]:
+    """Export a retry-safe, privacy-minimal stream of skill attempts and outcomes."""
+    if not ANALYTICS_ID_SALT:
+        return {"synced": 0, "failed": 0, "error": "", "warning": "ANALYTICS_ID_SALT is empty"}
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS sheets_exported_action_events (
+                   action_event_id INTEGER PRIMARY KEY,
+                   exported_at TEXT NOT NULL
+               )"""
+        )
+        placeholders = ",".join("?" for _ in ACTION_EVENT_EXPORT_TYPES)
+        rows = await (await db.execute(
+            f"""SELECT ae.*, u.day, u.stage, u.trainer_key
+                FROM action_events AS ae
+                LEFT JOIN users AS u ON u.user_id = ae.user_id
+                LEFT JOIN sheets_exported_action_events AS exported
+                  ON exported.action_event_id = ae.id
+                WHERE exported.action_event_id IS NULL
+                  AND ae.event_type IN ({placeholders})
+                ORDER BY ae.id
+                LIMIT ?""",
+            [*sorted(ACTION_EVENT_EXPORT_TYPES), limit],
+        )).fetchall()
+        if not rows:
+            await db.commit()
+            return {"synced": 0, "failed": 0, "error": ""}
+
+        events = [dict(row) for row in rows]
+        payload = [action_event_to_sheet_row(event, event, secret_salt=ANALYTICS_ID_SALT) for event in events]
+        ok, message = await post_rows(payload, sheet="skill_results")
+        if not ok:
+            return {"synced": 0, "failed": len(events), "error": message[:500]}
+        exported_at = datetime.now(timezone.utc).isoformat()
+        await db.executemany(
+            "INSERT OR IGNORE INTO sheets_exported_action_events(action_event_id, exported_at) VALUES(?, ?)",
+            [(int(event["id"]), exported_at) for event in events],
+        )
+        await db.commit()
+        return {"synced": len(events), "failed": 0, "error": ""}
+
+
+async def sync_new_user_snapshots(db_path: str, limit: int) -> Dict[str, Any]:
+    """Append each user once using a pseudonymous id and a minimal safe snapshot."""
+    if not ANALYTICS_ID_SALT:
+        return {"synced": 0, "failed": 0, "error": "", "warning": "ANALYTICS_ID_SALT is empty"}
+
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sheets_exported_users (
+                user_id INTEGER PRIMARY KEY,
+                exported_at TEXT NOT NULL
+            )
+            """
+        )
+        rows = await (await db.execute(
+            """
+            SELECT u.*
+            FROM users AS u
+            LEFT JOIN sheets_exported_users AS exported ON exported.user_id = u.user_id
+            WHERE exported.user_id IS NULL AND u.user_id > 0
+            ORDER BY u.user_id
+            LIMIT ?
+            """,
+            (limit,),
+        )).fetchall()
+        if not rows:
+            await db.commit()
+            return {"synced": 0, "failed": 0, "error": ""}
+
+        users = [dict(row) for row in rows]
+        ok, message = await post_rows([user_to_sheet_row(user) for user in users], sheet="users")
+        if not ok:
+            return {"synced": 0, "failed": len(users), "error": message[:500]}
+
+        exported_at = datetime.now(timezone.utc).isoformat()
+        await db.executemany(
+            "INSERT OR IGNORE INTO sheets_exported_users(user_id, exported_at) VALUES(?, ?)",
+            [(int(user["user_id"]), exported_at) for user in users],
+        )
+        await db.commit()
+        return {"synced": len(users), "failed": 0, "error": ""}
 
 
 async def sync_behavioral_analytics_events(db_path: str, limit: int) -> Dict[str, Any]:
@@ -479,9 +752,24 @@ async def _mark_events_failed(db: aiosqlite.Connection, event_ids: List[int], er
 
 
 async def sync_unsynced_events(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
-    # The old multi-tab exporter mixed identity/profile snapshots with events.
-    # Keep it unreachable: production sync is normalized behavioral analytics only.
-    return await sync_behavioral_analytics_events(db_path, limit)
+    """Sync users, skill outcomes, and normalized behavioral analytics independently."""
+    users = await sync_new_user_snapshots(db_path, limit)
+    journey = await sync_journey_events(db_path, limit)
+    actions = await sync_action_events(db_path, limit)
+    analytics = await sync_behavioral_analytics_events(db_path, limit)
+    parts = (users, journey, actions, analytics)
+    errors = [part.get("error", "") for part in parts if part.get("error")]
+    warnings = [part.get("warning", "") for part in parts if part.get("warning")]
+    return {
+        "synced": sum(int(part.get("synced", 0)) for part in parts),
+        "failed": sum(int(part.get("failed", 0)) for part in parts),
+        "error": "; ".join(errors)[:500],
+        "warning": "; ".join(dict.fromkeys(warnings))[:500],
+        "users_synced": int(users.get("synced", 0)),
+        "journey_events_synced": int(journey.get("synced", 0)),
+        "skill_results_synced": int(actions.get("synced", 0)),
+        "analytics_synced": int(analytics.get("synced", 0)),
+    }
 
 
 async def _sync_legacy_events_disabled(db_path: str, limit: int = SHEETS_SYNC_BATCH_SIZE) -> Dict[str, Any]:
@@ -535,7 +823,7 @@ async def _sync_legacy_events_disabled(db_path: str, limit: int = SHEETS_SYNC_BA
             if not ok:
                 supplemental_warnings.append(f"users: {msg}")
 
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         ok, msg = await post_rows([daily_summary_to_sheet_row(today, all_users, all_events)], sheet="daily_summary")
         if not ok:
             supplemental_warnings.append(f"daily_summary: {msg}")
@@ -597,11 +885,11 @@ async def _record_sheets_sync_error(db_path: str, error: Exception):
                     "sheets_sync_error",
                     json.dumps({"error_type": type(error).__name__, "error_source": "sheets_sync_loop"}, ensure_ascii=False),
                     "background",
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     0,
                     0,
                     None,
-                    datetime.utcnow().timestamp(),
+                    datetime.now(timezone.utc).timestamp(),
                     "sheets_sync_error",
                     json.dumps({"error_type": type(error).__name__, "error_source": "sheets_sync_loop"}, ensure_ascii=False),
                 ),
@@ -618,9 +906,30 @@ async def sheets_sync_loop(db_path: str):
     if not SHEETS_WEBHOOK_URL:
         logging.info("Sheets sync disabled: SHEETS_WEBHOOK_URL is empty")
         return
+    logging.info(
+        "Sheets sync started: interval=%ss batch=%s analytics_salt=%s",
+        SHEETS_SYNC_INTERVAL_SECONDS,
+        SHEETS_SYNC_BATCH_SIZE,
+        bool(ANALYTICS_ID_SALT),
+    )
+    first_cycle = True
     while True:
         try:
-            await sync_unsynced_events(db_path, SHEETS_SYNC_BATCH_SIZE)
+            result = await sync_unsynced_events(db_path, SHEETS_SYNC_BATCH_SIZE)
+            if first_cycle or result.get("synced") or result.get("failed") or result.get("warning"):
+                logging.info(
+                    "Sheets sync cycle: synced=%s failed=%s users=%s journey_events=%s skill_results=%s "
+                    "behavioral_kpi=%s warning=%s error=%s",
+                    result.get("synced", 0),
+                    result.get("failed", 0),
+                    result.get("users_synced", 0),
+                    result.get("journey_events_synced", 0),
+                    result.get("skill_results_synced", 0),
+                    result.get("analytics_synced", 0),
+                    result.get("warning") or "-",
+                    result.get("error") or "-",
+                )
+            first_cycle = False
         except Exception as e:
             logging.exception("Sheets sync failed: %s", e)
             await _record_sheets_sync_error(db_path, e)

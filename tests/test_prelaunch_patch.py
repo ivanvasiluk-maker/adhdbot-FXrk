@@ -90,37 +90,53 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
                 for row in bot.offer_inline_keyboard(1).inline_keyboard
                 for button in row
             ]
-        self.assertTrue(any("€4.99/мес" in label for label in enabled_labels))
+        self.assertIn("👥 Хочу в группу — €240", enabled_labels)
+        self.assertFalse(any("Оплатить" in label for label in enabled_labels))
 
-    def test_offer_copy_does_not_advertise_disabled_or_unconfigured_paths(self):
+    def test_manual_beta_offer_advertises_product_without_live_checkout(self):
         with patch.object(bot, "ENABLE_PAYMENTS", False), patch.object(
             bot, "ENABLE_GROUP_OFFER", False,
         ), patch.object(bot, "ENABLE_HUMAN_OFFER", False):
             text = bot.short_offer_text()
             labels = [button.text for row in bot.offer_details_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertNotIn("SKILLER Full", text)
+        self.assertIn("Сам тест SKILLER", text)
+        self.assertNotIn("€", text)
         self.assertNotIn("Группа навыков", text)
         self.assertNotIn("С человеком", labels)
-        self.assertEqual(labels, ["🟢 Продолжить бесплатно", "↩️ Назад"])
+        self.assertEqual(labels, ["Продолжить бесплатный тест", "↩️ Назад"])
 
     def test_day1_completion_can_unlock_offer_after_value_report(self):
         user = bot.default_user(1)
-        user.update({"day": 1, "day_closed": 1, "today_closed": 1, "last_day_closed_at": bot.local_date_for_user(user)})
+        user.update({
+            "day": 1, "day_closed": 1, "today_closed": 1,
+            "last_day_closed_at": bot.local_date_for_user(user),
+            "free_mode": 0, "full_mode": 0,
+        })
         profile = self.profile()
         profile.update({
             "personalized_insight_exists": True, "value_report_seen_at": "2026-08-22T10:00:00+00:00",
             "personal_working_model": {**profile["personal_working_model"], "evidence_count": 1},
         })
         with patch.object(bot, "offer_recently_limited", return_value=False):
-            self.assertTrue(bot.can_show_offer(user, profile))
+            self.assertFalse(bot.can_show_offer(user, profile))
+            with patch.object(bot, "FREE_BETA_ACCESS", False):
+                self.assertTrue(bot.can_show_offer(user, profile))
 
     def test_offer_is_due_at_day_three_close_and_weekly_for_active_user(self):
         now = bot.dt.datetime(2026, 8, 22, 20, 30, tzinfo=bot.dt.timezone.utc)
         user = bot.default_user(1)
-        user.update({"day": 3, "day_closed": 1, "today_closed": 1, "last_day_closed_at": bot.local_date_for_user(user)})
-        self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
+        user.update({
+            "day": 3, "day_closed": 1, "today_closed": 1,
+            "last_day_closed_at": bot.local_date_for_user(user),
+            "free_mode": 0, "full_mode": 0,
+        })
+        self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
+        with patch.object(bot, "FREE_BETA_ACCESS", False):
+            self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         user.update({"day": 10, "last_offer_shown_at": (now - bot.dt.timedelta(days=7)).isoformat(), "last_active": now.timestamp()})
-        self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
+        self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
+        with patch.object(bot, "FREE_BETA_ACCESS", False):
+            self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         user["last_active"] = (now - bot.dt.timedelta(days=8)).timestamp()
         self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
 
@@ -134,7 +150,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(bot.MAX_PROACTIVE_PER_DAY):
             bot._increment_proactive_count(user, today)
         self.assertTrue(bot._proactive_limit_reached(user, today))
-        self.assertEqual(bot._proactive_count_today(user, today), 3)
+        self.assertEqual(bot._proactive_count_today(user, today), 2)
 
     def test_offer_leads_with_personal_conclusion_and_solution_route(self):
         user = bot.default_user(1)
@@ -149,7 +165,11 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Что будем делать", text)
         self.assertIn("Что надо развивать", text)
         self.assertIn("START → STAY → RETURN", text)
-        self.assertIn("Выбери, как закрепить результат", text)
+        self.assertIn("Группа навыков", text)
+        self.assertIn("€240", text)
+        self.assertIn("Личная терапия", text)
+        self.assertIn(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц", text)
+        self.assertIn("тест SKILLER пока остаётся бесплатным", text)
 
     def test_day_one_skill_names_the_problem_and_solution_route(self):
         user = bot.default_user(1)

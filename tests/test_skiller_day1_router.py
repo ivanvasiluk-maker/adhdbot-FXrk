@@ -39,17 +39,18 @@ class SkillerDay1RouterTests(unittest.TestCase):
 
     def test_offer_continue_restores_state(self):
         session = new_session(DialogState.DAY1_SUMMARY)
-        route_callback(session, "offer.subscription")
+        blocked = route_callback(session, "offer.subscription")
         result = route_callback(session, "offer.continue")
         self.assertEqual(session["state"], DialogState.DAY1_SUMMARY.value)
         self.assertNotIn("Продолжить", session["case_facts"])
-        self.assertIn("Возвращаю", result["text"])
+        self.assertIn("beta-тест", blocked["text"])
+        self.assertIn("бесплат", result["text"])
 
-    def test_offer_back_renders_offer_menu_and_later_restores_state(self):
+    def test_offer_back_does_not_render_commercial_menu_in_beta(self):
         session = new_session(DialogState.EXPERIMENT_FEEDBACK)
         route_callback(session, "offer.group")
         menu = route_callback(session, "navigation.back")
-        self.assertIn("offer.subscription", {action for _, action in menu["buttons"]})
+        self.assertNotIn("offer.subscription", {action for _, action in menu["buttons"]})
         route_callback(session, "offer.later")
         self.assertEqual(session["state"], DialogState.EXPERIMENT_FEEDBACK.value)
 

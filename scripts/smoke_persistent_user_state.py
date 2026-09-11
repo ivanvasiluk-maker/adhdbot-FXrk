@@ -42,8 +42,10 @@ async def main():
         assert restored["day_number"] == 5
         assert restored["stage"] == "training"
         assert restored["current_step"] == "training"
-        assert restored["payment_status"] == "free_mode"
-        assert restored["access_status"] == "free_mode"
+        assert restored["payment_status"] == "beta_free"
+        assert restored["access_status"] == "beta_free"
+        assert restored["free_mode"] == 1
+        assert restored["full_mode"] == 1
         assert restored["trainer"] == "beck"
         assert restored["mode"] == "voice"
         assert restored["updated_at"]

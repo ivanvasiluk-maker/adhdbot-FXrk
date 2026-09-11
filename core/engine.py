@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from skills import SKILLS_DB, get_current_plan, core_skill_id_for_variant, core_skill_title, variants_for_core_skill, adapt_plan_to_profile
+from core.product_config import FREE_BETA_ACCESS
 
 
 Screen = Dict[str, Any]
@@ -372,6 +373,8 @@ def build_day3_summary(user_state: UserState) -> Screen:
 
 
 def should_show_offer(user_state: UserState) -> bool:
+    if FREE_BETA_ACCESS:
+        return False
     day = _safe_int(user_state.get("day"), 0)
     confirmed_working_skill = bool(
         user_state.get("confirmed_working_skill_exists")
@@ -392,6 +395,16 @@ def should_show_offer(user_state: UserState) -> bool:
 
 
 def build_offer(user_state: UserState) -> Screen:
+    if FREE_BETA_ACCESS:
+        return _screen(
+            text=(
+                "🟢 Открытый beta-тест: полный режим уже доступен бесплатно. "
+                "Оплата не нужна — продолжай тренировку и проверку навыков."
+            ),
+            buttons=["Продолжить тренировку"],
+            next_state=user_state.get("stage") or "training",
+            events=[_event("offer_suppressed_free_beta", "training")],
+        )
     text = (
         "Первые 3 дня — это диагностика входа.\n\n"
         "Дальше можно продолжить маршрут с ежедневным сопровождением, адаптацией шагов и вечерними итогами."

@@ -505,9 +505,15 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     why_short = clean(skill.get("why_short") or skill.get("explain") or "Нужен, чтобы сделать вход дешевле и начать без требования результата.")
     skill_name = clean(skill.get("name") or "Микро-шаг")
     trainer_voice = {
-        "beck": "Гипотеза: мысль → эмоция → избегание → последствия. Проверяем следующий маленький эксперимент.",
-        "skinny": "Один короткий подход. Без героизма.",
-        "marsha": "Давай бережно: только маленький вход, без давления на результат.",
+        "beck": (
+            "Сначала гипотеза, потом проверка: выполняем действие и отдельно отмечаем, "
+            "помогло ли оно продолжить задачу."
+        ),
+        "skinny": "Сейчас только действие и чёткая точка остановки. Разбор — после результата.",
+        "marsha": (
+            "Идём без давления: если напряжение растёт, уменьшаем шаг. "
+            "Частичное выполнение тоже даёт данные."
+        ),
     }.get((user or {}).get("trainer_key") or "marsha")
     return (
         f"{trainer_voice}\n\n"
@@ -1060,21 +1066,22 @@ def payment_includes_text() -> str:
 
 
 def morning_checkin_text(name: str = "", day_skill_name: str = "") -> str:
-    skill_line = f"\nТвой навык дня: **{day_skill_name}**.\n" if day_skill_name else "\n"
+    greeting = f"Доброе утро, {name}." if name else "Доброе утро."
+    skill_line = f"\nНавык на сегодня: **{day_skill_name}**.\n" if day_skill_name else "\n"
     return (
-        "Доброе утро.\n"
-        "Сегодня не надо «наверстать жизнь».\n"
-        "Достаточно проверить один навык и заметить, где именно становится трудно."
+        f"{greeting}\n"
+        "Как ты сегодня — что сильнее всего мешает начать?\n"
+        "Можно нажать кнопку или ответить своими словами / голосом."
         f"{skill_line}\n"
-        "Что сейчас ближе?"
+        "Я подберу один короткий вход под твоё состояние."
     )
 
 
 def evening_checkin_text() -> str:
     return (
-        "Добрый вечер.\n"
-        "Закрывать день не обязательно, но полезно оставить один след.\n\n"
-        "Что сегодня было ближе?"
+        "Добрый вечер. Если готов, за 3 коротких ответа разберём день: "
+        "что мешало, что происходило с состоянием и какой вывод взять на завтра.\n\n"
+        "Начать вечерний разбор?"
     )
 
 
@@ -1125,21 +1132,17 @@ def reactivation_text(count: int) -> str:
 
 kb_morning_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="⚡ Есть силы начать")],
-        [KeyboardButton(text="😶 Пока не включился")],
-        [KeyboardButton(text="😣 Уже тревожно")],
-        [KeyboardButton(text="📱 Уже унесло в телефон")],
+        [KeyboardButton(text="📱 Залипаю"), KeyboardButton(text="🚪 Не могу начать")],
+        [KeyboardButton(text="😵 Нет сил"), KeyboardButton(text="😬 Тревога")],
+        [KeyboardButton(text="🌀 Всё слишком большое")],
     ],
     resize_keyboard=True,
 )
 
 kb_evening_checkin = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🚪 Я всё-таки начал")],
-        [KeyboardButton(text="🟡 Пробовал, но застрял")],
-        [KeyboardButton(text="📱 Почти весь день уносило")],
-        [KeyboardButton(text="🫠 Не было сил")],
-        [KeyboardButton(text="🌙 Не хочу разбирать, просто закрыть день")],
+        [KeyboardButton(text="🌙 Подвести итоги дня")],
+        [KeyboardButton(text="🌙 Закрыть без разбора")],
     ],
     resize_keyboard=True,
 )
@@ -1274,7 +1277,8 @@ kb_skill_continue_negative = ReplyKeyboardMarkup(
 
 kb_notifications_consent = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ Ок, можно писать")],
+        [KeyboardButton(text="✅ Только вечером")],
+        [KeyboardButton(text="☀️ Утром и вечером")],
         [KeyboardButton(text="🔕 Без напоминаний")],
     ],
     resize_keyboard=True,
@@ -1283,11 +1287,9 @@ kb_notifications_consent = ReplyKeyboardMarkup(
 
 def notifications_consent_text() -> str:
     return (
-        "Я могу писать утром и вечером:\n"
-        "— утром подобрать шаг\n"
-        "— вечером закрыть день\n"
-        "— если ты пропадёшь, один раз мягко вернуть\n\n"
-        "Обычно это 2 сообщения в день, максимум — 3.\n"
+        "По умолчанию я напишу один раз вечером — коротко закрыть день.\n"
+        "Если удобнее, можно включить утро и вечер.\n\n"
+        "Максимум — 2 сообщения в день. После закрытия дня больше не пишу.\n"
         "Можно отключить в любой момент."
     )
 
@@ -1381,7 +1383,7 @@ kb_trainers = ReplyKeyboardMarkup(
 kb_training_main = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💪 Сделать следующий шаг")],
-        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="🆘 Кризис прокрастинации")],
+        [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="⚡ Сильно застрял")],
         [KeyboardButton(text="🧭 Моя карта")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
@@ -1470,6 +1472,8 @@ kb_stuck_aftercare = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ Ещё 2 минуты")],
         [KeyboardButton(text="🧭 Следующий шаг")],
+        [KeyboardButton(text="🔄 Сменить навык")],
+        [KeyboardButton(text="🎭 Сменить тренера")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
@@ -2115,7 +2119,7 @@ kb_skip_data = ReplyKeyboardMarkup(
 
 kb_pay_choice = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💳 Продолжить полный режим")],
+        [KeyboardButton(text="💬 Узнать о поддержке")],
         [KeyboardButton(text="📚 Что входит")],
         [KeyboardButton(text="🧭 Показать карту")],
         [KeyboardButton(text="🤔 Остаться в коротком режиме")],
@@ -2173,6 +2177,29 @@ ONBOARDING_SCREENS = [
     '😮\u200d💨 Ты знаешь, ЧТО делать, но это не становится действием.\n\nПроблема не в силе воли.\nМы тренируем:\n— запуск\n— внимание\n— возврат после срыва\n\nМинимум — 60–120 секунд.\nСрыв — часть процесса.\n\n⚠️ Это не терапия и не медицинское заключение.\nЕсли нужна срочная психологическая или медицинская помощь, SKILLER не заменяет живые службы и не ведёт такой сценарий.',
     'Сейчас выберешь тренера:\nМарша — мягко\nСкинни — чётко\nБек — с объяснениями\n\nПотом короткая рабочая карта — и первый навык.',
 ]
+
+
+def privacy_notice_text() -> str:
+    return (
+        "🔐 Перед началом — коротко о данных.\n\n"
+        "SKILLER сохраняет в своей базе твои ответы, выбранные навыки и результаты попыток, "
+        "чтобы строить рабочую карту. Текст и голос могут передаваться OpenAI для анализа "
+        "и распознавания. В Google Sheets уходят только обезличенные технические события, "
+        "без историй и расшифровок голоса.\n\n"
+        "Это тренажёр навыков, не диагностика, психотерапия или экстренная помощь. "
+        "Согласие добровольное. Остановить напоминания можно командой /stop, "
+        "посмотреть эту информацию — /privacy, полностью удалить профиль — /reset\\_me.\n\n"
+        "Продолжая, ты подтверждаешь, что тебе 18 лет и ты согласен(на) с такой обработкой данных."
+    )
+
+
+kb_privacy_consent = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Согласен(на), продолжить")],
+        [KeyboardButton(text="❌ Не согласен(на)")],
+    ],
+    resize_keyboard=True,
+)
 
 # ============================================================
 # 7) SALES & ONBOARDING TEXTS (карта, гарантия, таймеры)
