@@ -21,13 +21,13 @@ class OfferPathTests(unittest.TestCase):
         self.assertFalse(bot.can_show_offer(user, profile))
         self.assertFalse(bot.scheduled_offer_due(user, profile))
 
-    def test_main_offer_has_exactly_four_continuation_paths(self):
+    def test_main_offer_prioritizes_full_human_and_navigation(self):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
             rows = offer_inline_keyboard(123).inline_keyboard[:4]
         callbacks = [row[0].callback_data for row in rows]
         self.assertEqual(callbacks, [
-            OFFER_CALLBACKS["stay_free"], OFFER_CALLBACKS["bot"],
-            OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
+            OFFER_CALLBACKS["bot"], OFFER_CALLBACKS["live"],
+            OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
         ])
 
     def test_offer_also_exposes_conclusion_and_next_plan(self):

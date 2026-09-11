@@ -38,6 +38,33 @@ class ConclusionEngineTests(unittest.TestCase):
         self.assertTrue(updated.primary.evidence_for)
         self.assertNotIn("причина доказана", render_full_working_model(updated).lower())
 
+    def test_success_evidence_uses_human_language(self):
+        state = model()
+        updated = update_model(
+            state, state.predictions[0].prediction_id, "STRONG_SUCCESS",
+            experiment_name="Плохой черновик", result_detail="продолжил задачу",
+        )
+        text = render_full_working_model(updated)
+        self.assertIn("Когда ты попробовал", text)
+        self.assertIn("Пока это только один хороший сигнал", text)
+        for internal_phrase in (
+            "пользователь", "observed", "criterion", "experiment_result",
+            "hypothesis_id", "instruction_variant", "наблюдаемый результат совпал",
+        ):
+            self.assertNotIn(internal_phrase, text.lower())
+
+    def test_legacy_persisted_evidence_is_sanitized_on_render(self):
+        from dataclasses import replace
+        state = model()
+        legacy_primary = replace(
+            state.primary,
+            evidence_for=("Пользователь отметил experiment_result для instruction_variant",),
+        )
+        rendered = render_full_working_model(replace(state, hypotheses=(legacy_primary, *state.hypotheses[1:])))
+        self.assertNotIn("пользователь", rendered.lower())
+        self.assertNotIn("experiment_result", rendered)
+        self.assertNotIn("instruction_variant", rendered)
+
     def test_executed_only_does_not_promote(self):
         state = model()
         hypothesis = replace_status(state.primary, "MODERATE_HYPOTHESIS")
