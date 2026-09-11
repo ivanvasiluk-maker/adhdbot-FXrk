@@ -18,6 +18,7 @@ def test_all_map_aliases_are_known_global_routes():
 def test_legacy_navigation_aliases_never_become_unknown():
     aliases = bot.MAP_BUTTON_ALIASES | bot.ACTION_BUTTON_ALIASES | bot.CLOSE_DAY_BUTTON_ALIASES
     assert all(bot.global_button_kind(label, label.lower()) for label in aliases)
+    assert all(bot.global_button_kind(label, label.lower()) == "close_day" for label in bot.CLOSE_DAY_BUTTON_ALIASES)
 
 
 def test_current_experiment_snapshot_does_not_inherit_previous_minimum():
@@ -36,6 +37,20 @@ def test_current_experiment_snapshot_does_not_inherit_previous_minimum():
     assert snapshot["skill_id"] == "return_after_slip"
     assert "возврат" in snapshot["minimum"].lower()
     assert "Одна вкладка" not in json.dumps(snapshot, ensure_ascii=False)
+
+
+def test_snapshot_rejects_attempt_owned_by_another_experiment():
+    user = {
+        "active_experiment_id": 2,
+        "active_attempt": {
+            "attempt_id": "attempt-a", "behavioral_experiment_id": 1,
+            "skill_id": "one_tab_focus", "minimum_action": "Одна вкладка на 10 секунд",
+        },
+    }
+    snapshot = bot.current_experiment_snapshot(user)
+    assert snapshot["experiment_id"] == 2
+    assert snapshot["skill_id"] == ""
+    assert snapshot["minimum"] == ""
 
 
 def test_public_skill_ids_have_human_labels():
@@ -71,7 +86,7 @@ def test_actionable_correction_is_annotation_not_hypothesis():
 
 
 def test_test_payment_hidden_from_production_user_and_allowed_for_test_user():
-    with patch.object(bot, "FREE_BETA_ACCESS", False), patch.object(bot, "PAYMENT_ACCEPT_ANY", True), patch.object(bot, "TEST_MODE", False), patch.object(bot, "is_admin", return_value=False):
+    with patch.object(bot, "PAYMENT_ACCEPT_ANY", True), patch.object(bot, "TEST_MODE", False), patch.object(bot, "is_admin", return_value=False):
         assert not any("Я оплатил(а) — тест" in text for text in _texts(bot.offer_inline_keyboard(100)))
         assert any("Я оплатил(а) — тест" in text for text in _texts(bot.offer_inline_keyboard(100, True)))
         assert not bot.test_payment_allowed(100)

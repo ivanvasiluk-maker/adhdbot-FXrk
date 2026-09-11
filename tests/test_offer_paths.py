@@ -22,14 +22,13 @@ class OfferPathTests(unittest.TestCase):
             self.assertFalse(bot.can_show_offer(user, profile))
         self.assertFalse(bot.scheduled_offer_due(user, profile))
 
-    def test_free_beta_offer_sells_group_and_personal_support(self):
+    def test_main_offer_prioritizes_full_human_and_navigation(self):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
             rows = offer_inline_keyboard(123).inline_keyboard
         callbacks = [row[0].callback_data for row in rows]
         self.assertEqual(callbacks, [
-            OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
-            OFFER_CALLBACKS["next_plan"], OFFER_CALLBACKS["conclusion_full"],
-            OFFER_CALLBACKS["continue_training"],
+            OFFER_CALLBACKS["bot"], OFFER_CALLBACKS["live"],
+            OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
         ])
         self.assertNotIn(OFFER_CALLBACKS["beta_purchase_intent"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["bot"], callbacks)

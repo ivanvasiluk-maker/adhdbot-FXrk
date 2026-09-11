@@ -8,7 +8,17 @@
     {"commit": "f9a6facfe4a0f54d491ed49cdb5391b26423be59", "subject": "Complete stable action handlers"},
     {"commit": "0e4579a420347c3014134b291a9b376e9be8f780", "subject": "PATCH-25: publish release stabilization bundle (PATCH-18..25)"},
     {"commit": "072c41f4637ce9774019f53bf5c9efa281325144", "subject": "Complete final release safety audit fixes"},
-    {"commit": "664da1b39410da3a2791e94ea587b2352edab67f", "subject": "PATCH-17: pin published commit-subject exceptions"}
+    {"commit": "664da1b39410da3a2791e94ea587b2352edab67f", "subject": "PATCH-17: pin published commit-subject exceptions"},
+    {"commit": "c2207576a93dd9b87385973ff68e2a0725be5a19", "subject": "Add broadcast_admin.py for safe admin broadcasts"},
+    {"commit": "43ea9f88cefc2a2beed93eff37e5814a515381d1", "subject": "Add run_bot.py for safe admin broadcasts"},
+    {"commit": "51a21e8fb44f1c3ee7b236a55dab08c65cb744f0", "subject": "Add tests/test_admin_broadcast.py for safe admin broadcasts"},
+    {"commit": "0a32abc0c281f4fa3d98d108dc928848afd3f94a", "subject": "Use broadcast-enabled production entrypoint in Dockerfile"},
+    {"commit": "e596ea37a5129bc5c0be455ee9b649442c302def", "subject": "Use broadcast-enabled production entrypoint in scripts/start_bot.sh"},
+    {"commit": "298fdf5587836cb1f5889d9c936d32559ea71398", "subject": "Add safe database discovery to broadcast_admin.py"},
+    {"commit": "e11e7b0cb9666bf061b9dd3851d2e70336c327ac", "subject": "Add safe database discovery to tests/test_admin_broadcast.py"},
+    {"commit": "4b9e874cebf2806170d50b407f730dd9926babcb", "subject": "Add recovered audience broadcast command"},
+    {"commit": "54a3902d5e5f8a2d8327033144eb0a1663f47e8c", "subject": "Test recovered audience broadcasts"},
+    {"commit": "887a274318ff1379ecafa8c7cb755badf97ee90f", "subject": "Harden release experiment ownership and UI routing"}
   ],
   "phases": [
     {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},

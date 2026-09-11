@@ -3623,7 +3623,7 @@ ACTION_BUTTON_ALIASES = {
     "⚡ Дать короткий навык",
 }
 CLOSE_DAY_BUTTON_ALIASES = {
-    "Закрыть день", "🌙 Закрыть день", "✅ Закрыть день", "🌙 Завершить",
+    "🌙 Закрыть день", "✅ Закрыть день", "🌙 Завершить",
     "🌙 На сегодня хватит", "🌙 На сегодня достаточно",
 }
 
@@ -4678,13 +4678,7 @@ def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
         "continued_after_skill": None,
         "difficulty": None,
         "attempt_id": str(attempt.get("attempt_id") or u.get("current_action_id") or ""),
-        # The active experiment owns the skill being evaluated. Profile-level
-        # current_skill can still contain the previous exercise during a
-        # transition and must not leak into the new "Запомнить" anchor.
-        "skill_id": str(
-            snapshot.get("skill_id") or attempt.get("current_skill_id")
-            or current_skill_for_action(u) or current_skill_id(u) or ""
-        ),
+        "skill_id": str(snapshot.get("skill_id") or current_skill_for_action(u) or current_skill_id(u) or ""),
         "mechanism": str(attempt.get("current_mechanism") or u.get("current_mechanism") or ""),
         "barrier": str(u.get("pending_stuck_reason") or u.get("last_not_completed_reason") or ""),
         "day_id": str(u.get("current_day_id") or ""),
@@ -4755,13 +4749,14 @@ async def persist_personal_working_model(
 ) -> Dict[str, Any]:
     """Persist one compact observation backed by the current experiment/attempt."""
     attempt = active_attempt(u)
+    snapshot = current_experiment_snapshot(u)
     evidence_ref = str(
-        u.get("active_experiment_id") or attempt.get("experiment_id")
+        snapshot.get("experiment_id")
         or attempt.get("attempt_id") or ""
     )
     if not evidence_ref:
         return profile
-    sid = str(feedback.get("skill_id") or current_skill_for_action(u) or "")
+    sid = str(snapshot.get("skill_id") or feedback.get("skill_id") or current_skill_for_action(u) or "")
     skill = SKILLS_DB.get(sid) or {}
     result = classify_experiment_result(
         completed=feedback.get("completed") is True or feedback.get("partial") is True,
@@ -4781,18 +4776,22 @@ async def persist_personal_working_model(
             or profile.get("main_hypothesis") or profile.get("last_not_completed_reason")
             or "вход в задачу становится слишком дорогим"
         )),
-        skill_title=str(skill.get("name") or sid or "короткий вход"),
+        skill_title=public_enum_text(skill.get("name") or sid or "короткий вход"),
         context=str(attempt.get("context_domain") or "general"),
         successful=result in {"STRONG_SUCCESS", "WEAK_SUCCESS"},
         evidence_ref=evidence_ref,
-        step_size=str(attempt.get("current_step") or u.get("current_next_physical_step") or ""),
+        step_size=str(
+            snapshot.get("minimum") or snapshot.get("instruction")
+            or (attempt.get("current_step") if not snapshot.get("experiment_id") else "")
+            or ""
+        ),
     )
     patch: Dict[str, Any] = {"personal_working_model": model.as_dict()}
     conclusion_data = profile.get("conclusion_model")
     if isinstance(conclusion_data, dict):
         try:
             conclusion = model_from_dict(conclusion_data)
-            experiment_name = str(skill.get("name") or sid or "короткий вход")
+            experiment_name = public_enum_text(skill.get("name") or sid or "короткий вход")
             detail = {
                 "STRONG_SUCCESS": "После упражнения ты продолжил исходную задачу.",
                 "WEAK_SUCCESS": "Шаг немного помог, но пока неясно, стало ли легче продолжить задачу.",
@@ -7616,29 +7615,26 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 
 def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> InlineKeyboardMarkup:
-    if FREE_BETA_ACCESS:
-        rows = []
-        if ENABLE_GROUP_OFFER:
-            rows.append([InlineKeyboardButton(text="👥 Хочу в группу — €240", callback_data=OFFER_CALLBACKS["group"])])
-        if ENABLE_HUMAN_OFFER:
-            rows.append([InlineKeyboardButton(text=f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
-        if voluntary_support_available():
-            rows.append([InlineKeyboardButton(text="💚 Поддержать SKILLER — €4,99/мес", callback_data=OFFER_CALLBACKS["voluntary_support"])])
-        rows.extend([
-            [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
-            [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
-            [InlineKeyboardButton(text="Продолжить бесплатный тест", callback_data=OFFER_CALLBACKS["continue_training"])],
-        ])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
     keyboard = []
     if paid_plan_available():
-        keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить персональную тренировку — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
+        keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить со SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
+    if ENABLE_HUMAN_OFFER:
+        keyboard.append([InlineKeyboardButton(
+            text=f"👤 Разобрать с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
+            callback_data=OFFER_CALLBACKS["live"],
+        )])
     keyboard.extend([
         [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
         [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
         [InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
         [InlineKeyboardButton(text="Другие форматы поддержки", callback_data=OFFER_CALLBACKS["compare"])],
     ])
+    if ENABLE_GROUP_OFFER:
+        keyboard.append([InlineKeyboardButton(
+            text=f"👥 Группа — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL}/занятие",
+            callback_data=OFFER_CALLBACKS["group"],
+        )])
+    keyboard.append([InlineKeyboardButton(text="🟢 Пока продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])])
     if test_payment_allowed(user_id, user_is_test_user):
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
@@ -11357,43 +11353,12 @@ PUBLIC_ENUM_LABELS = {
     "return_after_slip": "Возврат после выпадения",
     "bad_first_step": "Плохой черновик",
     "phone_far_3min": "Телефон вне руки на 3 минуты",
-    # Published users can still have aliases and reason codes from older
-    # deployments in their saved profile.  None of them may leak into a
-    # Markdown message as ``unclear*instruction*`` or ``phone*away*3*min``.
-    "phone_away_3_min": "Телефон вне руки на 3 минуты",
-    "entry_small_step": "Маленький видимый шаг",
-    "unclear_instruction": "первое действие было непонятно",
-    "insufficient_repetition": "нужна повторная проверка",
-    "wrong_mechanism": "этот способ не совпал с причиной стопора",
-    "wrong_timing": "момент для проверки оказался неподходящим",
-    "external_blocker": "помешало внешнее обстоятельство",
-    "low_start_energy": "на старте почти не было сил",
-    "environment_distraction": "внимание перехватила среда",
-    "start_avoidance": "трудно войти в задачу",
-    "attention_fragmentation": "внимание часто переключается",
-    "anxiety_avoidance": "напряжение усиливает избегание",
     "task_naming": "Назвать следующий шаг",
 }
 
 
 def public_enum_text(value: Any) -> str:
-    if isinstance(value, dict):
-        # Development checks used to be rendered through ``str(dict)``.  Apart
-        # from looking broken, Telegram Markdown turned underscores into
-        # italics.  Prefer the only user-facing label and never serialize the
-        # whole internal object.
-        for key in ("label", "title", "name", "hypothesis", "text"):
-            if value.get(key):
-                return public_enum_text(value.get(key))
-        return "гипотеза ещё проверяется"
-    if isinstance(value, (list, tuple, set)):
-        rendered = [public_enum_text(item) for item in value]
-        return ", ".join(item for item in rendered if item)
     raw = str(value or "").strip()
-    normalized_raw = raw.strip("*_` ")
-    for internal, public in PUBLIC_ENUM_LABELS.items():
-        if normalized_raw in {internal, internal.replace("_", "*")}:
-            return public
     if raw in SKILL_LABELS:
         return str(SKILL_LABELS[raw])
     skill = SKILLS_DB.get(raw)
@@ -11401,8 +11366,6 @@ def public_enum_text(value: Any) -> str:
         label_value = skill.get("name") or skill.get("title") or skill.get("display_name")
         if label_value:
             return str(label_value)
-    if re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)+", normalized_raw):
-        return "гипотеза ещё проверяется"
     text = raw
     for internal, public in PUBLIC_ENUM_LABELS.items():
         text = text.replace(internal, public)
@@ -11502,7 +11465,7 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
     if "а не" in correction.lower() or "скорее" in correction.lower():
         comp["hypothesis_status"] = "needs_recheck"
     comp["short_conclusion"] = (
-        f"{previous}\n\nУточнение пользователя:\n— {correction}"
+        f"{previous}\n\nТвоё уточнение:\n— {correction}"
         if previous and correction.lower() not in previous.lower() else (previous or correction)
     )
     comp["analysis_id"] = comp.get("analysis_id") or f"analysis_{uuid.uuid4().hex[:12]}"
@@ -11554,10 +11517,10 @@ def global_button_kind(text: str, low: str) -> str:
         return "map"
     if text in ACTION_BUTTON_ALIASES or text in {"🧭 Давай действие", "💪 Дать сегодняшний навык", "🧭 Следующий шаг", "🧭 Следующий шаг по маршруту"}:
         return "action"
-    if text in {"🌙 Хватит на сегодня", "🌙 На сегодня хватит"} or "хватит" in low:
-        return "enough"
     if text in CLOSE_DAY_BUTTON_ALIASES:
         return "close_day"
+    if text == "🌙 Хватит на сегодня" or "хватит" in low:
+        return "enough"
     if text == "🌙 До завтра" or "до завтра" in low:
         return "tomorrow"
     if text == "🔁 Ещё круг" or "ещё круг" in low or "еще круг" in low:
@@ -15345,9 +15308,16 @@ def active_attempt(u: Dict[str, Any]) -> Dict[str, Any]:
 def current_experiment_snapshot(u: Dict[str, Any]) -> Dict[str, Any]:
     """Return only presentation data owned by the currently active attempt."""
     attempt = active_attempt(u) or {}
+    attempt_experiment_id = attempt.get("behavioral_experiment_id")
+    active_experiment_id = u.get("active_experiment_id")
+    if attempt_experiment_id and active_experiment_id and str(attempt_experiment_id) != str(active_experiment_id):
+        return {
+            "attempt_id": None, "experiment_id": active_experiment_id, "skill_id": "",
+            "instruction": "", "minimum": "", "state_revision": None,
+        }
     return {
         "attempt_id": attempt.get("attempt_id"),
-        "experiment_id": attempt.get("behavioral_experiment_id") or u.get("active_experiment_id"),
+        "experiment_id": attempt_experiment_id or active_experiment_id,
         "skill_id": attempt.get("skill_id") or attempt.get("current_skill_id") or current_skill_for_action(u),
         "instruction": attempt.get("instruction") or attempt.get("instruction_variant") or "",
         "minimum": attempt.get("minimum_action") or attempt.get("minimum") or "",
@@ -15876,10 +15846,10 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {OFFER_CALLBACKS["back"], "offer_back"}:
-        await replace_offer_inline_screen(
-            c.message, u, offer_menu_text(),
-            offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))),
-        )
+        profile = await get_user_profile(uid, DB_PATH)
+        profile["_skill_map"] = await build_skill_map_data(u, profile)
+        summary = build_profile_map_summary(u, profile)
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
         await c.answer()
         return
 
@@ -15969,7 +15939,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         profile = await get_user_profile(uid, DB_PATH)
         profile["_skill_map"] = await build_skill_map_data(u, profile)
         await log_event(uid, "offer", "profile_signals_opened", {"source": "inline_offer"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await replace_offer_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))))
+        await answer_with_inline_screen(c.message, u, trainer_wrap(u, render_short_user_map(profile, u.get("name")), "map"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
         await c.answer()
         return
 
@@ -15990,7 +15960,7 @@ async def on_offer_callbacks(c: CallbackQuery):
     profile = await get_user_profile(uid, DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
     summary = build_profile_map_summary(u, profile)
-    await replace_offer_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))))
+    await answer_with_inline_screen(c.message, u, trainer_wrap(u, offer_screen_text(u, summary, profile), "offer"), offer_inline_keyboard(uid, bool(int(u.get("is_test_user") or 0))), "offer")
 
 
 @router.callback_query(lambda c: split_screen_callback(c.data or "")[0] in {"yes", "no", "noop"})

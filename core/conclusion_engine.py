@@ -277,7 +277,7 @@ def render_full_working_model(model: WorkingModelState, *, trainer_intro: str = 
              "\nТипичная цепочка:\n" + "\n→ ".join(_clean(model.typical_chain)),
              f"\nОсновная рабочая гипотеза:\n🟢 {primary.label}."]
     if primary.evidence_for:
-        parts.append("\nЧто говорит в её пользу:\n" + "\n".join(f"— {x}" for x in primary.evidence_for))
+        parts.append("\nЧто говорит в её пользу:\n" + "\n".join(f"— {_public_text(x)}" for x in primary.evidence_for))
         if primary.supported_tests > 1:
             parts.append(
                 f"\nЭтот эффект повторился {primary.supported_tests} раз, поэтому сейчас "
@@ -289,13 +289,13 @@ def render_full_working_model(model: WorkingModelState, *, trainer_intro: str = 
         f"{STATUS_UI[h.status]}: {h.label}. " + ("Пока недостаточно данных." if h.untested else "Данные обновлены экспериментом.")
         for h in alternatives))
     if tested:
-        parts += [f"\nЧто проверили:\n{tested['experiment']}", f"\nЧто произошло:\n{tested['detail']}",
+        parts += [f"\nЧто проверили:\n{_public_text(tested['experiment'])}", f"\nЧто произошло:\n{_public_text(tested['detail'])}",
                   "\nПредварительный вывод:\nЭто первый поведенческий сигнал. Одна попытка не устанавливает механизм."]
     unknown = list(primary.still_unknown) or ["повторится ли наблюдаемый эффект в другой попытке"]
     parts.append("\nЧто пока неизвестно:\n" + "\n".join(f"— {x}" for x in unknown))
     if prediction:
         parts += [f"\n🔮 Если наша модель верна\n{prediction.prediction}",
-                  f"Что проверим на практике: {_public_prediction(prediction.observable_outcome)}"]
+                  f"Что проверим на практике: {_public_text(prediction.observable_outcome)}"]
     parts.append(f"\nСледующий эксперимент:\n{model.next_experiment or 'пока не выбран'}")
     return "\n".join(parts)
 
@@ -314,11 +314,15 @@ def _safe(value: str) -> str:
     return " ".join(str(value or "").split())[:500]
 
 
-def _public_prediction(value: str) -> str:
+def _public_text(value: str) -> str:
     """Convert legacy research phrasing into direct second-person UI copy."""
     text = _safe(value)
     text = text.replace("пользователь продолжит", "ты продолжишь")
     text = text.replace("Пользователь продолжит", "Ты продолжишь")
+    text = text.replace("пользователь отметил", "ты отметил")
+    text = text.replace("Пользователь отметил", "Ты отметил")
+    for internal in ("experiment_result", "hypothesis_id", "instruction_variant"):
+        text = text.replace(internal, "данные проверки")
     return text
 
 
