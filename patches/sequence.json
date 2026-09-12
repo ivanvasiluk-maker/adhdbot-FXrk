@@ -18,7 +18,9 @@
     {"commit": "e11e7b0cb9666bf061b9dd3851d2e70336c327ac", "subject": "Add safe database discovery to tests/test_admin_broadcast.py"},
     {"commit": "4b9e874cebf2806170d50b407f730dd9926babcb", "subject": "Add recovered audience broadcast command"},
     {"commit": "54a3902d5e5f8a2d8327033144eb0a1663f47e8c", "subject": "Test recovered audience broadcasts"},
-    {"commit": "887a274318ff1379ecafa8c7cb755badf97ee90f", "subject": "Harden release experiment ownership and UI routing"}
+    {"commit": "887a274318ff1379ecafa8c7cb755badf97ee90f", "subject": "Harden release experiment ownership and UI routing"},
+    {"commit": "5a5711f3fc521d8b7d83eca5cec5e76db250ec48", "subject": "PATCH-17: pin additional published commit exceptions"},
+    {"commit": "5c199814394168f06a85f76e3a8576bddad1163b", "subject": "Wire SKILLER learning model into production flows"}
   ],
   "phases": [
     {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},
