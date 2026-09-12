@@ -112,7 +112,11 @@ from core.legacy_flow_adapter import set_legacy_day, set_legacy_stage
 from core.mechanism_model import MechanismHypothesis, SituationSnapshot, select_skill_for_mechanism
 from core.experiment_core import BehavioralExperiment
 from core.outcome_model import ExperimentOutcome
-from core.learning_engine import classify_experiment_result
+from core.learning_engine import (
+    ExperimentEvidence, classify_experiment_result, derive_functional_state,
+    learning_history, milestone_summary, skill_blocked_in_model,
+    primary_hypothesis, update_hypothesis_scores, update_learning_model,
+)
 from core.trainer_voice import experiment_result_content, render_message
 from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
@@ -4845,8 +4849,13 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     experiment_result = classify_experiment_result(
         completed=completed or partial, subjective_effect=subjective_effect, after_action=after_action,
     )
+    state_effect = "positive" if helpfulness in {"helped", "some"} else \
+        "negative" if helpfulness in {"not_helped", "worse"} else "unknown"
+    task_effect = "positive" if after_action == "continued_target_task" else \
+        "none" if after_action in {"stopped_after_step", "did_something_else"} else "unknown"
     feedback.update({"experiment_result": experiment_result, "subjective_effect": subjective_effect,
-                     "after_action": after_action})
+                     "after_action": after_action, "state_effect": state_effect,
+                     "task_effect": task_effect, "target_function": skill_target_function(sid)})
     effect_status = effect_status_from_minimal_feedback(helpfulness, continued)
     sync_active_attempt(
         u, bump=True,
@@ -4865,11 +4874,25 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     )
     await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "minimal_feedback": True})
     profile = await get_user_profile(u["user_id"], DB_PATH)
+    observation = str(feedback.get("barrier") or feedback.get("mechanism") or "")
+    learning_model = update_learning_model(
+        profile.get("learning_model"),
+        ExperimentEvidence(
+            sid, completed or partial, subjective_effect, after_action,
+            skill_target_function(sid), state_effect=state_effect, task_effect=task_effect,
+            hypothesis_id=observation or None,
+            user_feedback=str(feedback.get("user_feedback") or "") or None,
+        ),
+        observations=[observation] if observation else (), day=local_date_for_user(u),
+    )
     patch = {
         "last_skill_feedback": feedback,
         "last_skill_completed": completed or partial,
         "last_skill_effect": helpfulness,
         "last_continued_after_skill": continued,
+        "learning_model": learning_model,
+        "hypothesis_scores": learning_model.get("hypothesis_scores", {}),
+        "primary_hypothesis": learning_model.get("primary_hypothesis") or profile.get("primary_hypothesis"),
     }
     if experiment_result == "STRONG_SUCCESS":
         patch.update({"last_successful_skill": sid, "best_skill": sid})
@@ -6582,12 +6605,18 @@ async def apply_skill_change(
     mark_action_card_active(u)
     await save_user(u, DB_PATH)
     profile_for_not_fit = await get_user_profile(u["user_id"], DB_PATH)
+    changed_model = update_learning_model(
+        profile_for_not_fit.get("learning_model"),
+        ExperimentEvidence(previous_sid or "unknown", None, explicitly_changed=True),
+        day=local_date_for_user(u),
+    )
     await record_profile_signal(u["user_id"], "training", {
         **skill_learning_signal_patch(previous_sid, reason_code, reason_code, tolerable_difficulty_for_reason(reason_code), new_sid),
         "last_replacement_skill": new_sid,
         "last_replacement_reason": reason_text,
         "skill_change_previous_skill": previous_sid,
         "skill_change_new_skill": new_sid,
+        "learning_model": changed_model,
         **_not_fit_today_patch(u, profile_for_not_fit, previous_sid),
     }, source="skill_change_requested")
     if previous_sid:
@@ -8569,13 +8598,19 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
     """Choose one skill from the current mechanism, never diagnosis or day number."""
     profile = profile or {}
     attempt = active_attempt(u)
-    blocked_today = not_fit_today_skills(u, profile)
+    learning_model = profile.get("learning_model") if isinstance(profile.get("learning_model"), dict) else {}
+    blocked_today = list(dict.fromkeys([
+        *not_fit_today_skills(u, profile),
+        *(sid for sid in SKILLS_DB if skill_blocked_in_model(learning_model, sid)),
+    ]))
     raw_mechanism = str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or "")
     mechanism = legacy_mechanism_code(raw_mechanism) or "unclear_next_action"
+    functional = learning_model.get("functional_state") if isinstance(learning_model.get("functional_state"), dict) else {}
+    preferred_target = str(functional.get("primary_problem") or "START").upper()
     if product_config.RANKING_ENGINE_ENABLED and product_config.use_new_architecture(
         int(u.get("user_id") or 0), is_test_user=bool(u.get("test_access")),
     ):
-        ranked = _select_daily_skill_with_ranking(u, profile, mechanism, blocked_today)
+        ranked = _select_daily_skill_with_ranking(u, profile, mechanism, blocked_today, preferred_target)
         if ranked is not None:
             return ranked
     hypothesis = MechanismHypothesis(
@@ -8587,10 +8622,15 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
         sid for sid in SKILLS_DB
         if sid not in blocked_today and not should_block_skill_for_repetition(u, sid)
     }
+    target_available = {sid for sid in available if skill_target_function(sid) == preferred_target}
+    if target_available:
+        available = target_available
     try:
         sid = select_skill_for_mechanism(hypothesis, available)
     except LookupError:
-        sid = select_skill_for_mechanism(hypothesis, set(SKILLS_DB))
+        sid = next(iter(available), "")
+        if not sid:
+            sid = select_skill_for_mechanism(hypothesis, set(SKILLS_DB) - set(blocked_today))
     skill = dict(SKILLS_DB[sid])
     skill.setdefault("skill_id", sid)
     skill.setdefault("id", sid)
@@ -8600,6 +8640,7 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
 
 def _select_daily_skill_with_ranking(
     u: Dict[str, Any], profile: Dict[str, Any], mechanism: str, blocked_today: List[str],
+    preferred_target: str = "START",
 ) -> Optional[Dict[str, Any]]:
     """Feature-gated production adapter; the LLM never selects the winner."""
     attempt = active_attempt(u)
@@ -8608,7 +8649,7 @@ def _select_daily_skill_with_ranking(
         context = "other"
     if ACTIVE_FILE_SKILL_REGISTRY is not None:
         candidates = ACTIVE_FILE_SKILL_REGISTRY.get_candidates(
-            mechanism, context, "start", product_config.SKILL_LIBRARY_ALLOWED_STATUSES,
+            mechanism, context, preferred_target.lower(), product_config.SKILL_LIBRARY_ALLOWED_STATUSES,
         )
     else:
         candidates = tuple(skill for skill in SKILL_REGISTRY.rankable() if skill.id in SKILLS_DB)
@@ -8634,7 +8675,7 @@ def _select_daily_skill_with_ranking(
     plan = tuple(_canonical_daily_skill_id(item) for item in (get_current_plan(u) or ()))
     try:
         decision, _ = choose_skill(candidates, RankingInput(
-            {mechanism: 1.0}, "start", context, 1, str(u.get("trainer_key") or "marsha"),
+            {mechanism: 1.0}, preferred_target.lower(), context, 1, str(u.get("trainer_key") or "marsha"),
             personal_states=states, curriculum_skill_ids=plan,
             active_contraindications=frozenset({"acute_crisis"}) if str(u.get("safety_mode")) not in {"", "none", "inactive"} else frozenset(),
             consolidation_required=bool(completed),
@@ -9056,6 +9097,18 @@ def continuation_skill_id(u: Dict[str, Any]) -> str:
 
 
 async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str = "next_step_after_completion") -> None:
+    counts = await get_honest_day_counts(u)
+    bypass_limit = source.startswith("admin_") or bool(u.get("test_access") and u.get("force_training_limit_bypass"))
+    if counts["attempts_today"] >= 2 and not bypass_limit:
+        await mark_day_closed(u, "daily_experiment_limit")
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(
+            m, u,
+            "На сегодня данных достаточно. Лучше проверить это завтра в реальной ситуации, чем продолжать навыки подряд.\n\n"
+            "Если хочется, доступен ещё один добровольный эксперимент; карта и новая ситуация тоже остаются доступны.",
+            kb_completed_day_open, "day_core_stop",
+        )
+        return
     if should_switch_to_consolidation(u):
         await open_consolidation_branch(m, u, source=source)
         return
@@ -9455,9 +9508,17 @@ def render_prelaunch_full_map(u: Dict[str, Any], profile: Dict[str, Any], skill_
         "пока нет подтверждённого способа", "пока нет устойчивого отрицательного сигнала",
     }:
         failed = "по этому навыку есть смешанные данные — нужен повторный тест"
-    start = "есть первый сигнал" if profile.get("last_skill_completed") else "ещё проверяем"
-    stay = "продолжение подтверждено" if profile.get("last_continued_after_skill") is True else "продолжение пока не подтверждено"
-    returned = "возврат наблюдался" if int(profile.get("return_count") or u.get("return_count") or 0) else "данных о возврате мало"
+    learning_model = profile.get("learning_model") if isinstance(profile.get("learning_model"), dict) else {}
+    functional = learning_model.get("functional_state") if isinstance(learning_model.get("functional_state"), dict) else {}
+    status_text = {"green": "🟢 подтверждено", "yellow": "🟡 данные смешанные или их мало", "red": "🔴 подтверждённая проблема"}
+    if functional:
+        start = status_text.get(str(functional.get("START")), status_text["yellow"])
+        stay = status_text.get(str(functional.get("STAY")), status_text["yellow"])
+        returned = status_text.get(str(functional.get("RETURN")), status_text["yellow"])
+    else:
+        start = "есть первый сигнал" if profile.get("last_skill_completed") else "ещё проверяем"
+        stay = "продолжение подтверждено" if profile.get("last_continued_after_skill") is True else "продолжение пока не подтверждено"
+        returned = "возврат наблюдался" if int(profile.get("return_count") or u.get("return_count") or 0) else "данных о возврате мало"
     unknown = list(development.get("checks") or [])[:2]
     unknown_text = "\n".join(f"— {_development_check_text(x)}" for x in unknown) or "— повторится ли эффект;\n— проблема больше в START или STAY."
     next_test = _skill_label(str(
@@ -9470,7 +9531,7 @@ def render_prelaunch_full_map(u: Dict[str, Any], profile: Dict[str, Any], skill_
         f"Что сейчас чаще ломается\n{barrier}\n\n"
         f"START\n{start}\n\nSTAY\n{stay}\n\nRETURN\n{returned}\n\n"
         f"Что уже помогало\n{helped}\n\nЧто пока не помогало\n{failed}\n\n"
-        f"Рабочая гипотеза\n{public_enum_text(profile.get('main_hypothesis') or barrier)}\n\n"
+        f"Рабочая гипотеза\n{public_enum_text(learning_model.get('primary_hypothesis') or profile.get('main_hypothesis') or barrier)}\n\n"
         f"Что пока неизвестно\n{unknown_text}\n\n"
         f"Следующий эксперимент\n{next_test}\n\n"
         f"Данных собрано: {attempts} попыток\nУверенность модели: {confidence}"
@@ -9533,40 +9594,76 @@ def day_review_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _day_review_statuses(review: Dict[str, Any], feedback: Dict[str, Any], attempts: int) -> tuple[str, str, str]:
+def _day_review_statuses(review: Dict[str, Any], feedback: Dict[str, Any], attempts: int,
+                         persisted_history: Optional[List[ExperimentEvidence]] = None) -> tuple[str, str, str]:
+    # This adapter deliberately delegates all three colours to the same model
+    # used by recommendation.  Review evidence is appended last, so a negative
+    # RETURN report cannot be overwritten by an older successful return.
+    history: List[ExperimentEvidence] = list(persisted_history or [])
+    if not history and (attempts or feedback):
+        history.append(ExperimentEvidence(
+            str(feedback.get("skill_id") or "daily_skill"),
+            feedback.get("completed"),
+            "helped" if str(feedback.get("helpfulness") or "") in {"helped", "some"} else "unknown",
+            "continued_target_task" if feedback.get("continued_after_skill") is True else
+            "stopped_after_step" if feedback.get("continued_after_skill") is False else "unknown",
+        ))
     focus = str(review.get("function") or "")
-    if focus == "start":
-        return "🔴", "⚪", "⚪"
-    if focus == "stay":
-        return "🟢", "🔴", "🟡"
-    if focus == "return":
-        return "🟢", "🟡", "🔴"
-    if focus == "returned":
-        return "🟢", "🟡", "🟢"
-    start = "🟢" if feedback.get("completed") else "🟡" if attempts else "⚪"
-    stay = "🟢" if feedback.get("continued_after_skill") is True else "🔴" if feedback.get("continued_after_skill") is False else "🟡"
-    returned = "🟡"
-    return start, stay, returned
+    if focus in {"start", "stay"}:
+        history.append(ExperimentEvidence("day_review", focus != "start", after_action="stopped_after_step"))
+    elif focus in {"return", "returned"}:
+        history.append(ExperimentEvidence("day_review", True, target_function="RETURN",
+                                          returned_after_distraction=focus == "returned"))
+    state = derive_functional_state(history)
+    icon = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
+    return icon[state.start], icon[state.stay], icon[state.return_]
+
+
+def _functional_state_with_review(profile: Dict[str, Any], review: Dict[str, Any]):
+    model = profile.get("learning_model") if isinstance(profile.get("learning_model"), dict) else {}
+    history = learning_history(model)
+    focus = str(review.get("function") or "")
+    if focus in {"start", "stay"}:
+        history.append(ExperimentEvidence("day_review", focus != "start", after_action="stopped_after_step"))
+    elif focus in {"return", "returned"}:
+        history.append(ExperimentEvidence("day_review", True, target_function="RETURN",
+                                          returned_after_distraction=focus == "returned"))
+    return derive_functional_state(history)
 
 
 def day1_profile_card_text(u: Dict[str, Any], profile: Dict[str, Any], attempts: int) -> str:
     model = profile.get("personal_working_model") if isinstance(profile.get("personal_working_model"), dict) else {}
     feedback = profile.get("last_skill_feedback") if isinstance(profile.get("last_skill_feedback"), dict) else {}
     review = day_review_profile(profile)
-    start, stay, returned = _day_review_statuses(review, feedback, attempts)
-    if not review and int(profile.get("return_count_today") or u.get("return_count") or 0):
-        returned = "🟢"
+    learning_model = profile.get("learning_model") if isinstance(profile.get("learning_model"), dict) else {}
+    start, stay, returned = _day_review_statuses(review, feedback, attempts, learning_history(learning_model))
+    scores = learning_model.get("hypothesis_scores") if isinstance(learning_model.get("hypothesis_scores"), dict) else {}
+    primary = learning_model.get("primary_hypothesis") or profile.get("primary_hypothesis")
     hypothesis = public_enum_text(
-        review.get("barrier") or profile.get("main_hypothesis") or profile.get("main_pattern")
+        review.get("barrier") or primary or profile.get("main_hypothesis") or profile.get("main_pattern")
         or _top_signal(model.get("recurring_barriers"), "барьер уточняется")
     )
+    if primary and float(scores.get(primary) or 0) >= .5:
+        competitors = sorted(
+            (key for key in scores if key != primary and float(scores.get(key) or 0) > 0),
+            key=lambda key: float(scores.get(key) or 0), reverse=True,
+        )
+        hypothesis = f"Сейчас больше данных за {public_enum_text(primary)}"
+        if competitors:
+            hypothesis += f". Ещё 1–2 попытки помогут отличить это от варианта «{public_enum_text(competitors[0])}»"
     helped = _top_signal(model.get("helpful_interventions"), "пока проверяем")
     failed = _top_signal(model.get("unhelpful_interventions"), "пока нет устойчивого отрицательного сигнала")
     feedback_skill = _skill_label(str(feedback.get("skill_id") or ""), "проверенный навык")
+    if feedback.get("state_effect") == "positive" and feedback.get("task_effect") == "none":
+        helped = f"Состояние — «{feedback_skill}» помог снизить напряжение"
+        failed = "Задача — навык пока не помог продолжить целевое действие"
     if feedback.get("completed") is True and str(feedback.get("helpfulness") or "") in {"helped", "some"}:
-        helped = f"START — «{feedback_skill}» помог начать"
+        if not (feedback.get("state_effect") == "positive" and feedback.get("task_effect") == "none"):
+            helped = f"START — «{feedback_skill}» помог начать"
         if feedback.get("continued_after_skill") is False:
-            failed = "STAY — после старта продолжить не удалось; навык входа не обесцениваем"
+            failed = ("Задача — навык пока не помог продолжить целевое действие"
+                      if feedback.get("task_effect") == "none" else
+                      "STAY — после старта продолжить не удалось; навык входа не обесцениваем")
         elif feedback.get("continued_after_skill") is True:
             helped += "; STAY — получилось продолжить"
     focus = str(review.get("function") or "")
@@ -9679,12 +9776,21 @@ async def day_close_metrics_text(u: Dict[str, Any], review_override: Optional[Di
     review = dict(review_override or day_review_profile(profile))
     attempts = max(counts["attempts_today"], int((profile.get("personal_working_model") or {}).get("evidence_count") or 0) if isinstance(profile.get("personal_working_model"), dict) else 0)
     profile_card = day1_profile_card_text(u, profile, attempts)
-    focus = DAY_REVIEW_FUNCTION_LABELS.get(str(review.get("function") or ""), "узел ещё уточняется")
+    functional_state = _functional_state_with_review(profile, review)
+    focus = DAY_REVIEW_FUNCTION_LABELS.get(
+        str(functional_state.primary_problem or "").lower(), "узел ещё уточняется",
+    )
     state = str(review.get("state") or "не отмечено")
     sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
     skill = dict(SKILLS_DB.get(sid) or {})
     skill.setdefault("skill_id", sid)
     learning = daily_learning_text(skill)
+    history = learning_history(profile.get("learning_model") if isinstance(profile.get("learning_model"), dict) else {})
+    milestone = milestone_summary(
+        int(u.get("day") or 1), history,
+        {sid: _skill_label(sid) for sid in {item.skill_id for item in history}},
+    )
+    milestone_block = f"\n\n🧭 Накопительный вывод\n{milestone}" if milestone else ""
     return (
         f"{trainer_style_line(u.get('trainer_key') or 'marsha', 'close')}\n\n"
         "🌙 Предварительное заключение за день\n\n"
@@ -9704,6 +9810,7 @@ async def day_close_metrics_text(u: Dict[str, Any], review_override: Optional[Di
         "Статусы навыков:\n"
         f"{skill_map_lines(skill_map, 3)}\n\n"
         "Завтра проверим следующий тест из карты. Один повтор уточнит вывод лучше, чем ещё один общий совет."
+        f"{milestone_block}"
     )
 
 
@@ -11343,6 +11450,11 @@ PUBLIC_ENUM_LABELS = {
     "scroll_autopilot": "автоматически ухожу в быстрые стимулы",
     "attention_escape": "переключаюсь с задачи",
     "fear_of_error": "страх ошибки",
+    "fear_of_failure": "страх ошибки",
+    "unclear_next_step": "непонятен следующий шаг",
+    "low_energy": "не хватает сил",
+    "fast_reward_avoidance": "задаче не хватает быстрой отдачи",
+    "distraction": "отвлечение перехватывает внимание",
     "overload": "перегруз",
     "too_many_options": "слишком много вариантов",
     "low_reward": "не вижу смысла",
@@ -11443,6 +11555,22 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
     if not isinstance(comp, dict):
         comp = {}
     correction = clamp_str(" ".join(correction.split()), 400)
+    from core.learning_engine import correction_intent
+    intent = correction_intent(correction)
+    if intent == "confirm":
+        comp["conclusion_confirmed"] = True
+        comp["conclusion_confirmed_at"] = datetime.now(timezone.utc).isoformat()
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        set_legacy_stage(u, "confirm_analysis")
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Отлично, текущий вывод подтверждён. Ничего в карте не меняю.",
+                                   kb_analysis_confirm, "confirm_analysis")
+        return
+    if intent == "reject":
+        set_legacy_stage(u, "awaiting_conclusion_correction")
+        await save_user(u, DB_PATH)
+        await m.answer("Что именно стоит изменить? Одной короткой фразой.")
+        return
     if not conclusion_correction_is_actionable(correction):
         set_legacy_stage(u, "awaiting_conclusion_correction")
         await save_user(u, DB_PATH)
@@ -11471,6 +11599,21 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
     comp["analysis_id"] = comp.get("analysis_id") or f"analysis_{uuid.uuid4().hex[:12]}"
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     set_legacy_stage(u, "confirm_analysis")
+    if u.get("user_id"):
+        raw_profile = u.get("profile_json")
+        if isinstance(raw_profile, str):
+            try:
+                raw_profile = json.loads(raw_profile or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw_profile = {}
+        profile = dict(raw_profile) if isinstance(raw_profile, dict) else {}
+        learning_model = dict(profile.get("learning_model") or {})
+        scores = update_hypothesis_scores(learning_model.get("hypothesis_scores") or {}, [correction])
+        learning_model["hypothesis_scores"] = scores
+        learning_model["primary_hypothesis"] = primary_hypothesis(scores)
+        profile.update({"learning_model": learning_model, "hypothesis_scores": scores,
+                        "primary_hypothesis": learning_model.get("primary_hypothesis")})
+        u["profile_json"] = profile
     await save_user(u, DB_PATH)
     await answer_with_keyboard(
         m, u,

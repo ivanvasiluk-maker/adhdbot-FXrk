@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, MutableMapping
 
 from core.product_config import FREE_BETA_ACCESS
+from core.learning_engine import correction_intent
 
 
 class DialogState(str, Enum):
@@ -136,6 +137,13 @@ def route_user_input(session: MutableMapping[str, Any], content: str, *, kind: s
     state = _state(session)
     content = content.strip()
     if state == DialogState.CORRECTION_INPUT:
+        intent = correction_intent(content)
+        if intent == "confirm":
+            session["conclusion_confirmed"] = True
+            session["state"] = DialogState.DAY1_SUMMARY.value
+            return _response("Отлично, текущий вывод подтверждён. Ничего в карте не меняю.", _summary_buttons())
+        if intent in {"reject", "unclear"}:
+            return _response("Что именно стоит изменить? Одной короткой фразой.")
         session.setdefault("corrections", []).append({"kind": kind, "text": content})
         session.setdefault("case_facts", []).append(f"Поправка пользователя: {content}")
         session["confidence"] = min(0.95, float(session.get("confidence", .25)) + .1)

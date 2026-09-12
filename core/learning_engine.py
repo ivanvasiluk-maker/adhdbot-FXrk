@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Iterable, Literal, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from core.skill_schema import Skill
 
@@ -13,6 +13,8 @@ ExperimentResult = Literal["STRONG_SUCCESS", "WEAK_SUCCESS", "EXECUTED_ONLY", "F
 TargetFunction = Literal["START", "STAY", "RETURN", "EMOTION_REGULATION"]
 SubjectiveEffect = Literal["helped", "a_little", "did_not_help", "unknown"]
 AfterAction = Literal["continued_target_task", "stopped_after_step", "did_something_else", "unknown"]
+NodeStatus = Literal["green", "yellow", "red"]
+Effect = Literal["positive", "none", "negative", "unknown"]
 MasteryEventType = Literal[
     "first_use", "success", "independent_use", "difficulty_up", "transfer", "mastered", "regression",
 ]
@@ -83,6 +85,13 @@ class ExperimentEvidence:
     subjective_effect: SubjectiveEffect | None = None
     after_action: AfterAction | None = None
     target_function: TargetFunction = "START"
+    # Added as optional, JSON-safe fields so old profile rows remain readable.
+    state_effect: Effect | None = None
+    task_effect: Effect | None = None
+    returned_after_distraction: bool | None = None
+    hypothesis_id: str | None = None
+    user_feedback: str | None = None
+    explicitly_changed: bool = False
 
     @property
     def result(self) -> ExperimentResult:
@@ -91,6 +100,35 @@ class ExperimentEvidence:
             subjective_effect=self.subjective_effect,
             after_action=self.after_action,
         )
+
+    @property
+    def normalized_state_effect(self) -> Effect:
+        if self.state_effect:
+            return self.state_effect
+        return "positive" if self.subjective_effect in {"helped", "a_little"} else \
+            "negative" if self.subjective_effect == "did_not_help" else "unknown"
+
+    @property
+    def normalized_task_effect(self) -> Effect:
+        if self.task_effect:
+            return self.task_effect
+        if self.returned_after_distraction is not None:
+            return "positive" if self.returned_after_distraction else "none"
+        return "positive" if self.after_action == "continued_target_task" else \
+            "none" if self.after_action in {"stopped_after_step", "did_something_else"} else "unknown"
+
+
+@dataclass(frozen=True)
+class FunctionalState:
+    """One evidence-derived source for map, report and recommendation routing."""
+
+    start: NodeStatus
+    stay: NodeStatus
+    return_: NodeStatus
+    primary_problem: TargetFunction | None
+
+    def status(self, node: TargetFunction) -> NodeStatus:
+        return {"START": self.start, "STAY": self.stay, "RETURN": self.return_}.get(node, "yellow")
 
 
 @dataclass(frozen=True)
@@ -165,17 +203,66 @@ def skill_effectiveness(history: Iterable[ExperimentEvidence], skill_id: str) ->
 def recommended_target_function(history: Sequence[ExperimentEvidence], *, wants_to_return: bool = False) -> TargetFunction:
     if wants_to_return:
         return "RETURN"
-    start_successes = sum(item.target_function == "START" and item.result == "STRONG_SUCCESS" for item in history)
-    lost_after_start = sum(
-        item.target_function == "START" and item.completed is True
-        and item.after_action in {"stopped_after_step", "did_something_else"}
-        for item in history
-    )
-    return "STAY" if start_successes >= 1 and lost_after_start >= 2 else "START"
+    state = derive_functional_state(history)
+    return state.primary_problem or "START"
+
+
+def _node_status(successes: int, failures: int) -> NodeStatus:
+    if successes and failures:
+        return "yellow"
+    if failures:
+        return "red"
+    if successes:
+        return "green"
+    return "yellow"
+
+
+def derive_functional_state(history: Sequence[ExperimentEvidence]) -> FunctionalState:
+    """Derive START/STAY/RETURN solely from observable task outcomes.
+
+    A same-day negative RETURN observation can therefore never be rendered green.
+    The sequence is causal: completing a step confirms START, while what happened
+    afterwards supplies separate STAY evidence.
+    """
+    counts = {node: [0, 0] for node in ("START", "STAY", "RETURN")}
+    for item in history:
+        if item.target_function == "RETURN":
+            effect = item.normalized_task_effect
+            counts["RETURN"][0 if effect == "positive" else 1] += effect in {"positive", "none", "negative"}
+            continue
+        if item.completed is True:
+            counts["START"][0] += 1
+        elif item.completed is False:
+            counts["START"][1] += 1
+        if item.completed is True and item.normalized_task_effect in {"positive", "none", "negative"}:
+            counts["STAY"][0 if item.normalized_task_effect == "positive" else 1] += 1
+    statuses = {node: _node_status(*counts[node]) for node in counts}
+    # Prefer the earliest confirmed break in the chain; ties use evidence volume.
+    red = [node for node in ("START", "STAY", "RETURN") if statuses[node] == "red"]
+    primary = max(red, key=lambda node: sum(counts[node])) if red else None
+    # Mixed evidence still needs routing: repeated failures at a later link are
+    # more useful than retraining an already-green earlier link.
+    if primary is None:
+        mixed_failures = [node for node in ("START", "STAY", "RETURN")
+                          if counts[node][1] >= 2 and statuses[node] == "yellow"]
+        primary = max(mixed_failures, key=lambda node: counts[node][1]) if mixed_failures else None
+    return FunctionalState(statuses["START"], statuses["STAY"], statuses["RETURN"], primary)  # type: ignore[arg-type]
 
 
 def skill_cooldown_remaining(history: Sequence[ExperimentEvidence], skill_id: str) -> int:
     """Return how many *other* experiments must happen before this skill may repeat."""
+    consecutive_task_failures = 0
+    for item in reversed(history):
+        if item.skill_id == skill_id and item.completed is True and item.normalized_task_effect in {"none", "negative"}:
+            consecutive_task_failures += 1
+        elif item.skill_id == skill_id:
+            break
+    last_index = max((index for index, item in enumerate(history) if item.skill_id == skill_id), default=-1)
+    other_since = len(history) - last_index - 1
+    if last_index >= 0 and history[last_index].explicitly_changed:
+        return max(0, 3 - other_since)
+    if consecutive_task_failures >= 2:
+        return max(0, 4 - other_since)
     for offset, item in enumerate(reversed(history)):
         if item.skill_id != skill_id:
             continue
@@ -204,6 +291,160 @@ def choose_next_skill(
         previous = history[-1].skill_id if history else None
         eligible = [sid for sid in available_skills if sid != previous] or list(available_skills)
     return eligible[0]
+
+
+def update_hypothesis_scores(scores: Mapping[str, float], observations: Sequence[str]) -> dict[str, float]:
+    """Small deterministic evidence updater; newer contradictory signals decay old leaders."""
+    aliases = {
+        "fear_of_failure": ("страх", "ошиб", "оцен"), "unclear_next_step": ("непонят", "неяс", "следующ"),
+        "low_energy": ("нет сил", "устал", "энерг"), "overload": ("перегруз", "слишком много"),
+        "fast_reward_avoidance": ("скуч", "быстр", "отдач"), "distraction": ("телефон", "youtube", "отвл"),
+    }
+    result = {key: min(1.0, max(0.0, float(value))) for key, value in scores.items()}
+    for observation in observations:
+        low = observation.lower()
+        matched = {key for key, tokens in aliases.items() if any(token in low for token in tokens)}
+        for key in aliases:
+            current = result.get(key, 0.0)
+            result[key] = min(1.0, current + .25) if key in matched else max(0.0, current - .05)
+    return result
+
+
+def primary_hypothesis(scores: Mapping[str, float]) -> str | None:
+    viable = [(float(score), key) for key, score in scores.items() if float(score) > 0]
+    return max(viable)[1] if viable else None
+
+
+def experiment_allowance(main_count: int, voluntary_count: int = 0, *, developer_mode: bool = False) -> str:
+    if developer_mode:
+        return "main"
+    if main_count < 2:
+        return "main"
+    if voluntary_count < 1:
+        return "voluntary"
+    return "closed"
+
+
+def correction_intent(value: str) -> Literal["confirm", "reject", "correct", "unclear"]:
+    """Classify conclusion feedback before mutating the persisted user model."""
+    text = " ".join(str(value or "").lower().replace("ё", "е").split()).strip(" .!?")
+    confirms = {"все ок", "да", "точно", "верно", "в точку", "норм", "согласен", "именно так"}
+    rejects = {"нет", "не так", "не попал", "неверно", "все не так", "не то"}
+    if text in confirms:
+        return "confirm"
+    if text in rejects:
+        return "reject"
+    correction_markers = ("а не", "дело не", "вообще не", "на самом деле", "скорее", "проблема в")
+    if len(text) >= 8 and any(marker in text for marker in correction_markers):
+        return "correct"
+    return "unclear"
+
+
+def milestone_summary(day: int, history: Sequence[ExperimentEvidence], skill_names: Mapping[str, str] | None = None) -> str | None:
+    if day not in {3, 7} or not history:
+        return None
+    state = derive_functional_state(history)
+    names = skill_names or {}
+    successful = next((names.get(e.skill_id, e.skill_id) for e in reversed(history) if e.result == "STRONG_SUCCESS"), None)
+    unsupported = next((names.get(e.skill_id, e.skill_id) for e in reversed(history) if e.result in {"EXECUTED_ONLY", "FAILED"}), None)
+    facts = [f"Главный текущий узел — {state.primary_problem}." if state.primary_problem else "Цепочка пока даёт смешанные данные."]
+    if successful:
+        facts.append(f"Подтверждённый эффект на задачу дал «{successful}».")
+    if unsupported:
+        facts.append(f"«{unsupported}» пока не подтвердил эффект на задачу.")
+    lines = "\n".join(f"{i}. {fact}" for i, fact in enumerate(facts, 1))
+    next_node = state.primary_problem or "START"
+    return f"За последние дни мы узнали:\n{lines}\n\nСледующее, что проверяем:\n— {next_node}."
+
+
+def evidence_from_dict(value: Mapping[str, Any]) -> ExperimentEvidence:
+    """Read both new evidence and legacy action-event metadata safely."""
+    completed = value.get("completed")
+    after_action = str(value.get("after_action") or "unknown")
+    target = str(value.get("target_function") or "START").upper()
+    return ExperimentEvidence(
+        skill_id=str(value.get("skill_id") or "unknown"),
+        completed=completed if isinstance(completed, bool) else None,
+        subjective_effect=str(value.get("subjective_effect") or "unknown"),  # type: ignore[arg-type]
+        after_action=after_action if after_action in {"continued_target_task", "stopped_after_step", "did_something_else", "unknown"} else "unknown",  # type: ignore[arg-type]
+        target_function=target if target in {"START", "STAY", "RETURN", "EMOTION_REGULATION"} else "START",  # type: ignore[arg-type]
+        state_effect=value.get("state_effect") if value.get("state_effect") in {"positive", "none", "negative", "unknown"} else None,
+        task_effect=value.get("task_effect") if value.get("task_effect") in {"positive", "none", "negative", "unknown"} else None,
+        returned_after_distraction=value.get("returned_after_distraction") if isinstance(value.get("returned_after_distraction"), bool) else None,
+        hypothesis_id=str(value.get("hypothesis_id") or "") or None,
+        user_feedback=str(value.get("user_feedback") or "") or None,
+        explicitly_changed=bool(value.get("explicitly_changed")),
+    )
+
+
+def learning_history(model: Mapping[str, Any] | None) -> list[ExperimentEvidence]:
+    raw = (model or {}).get("experiments") or []
+    return [evidence_from_dict(item) for item in raw if isinstance(item, Mapping)]
+
+
+def update_learning_model(
+    model: Mapping[str, Any] | None, evidence: ExperimentEvidence, *, observations: Sequence[str] = (), day: str = "",
+) -> dict[str, Any]:
+    """Persistable reducer for outcomes, cooldowns, hypotheses and daily state."""
+    current = dict(model or {})
+    raw_history = [dict(item) for item in current.get("experiments") or [] if isinstance(item, Mapping)]
+    item = {
+        "skill_id": evidence.skill_id, "completed": evidence.completed,
+        "subjective_effect": evidence.subjective_effect or "unknown", "after_action": evidence.after_action or "unknown",
+        "target_function": evidence.target_function, "state_effect": evidence.normalized_state_effect,
+        "task_effect": evidence.normalized_task_effect, "returned_after_distraction": evidence.returned_after_distraction,
+        "hypothesis_id": evidence.hypothesis_id, "user_feedback": evidence.user_feedback,
+        "explicitly_changed": evidence.explicitly_changed,
+    }
+    raw_history.append(item)
+    raw_history = raw_history[-100:]
+    history = [evidence_from_dict(row) for row in raw_history]
+    state = derive_functional_state(history)
+    sequence = int(current.get("experiment_sequence") or 0) + 1
+    skill_states = {key: dict(value) for key, value in (current.get("skill_states") or {}).items()
+                    if isinstance(value, Mapping)}
+    stats = skill_states.setdefault(evidence.skill_id, {})
+    stats["attempts"] = int(stats.get("attempts") or 0) + 1
+    stats["successful_state_effects"] = int(stats.get("successful_state_effects") or 0) + (evidence.normalized_state_effect == "positive")
+    stats["successful_task_effects"] = int(stats.get("successful_task_effects") or 0) + (evidence.normalized_task_effect == "positive")
+    if evidence.completed is True and evidence.normalized_task_effect in {"none", "negative"}:
+        stats["consecutive_failures"] = int(stats.get("consecutive_failures") or 0) + 1
+    else:
+        stats["consecutive_failures"] = 0
+    if int(stats["consecutive_failures"]) >= 2:
+        stats["cooldown_until"] = sequence + 4
+    if evidence.explicitly_changed:
+        stats["cooldown_until"] = max(int(stats.get("cooldown_until") or 0), sequence + 3)
+    scores = update_hypothesis_scores(current.get("hypothesis_scores") or {}, observations)
+    daily_states = {key: value for key, value in (current.get("daily_states") or {}).items()}
+    if day:
+        daily_states[day] = {
+            "START": state.start, "STAY": state.stay, "RETURN": state.return_,
+            "primary_problem": state.primary_problem,
+            "experiment_count": sum(1 for row in raw_history if row.get("day") == day) + 1,
+        }
+        item["day"] = day
+    return {
+        **current, "version": 1, "experiments": raw_history, "experiment_sequence": sequence,
+        "skill_states": skill_states, "hypothesis_scores": scores,
+        "primary_hypothesis": primary_hypothesis(scores), "daily_states": daily_states,
+        "functional_state": {"START": state.start, "STAY": state.stay, "RETURN": state.return_,
+                             "primary_problem": state.primary_problem},
+    }
+
+
+def skill_blocked_in_model(model: Mapping[str, Any] | None, skill_id: str) -> bool:
+    current = model or {}
+    state = (current.get("skill_states") or {}).get(skill_id) or {}
+    return int(state.get("cooldown_until") or 0) > int(current.get("experiment_sequence") or 0)
+
+
+def progressive_node_insight(node: str, failures: int) -> str:
+    if failures >= 3:
+        return f"У нас уже достаточно данных считать {node} главным текущим узлом."
+    if failures == 2:
+        return f"Это повторяется второй раз: {node} остаётся слабым звеном."
+    return f"Первый сигнал: сейчас трудность возникает в {node}."
 
 
 def initial_mastery(user_id: int, skill_id: str, *, difficulty: int = 1) -> SkillMasteryState:
