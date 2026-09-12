@@ -20,7 +20,8 @@
     {"commit": "54a3902d5e5f8a2d8327033144eb0a1663f47e8c", "subject": "Test recovered audience broadcasts"},
     {"commit": "887a274318ff1379ecafa8c7cb755badf97ee90f", "subject": "Harden release experiment ownership and UI routing"},
     {"commit": "5a5711f3fc521d8b7d83eca5cec5e76db250ec48", "subject": "PATCH-17: pin additional published commit exceptions"},
-    {"commit": "5c199814394168f06a85f76e3a8576bddad1163b", "subject": "Wire SKILLER learning model into production flows"}
+    {"commit": "5c199814394168f06a85f76e3a8576bddad1163b", "subject": "Wire SKILLER learning model into production flows"},
+    {"commit": "4c3cd4ef73d1f7ec1b94e580f2ad51ba57ccc901", "subject": "Pin published commit exceptions for regression gate"}
   ],
   "phases": [
     {"id": 1, "patches": ["PATCH-00", "PATCH-01", "PATCH-02", "PATCH-03"]},
