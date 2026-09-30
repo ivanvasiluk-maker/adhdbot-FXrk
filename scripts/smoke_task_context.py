@@ -29,8 +29,8 @@ async def main() -> None:
         first_task_id = await save_current_task(u, db_path, title="делать бота")
         assert u["current_task_title"] == "делать бота"
         skill_text = bot.build_current_skill_text({"name": "Открыть задачу", "steps": ["Открой место задачи"]}, u=u)
-        assert skill_text.count("🧩 Навык:") == 1
-        assert skill_text.count("Минимум:") == 1
+        assert skill_text.count("🧩 ") == 1
+        assert skill_text.count("Если трудно, достаточно этого:") == 1
         assert "Открой «делать бота»" in skill_text
         assert "сегодняшняя задача" not in skill_text
         assert "Открой место задачи" not in skill_text
@@ -70,3 +70,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

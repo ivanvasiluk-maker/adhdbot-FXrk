@@ -78,20 +78,18 @@ def update_working_model(
 def render_working_model(model: Mapping[str, Any]) -> str:
     count = int(model.get("evidence_count") or 0)
     if not count:
-        return "Пока недостаточно проверенных попыток, чтобы делать выводы о твоих рабочих паттернах."
-    prefix = "Сегодня появилась гипотеза" if count == 1 else "Кажется, это повторяется" if count <= 3 else "Похоже, это один из твоих рабочих паттернов"
-    barrier = _top(model.get("recurring_barriers"), "барьер пока уточняется")
-    helped = _top(model.get("helpful_interventions"), "полезный способ пока проверяем")
-    unhelpful = _top(model.get("unhelpful_interventions"), "пока нет устойчиво бесполезного способа")
+        return "Пока нет результатов попыток. После практики здесь появится то, что вам помогало."
+    successes = _counts(model.get("helpful_interventions"))
+    failures = _counts(model.get("unhelpful_interventions"))
+    helped = [f"— {name}: помогло в {value} из {value + failures.get(name, 0)} попыток"
+              for name, value in sorted(successes.items(), key=lambda item: -item[1])[:3]]
     correction = " ".join(str(model.get("explicit_user_correction") or "").split())
-    correction_text = f"\nТвоё уточнение: {correction}.\n" if correction else ""
     return (
-        "Вот что я пока понял о тебе.\n\n"
-        f"{prefix}: чаще встречается «{barrier}».\n"
-        f"Помогало: {helped}.\n"
-        f"Пока не помогало: {unhelpful}.\n\n"
-        f"{correction_text}"
-        "Это рабочая версия, а не диагноз: её можно исправить следующими результатами."
+        "Что мы узнали из ваших попыток\n\n"
+        f"Чаще мешало: {_top(model.get('recurring_barriers'), 'пока неясно')}.\n\n"
+        "Что помогало\n" + ("\n".join(helped) if helped else "Пока нет подтверждённого способа.") +
+        (f"\n\nВаше уточнение: «{correction}»." if correction else "") +
+        "\n\nПока неясно, повторится ли результат в другой ситуации. Вы можете исправить этот вывод."
     )
 
 
@@ -112,3 +110,4 @@ def _confidence(count: int) -> str:
 def _top(value: Any, fallback: str) -> str:
     values = _counts(value)
     return max(values, key=lambda key: (values[key], key)) if values else fallback
+

@@ -70,8 +70,8 @@ def test_rendered_skill_card_has_one_title_and_one_minimum():
     u = default_user(1); u["current_core_skill_id"] = "open_without_timer"
     skill = {"skill_id": "open_without_timer", "name": "Открыть без таймера", "steps": ["Открой файл"], "minimum": "10 секунд"}
     text = format_skill_card(u, skill, "задача")
-    assert text.count("🧩 Навык:") == 1
-    assert text.count("Минимум:") == 1
+    assert text.count("🧩 Открыть без таймера") == 1
+    assert text.count("Если трудно, достаточно этого:") == 1
     assert "📚 Мини-урок" not in text
 
 
@@ -584,10 +584,12 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     assert "👤 Живой разбор карты" not in keyboard_text
     assert "👥 Хочу в группу — €240" in keyboard_text
     assert f"👤 Личная терапия — €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in keyboard_text
-    assert "Продолжить бесплатный тест" in keyboard_text
+    assert "Продолжить бесплатно" in keyboard_text
+    callbacks = [button.callback_data for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row]
+    assert callbacks.count(bot.OFFER_CALLBACKS["stay_free"]) == 1
     assert "🧭 План на следующие 7 дней" in keyboard_text
     assert "📖 Почему такой вывод" in keyboard_text
-    assert "Другие форматы поддержки" not in keyboard_text
+    assert "Другие форматы поддержки" in keyboard_text
     assert "Оплатить" not in keyboard_text
 
     map_text = render_short_user_map({
@@ -1427,3 +1429,4 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
 
 if __name__ == "__main__":
     run()
+

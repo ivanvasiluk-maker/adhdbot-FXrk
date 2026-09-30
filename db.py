@@ -1317,6 +1317,8 @@ USER_FIELDS = [
     "active_attempt",
     "active_flow",
     "last_safe_screen",
+    "dialogue_context",
+    "address_form",
     "last_notification_context",
     "day_intro_sent",
     "crisis_redirected",
@@ -1533,6 +1535,8 @@ def default_user(uid: int) -> Dict[str, Any]:
         "day_skill_progress": None,
         "active_flow": None,
         "last_safe_screen": None,
+        "dialogue_context": None,
+        "address_form": "neutral",
         "last_notification_context": None,
         "reminder_mode": "evening_only",
         "unanswered_proactive_count": 0,
@@ -2536,6 +2540,8 @@ EXTRA_USER_COLS = {
     "active_attempt": "TEXT",
     "active_flow": "TEXT",
     "last_safe_screen": "TEXT",
+    "dialogue_context": "TEXT",
+    "address_form": "TEXT DEFAULT 'neutral'",
     "last_notification_context": "TEXT",
     "day_intro_sent": "INTEGER DEFAULT 0",
     "crisis_redirected": "INTEGER DEFAULT 0",
@@ -4490,3 +4496,4 @@ def should_ping(u: dict, hours: int) -> bool:
     except (TypeError, ValueError):
         last = 0.0
     return time.time() - last > hours * 3600
+

@@ -11,7 +11,7 @@ class Patch37BetaFeedbackAndOffersTests(unittest.TestCase):
             "презентация", "distracted", "Одна вкладка", "оставить одну вкладку",
             True, False, "not_helped", False,
         ))
-        self.assertEqual(result.memory_anchor, "Этот навык пока не сохраняем. Проверим другой механизм")
+        self.assertEqual(result.memory_anchor, "Сохраним результат попытки. В следующий раз можно выбрать другой способ")
         self.assertNotIn("начни с действия", result.memory_anchor)
 
     def test_partial_helped_and_continued_is_not_failure(self):
@@ -55,3 +55,4 @@ class Patch37BetaFeedbackAndOffersTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -21,7 +21,8 @@ class Patch35FiveBetaFixesTests(unittest.IsolatedAsyncioTestCase):
             bot, "get_user_profile", new=AsyncMock(return_value={})
         ), patch.object(bot, "build_skill_map_data", new=AsyncMock(return_value={"skills": []})):
             text = await bot.day_close_metrics_text(user, review)
-        self.assertIn("START — вход в задачу", text)
+        self.assertIn("труднее всего было: начать", text)
+        self.assertNotIn("STAY", text)
         self.assertIn("скука или отсутствие быстрой отдачи", text)
         self.assertIn("спокойно или устойчиво", text)
         self.assertNotIn("Состояние: не отмечено", text)
@@ -56,3 +57,4 @@ class Patch35FiveBetaFixesTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

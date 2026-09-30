@@ -2,6 +2,8 @@
 # FLOWS.PY — Основные логические потоки
 # ============================================================
 
+from core.dialogue_ux import DIALOGUE_RULES
+
 import json
 import time
 import asyncio
@@ -398,7 +400,7 @@ async def ai_crisis_help(trainer_key: str, bucket: str, user_text: str, client=N
 
     allowed_ids = list(SKILLS_DB.keys())
     skill_catalog = [f"{sid}: {SKILLS_DB[sid].get('name','')}" for sid in allowed_ids]
-    system = (
+    system = DIALOGUE_RULES + "\n" + (
         "Ты — тренер самопомощи с опорой на CBT/DBT-навыки в формате короткого кризисного ответа.\n"
         "Контекст: клиент в остром перегрузе из-за прокрастинации. Нужна помощь 'здесь и сейчас'.\n"
         "Твоя задача: кратко поддержать, дать понятный шаг и выбрать навык из базы навыков.\n"
@@ -1556,3 +1558,4 @@ async def send_progress_report(m: Message, u: dict, db_path: str):
     )
     await m.answer(msg)
     await log_event(uid, u.get("stage",""), "progress_view", {"done": done, "return": ret, "crisis": crisis}, db_path)
+

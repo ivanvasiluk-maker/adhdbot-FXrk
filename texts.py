@@ -2,6 +2,8 @@
 # TEXTS.PY — Все текстовые константы и клавиатуры
 # ============================================================
 
+from core.dialogue_ux import concrete_step, DIALOGUE_RULES
+
 import json
 import math
 import random
@@ -419,37 +421,12 @@ def human_task_object(user: dict | None = None) -> str:
 
 
 def contextualize_task_text(text: str, user: dict | None = None) -> str:
+    """Substitute complete instructions, never Russian noun fragments."""
     user = user or {}
+    task = human_task_name(user, "")
     result = str(text or "")
-    task = human_task_name(user)
-    obj = human_task_object(user)
-    low_task = task.lower()
-    if task == "важное дело, которое ты сейчас откладываешь":
-        open_phrase = "Открой важное дело, которое ты сейчас откладываешь"
-        bad_line = "Напиши одну плохую строку для важного дела"
-    elif "презентац" in low_task or "презентац" in obj.lower():
-        open_phrase = f"Открой {obj} для клиента" if "клиент" in low_task and "клиент" not in obj.lower() else f"Открой {obj}"
-        genitive_obj = "презентации" if obj == "презентацию" else obj
-        bad_line = f"Напиши одну плохую строку для {genitive_obj}"
-    else:
-        open_phrase = f"Открой «{task}»" if obj == task else f"Открой {obj}"
-        bad_line = f"Напиши одну плохую строку для «{task}»"
-    replacements = {
-        r"Открой место, где лежит задача": open_phrase,
-        r"Открой место задачи": open_phrase,
-        r"открыть место задачи": open_phrase[0].lower() + open_phrase[1:],
-        r"место задачи": obj,
-        r"Открыть задачу": open_phrase,
-        r"открыть задачу": open_phrase[0].lower() + open_phrase[1:],
-        r"в задачу": f"в «{task}»",
-        r"задачу": task,
-        r"задачи": task,
-        r"выбранной задаче": task,
-    }
-    for pattern, repl in replacements.items():
-        result = re.sub(pattern, repl, result, flags=re.IGNORECASE)
-    if re.search(r"плох(ую|ая|ой)?.*строк", result, flags=re.IGNORECASE) and "для" not in result.lower():
-        result = bad_line
+    if any(x in result.casefold() for x in ("открой место", "открой файл", "открыть задачу", "открыть место", "открой задачу")):
+        return concrete_step(task)
     return result
 
 
@@ -516,13 +493,10 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
         ),
     }.get((user or {}).get("trainer_key") or "marsha")
     return (
-        f"{trainer_voice}\n\n"
-        f"🧩 Навык: {skill_name}\n\n"
-        f"{why_short}\n\n"
-        "Сделай:\n"
+        f"🧩 {skill_name}\n\n"
         f"{steps_text}\n\n"
-        "Минимум:\n"
-        f"{minimum_action}"
+        f"Если трудно, достаточно этого: {minimum_action}\n\n"
+        "Что получилось после попытки?"
     )
 
 
@@ -1102,26 +1076,25 @@ def soft_checkin_text(variant: int = 1, anxious: bool = False) -> str:
     """Soft 6-hour inactivity check-in. Three variants per spec section 4.2."""
     if anxious:
         return (
-            "Не нужно объяснять, почему ты пропал.\n\n"
+            "Можно продолжить с того места, где остановились.\n\n"
             "Просто выбери:"
         )
     if variant == 2:
         return (
-            "Проверяю не дисциплину, а состояние.\n\n"
-            "Тебе сейчас нужен:"
+            "Коротко сверимся.\n\n"
+            "Какая помощь сейчас нужна?"
         )
     return (
-        "Я не видел тебя несколько часов.\n"
-        "Это не значит, что ты сорвался.\n\n"
+        "Сохранил текущий шаг. Можно продолжить или выбрать другое дело.\n\n"
         "Что сейчас больше похоже на правду?"
     )
 
 
 def reactivation_text(count: int) -> str:
     lines = {
-        1: "Ты не провалился. Просто выпал из цикла. Вернёмся с 30 секунд?",
-        2: "Не надо догонять. Не надо начинать заново. Один маленький шаг — и ты снова внутри.",
-        3: "Я больше не буду дёргать. Маршрут сохранён. Вернёшься — продолжим с маленького шага.",
+        1: "Хотите вернуться к вашему делу? Можно начать с одного действия.",
+        2: "Ваше место сохранено. Продолжить с прежнего шага или выбрать другое дело?",
+        3: "Можно вернуться, когда захотите. Напишите, если нужна помощь с одним небольшим шагом.",
     }
     return lines.get(max(1, min(int(count or 1), 3)), lines[3])
 
@@ -2566,7 +2539,7 @@ def growth_history_text(u: dict, profile: dict, weekly_counts: dict | None = Non
 # AI SYSTEM PROMPTS
 # ============================================================
 
-AI_ANALYSIS_SYSTEM_PROMPT = """
+AI_ANALYSIS_SYSTEM_PROMPT = DIALOGUE_RULES + "\n" + """
 Ты — AI-ассистент тренинга ADHD-навыков. Это НЕ психотерапия и НЕ медицинское заключение.
 
 Задача: дать короткий точный анализ поведения, без generic GPT-фраз и без мотивационной лекции.
@@ -2598,7 +2571,7 @@ AI_ANALYSIS_SYSTEM_PROMPT = """
 """
 
 def build_ai_system_prompt() -> str:
-    return (
+    return DIALOGUE_RULES + "\n" + (
         "Ты — ассистент тренинга навыков саморегуляции. Это НЕ терапия, НЕ медицинское заключение.\n"
         "Твоя задача: по короткому описанию определить рабочий bucket и дать краткий разбор.\n"
         "Выход строго JSON без текста вокруг.\n"
@@ -2612,3 +2585,4 @@ def build_ai_system_prompt() -> str:
         "}\n"
         "Не делай клинических выводов. Не говори про лечение. Без морали.\n"
     )
+

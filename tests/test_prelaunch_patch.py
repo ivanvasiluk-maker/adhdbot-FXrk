@@ -77,10 +77,10 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("🟢 Пока продолжить бесплатно", labels)
+        self.assertIn("🟢 Продолжить бесплатно", labels)
         self.assertFalse(any("€4.99/мес" in label for label in labels))
-        self.assertTrue(any("€20–24" in label for label in labels))
-        self.assertTrue(any("от €39" in label for label in labels))
+        self.assertIn("👥 Хочу в группу — €240", labels)
+        self.assertTrue(any(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in label for label in labels))
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
             bot, "ENABLE_PAID_PLAN", True,
@@ -164,7 +164,8 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Что вижу", text)
         self.assertIn("Что будем делать", text)
         self.assertIn("Что надо развивать", text)
-        self.assertIn("START → STAY → RETURN", text)
+        self.assertIn("начать, продолжить и вернуться", text)
+        self.assertNotIn("→ короткое облегчение", text)
         self.assertIn("Группа навыков", text)
         self.assertIn("€240", text)
         self.assertIn("Личная терапия", text)
@@ -288,3 +289,4 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

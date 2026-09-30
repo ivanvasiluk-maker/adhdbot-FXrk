@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import bot
+from core.dialogue_ux import BUTTON_LABELS, OTHER
 from db import get_user, get_user_profile, init_db, migrate_db, save_user
 from texts import (
     MAX_KEYBOARD_BUTTONS,
@@ -202,10 +203,10 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         not_my_msg = await send(uid, "🤷 Не моё")
-        assert "🧩 Навык:" in last_text(not_my_msg), last_text(not_my_msg)
+        assert "🧩 " in last_text(not_my_msg), last_text(not_my_msg)
         assert "Открыть без таймера" not in last_text(not_my_msg), last_text(not_my_msg)
-        assert last_text(not_my_msg).count("🧩 Навык:") == 1, last_text(not_my_msg)
-        assert last_text(not_my_msg).count("Минимум:") == 1, last_text(not_my_msg)
+        assert last_text(not_my_msg).count("🧩 ") == 1, last_text(not_my_msg)
+        assert last_text(not_my_msg).count("Если трудно, достаточно этого:") == 1, last_text(not_my_msg)
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_not_fit_reason") == "not_my_skill", profile
         assert profile.get("last_not_fit_skill"), profile
@@ -217,7 +218,7 @@ async def run() -> None:
             "Ещё одна попытка сегодня" in all_text(repeat_msg)
             or "следующий шаг" in last_text(repeat_msg).lower()
             or "старый экран" in last_text(repeat_msg).lower()
-            or "🧩 Навык:" in last_text(repeat_msg)
+            or "🧩 " in last_text(repeat_msg)
         ), last_text(repeat_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
@@ -252,8 +253,8 @@ async def run() -> None:
             "день уже закрыт, и минимум ты выполнил" in last_text(stale_repeat_msg).lower()
             or "день уже закрыт. это не отменяется" in last_text(stale_repeat_msg).lower()
         ), last_text(stale_repeat_msg)
-        assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "🟡 Не получилось", "🌙 Точно закрыть день"}
-        assert "🧩 Навык:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
+        assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Не получилось", "🌙 Точно закрыть день"}} | {OTHER}
+        assert "Если трудно, достаточно этого:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
         voluntary_done_msg = await send(uid, "✅ Сделал")
         assert "дополнительный шаг" in last_text(voluntary_done_msg).lower(), last_text(voluntary_done_msg)
         assert "день остаётся закрытым" in last_text(voluntary_done_msg).lower(), last_text(voluntary_done_msg)
@@ -265,7 +266,7 @@ async def run() -> None:
         assert (
             "минимум на сегодня уже выполнен" in last_text(stale_done_msg).lower()
             or "день уже закрыт" in last_text(stale_done_msg).lower()
-            or "🧩 Навык:" in last_text(stale_done_msg)
+            or "🧩 " in last_text(stale_done_msg)
         ), last_text(stale_done_msg)
         u = await get_user(uid, db_path)
         assert not u.get("name"), u.get("name")
@@ -277,7 +278,7 @@ async def run() -> None:
         await save_user(u, db_path)
         action_with_stuck_msg = await send(uid, "💪 Давай действие")
         assert "Я услышал" in last_text(action_with_stuck_msg), last_text(action_with_stuck_msg)
-        assert "🧩 Навык:" not in last_text(action_with_stuck_msg), last_text(action_with_stuck_msg)
+        assert "Если трудно, достаточно этого:" not in last_text(action_with_stuck_msg), last_text(action_with_stuck_msg)
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         training_map_msg = await send(uid, "🧭 Моя карта")
@@ -312,18 +313,18 @@ async def run() -> None:
         phone_text = last_text(phone_msg)
         assert "Телефон / YouTube / новости" in phone_text, phone_text
         assert "Убрать телефон вне руки" in phone_text, phone_text
-        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}
+        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}} | {OTHER}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
         assert "Получилось сделать?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
-        assert keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]) == {"Да", "Частично", "Нет"}
+        assert keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"Да", "Частично", "Нет"}} | {OTHER}
         help_prompt = await send(uid, "Да")
         assert "Насколько это помогло?" in last_text(help_prompt), last_text(help_prompt)
-        assert keyboard_texts(help_prompt.answers[-1]["reply_markup"]) == {"Помогло", "Немного", "Не помогло", "Стало хуже"}
+        assert keyboard_texts(help_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"Помогло", "Немного", "Не помогло", "Стало хуже"}} | {OTHER}
         next_prompt = await send(uid, "Не помогло")
         assert "Что произошло дальше?" in last_text(next_prompt), last_text(next_prompt)
         no_relief_msg = await send(uid, "Пока не знаю")
-        assert "записал" in all_text(no_relief_msg).lower() or "шаг" in all_text(no_relief_msg).lower(), all_text(no_relief_msg)
+        assert "Сохраним результат попытки" in all_text(no_relief_msg), all_text(no_relief_msg)
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_skill_effect") == "not_helped", profile
         assert "successful_skills" not in profile or not profile.get("successful_skills"), profile
@@ -345,7 +346,7 @@ async def run() -> None:
         describe_msg = await send(uid, "✍️ Опишу сам(а)")
         assert "опиши как есть" in last_text(describe_msg).lower(), last_text(describe_msg)
         reflected_msg = await send(uid, "Боюсь сделать плохо и стыдно")
-        assert "Главный узел" in last_text(reflected_msg), last_text(reflected_msg)
+        assert "Что было труднее" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Рабочая гипотеза" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Минимальный физический шаг" in last_text(reflected_msg), last_text(reflected_msg)
         assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(reflected_msg.answers[-1]["reply_markup"]))
@@ -355,7 +356,7 @@ async def run() -> None:
 
         repeat_stuck_msg = await send(uid, "😣 Не могу")
         assert "ещё меньше" in last_text(repeat_stuck_msg).lower(), last_text(repeat_stuck_msg)
-        assert keyboard_texts(repeat_stuck_msg.answers[-1]["reply_markup"]) == {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}
+        assert keyboard_texts(repeat_stuck_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}} | {OTHER}
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_not_fit_skill"), profile
         assert profile.get("last_not_fit_reason") in {"overwhelm", "shame", "phone", "energy", "not_my_skill"}, profile
@@ -392,7 +393,7 @@ async def run() -> None:
         assert {"Ещё один маленький шаг", "Продолжить задачу самому", "Закрыть день"}.issubset(success_buttons), success_buttons
 
         repeat1_msg = await send(uid, "Ещё один маленький шаг")
-        assert "следующ" in last_text(repeat1_msg).lower() or "🧩 Навык:" in last_text(repeat1_msg), last_text(repeat1_msg)
+        assert "следующ" in last_text(repeat1_msg).lower() or "🧩 " in last_text(repeat1_msg), last_text(repeat1_msg)
 
         await set_post_action_user(uid, db_path, "success_menu", rounds=1)
         u = await get_user(uid, db_path)
@@ -410,7 +411,7 @@ async def run() -> None:
         await save_user(u, db_path)
         next_step_msg = await send(uid, "💪 Продолжить тренировку")
         next_step_text = last_text(next_step_msg)
-        assert "🧩 Навык:" in next_step_text, next_step_text
+        assert "🧩 " in next_step_text, next_step_text
         assert "Открыть без таймера" not in next_step_text, next_step_text
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
@@ -423,3 +424,4 @@ async def run() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run())
+

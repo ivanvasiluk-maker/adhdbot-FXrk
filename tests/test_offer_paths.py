@@ -26,10 +26,10 @@ class OfferPathTests(unittest.TestCase):
         with patch.object(bot, "PAYMENT_URL", "https://pay.skiller.example.org/subscribe"), patch.object(bot, "ENABLE_PAYMENTS", True):
             rows = offer_inline_keyboard(123).inline_keyboard
         callbacks = [row[0].callback_data for row in rows]
-        self.assertEqual(callbacks, [
-            OFFER_CALLBACKS["bot"], OFFER_CALLBACKS["live"],
-            OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
-        ])
+        self.assertIn(OFFER_CALLBACKS["live"], callbacks)
+        self.assertIn(OFFER_CALLBACKS["next_plan"], callbacks)
+        self.assertIn(OFFER_CALLBACKS["conclusion_full"], callbacks)
+        self.assertEqual(callbacks.count(OFFER_CALLBACKS["stay_free"]), 1)
         self.assertNotIn(OFFER_CALLBACKS["beta_purchase_intent"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["bot"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["paid_test"], callbacks)
@@ -94,3 +94,4 @@ class OfferPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

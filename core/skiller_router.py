@@ -13,6 +13,7 @@ from typing import Any, MutableMapping
 
 from core.product_config import FREE_BETA_ACCESS
 from core.learning_engine import correction_intent
+from core.dialogue_ux import valid_transcript, is_clarification, explain_previous, concrete_step, plain_text, repeated
 
 
 class DialogState(str, Enum):
@@ -39,7 +40,7 @@ ACTIONS = {
     "map.today_insight", "map.full", "case.new", "resources.show",
     "offer.free", "offer.subscription", "offer.group", "offer.consultation",
     "offer.continue", "offer.later", "navigation.back", "crisis.procrastination",
-    "experiment.extra.done",
+    "experiment.extra.done", "experiment.not_started",
 }
 
 CLARIFICATION_ANSWERS = {
@@ -108,27 +109,27 @@ def _question(session: MutableMapping[str, Any]) -> dict[str, Any]:
 
 
 def _reports(session: MutableMapping[str, Any]) -> None:
-    fact = str((session.get("case_facts") or ["эта конкретная задача"])[-1])
-    answers = {a["question_id"]: a["answer"] for a in session["structured_answers"]}
-    primary = answers.get("entry_barrier", "перегруз и уход в быстрые альтернативы").replace("_", " ")
-    bottleneck = answers.get("functional_bottleneck", "START").upper()
-    session["hypotheses"] = [primary, "быстрое облегчение через переключение"]
+    facts = session.get("case_facts") or []
+    answers = {a["question_id"]: a["answer"] for a in session.get("structured_answers", [])}
+    labels = {"overload": "слишком много дел", "fear_of_evaluation": "страх ошибки или реакции",
+              "unclear_start": "неясно, с чего начать", "task_aversion": "не хочется делать эту задачу",
+              "distraction": "частые переключения"}
+    primary = labels.get(answers.get("entry_barrier"), "пока нужно уточнить, что мешает")
+    bottleneck = str(answers.get("functional_bottleneck") or "UNKNOWN").upper()
+    stages = {"START": "начать", "STAY": "продолжить после начала", "RETURN": "вернуться после перерыва", "UNKNOWN": "пока не уточнили"}
+    session["hypotheses"] = [primary] if answers.get("entry_barrier") else []
     session["skill_map"].update(primary_pattern=primary, functional_bottleneck=bottleneck,
-        secondary_patterns=["быстрое облегчение через переключение"], confidence=session["confidence"])
-    short = ("📌 Твоя рабочая карта\n\nПохоже, проблема сейчас не в лени.\n\n"
-        f"Сейчас складывается цепочка:\n{fact}\n↓\nнапряжение или перегруз\n↓\nизбегание / переключение\n↓\n"
-        "краткое облегчение\n↓\nзадача становится тяжелее\n\n"
-        f"Основная гипотеза:\n{primary}\n\nЧто уже хорошо:\nты замечаешь петлю и можешь описать конкретную ситуацию.\n\n"
-        f"Где именно ломается выполнение:\n{bottleneck}\n\nПоэтому первым проверим:\nоткрыть задачу и сделать один видимый микрошаг.")
-    full = ("📖 Подробный разбор\n\n1. Что происходит\n"
-        f"Ты описал(а): {fact}. Контакт с этой ситуацией запускает напряжение, после чего проще переключиться.\n\n"
-        f"2. Рабочий механизм\n{fact} → напряжение/перегруз → избегание → краткое облегчение → растущая цена задержки.\n\n"
-        f"3. Что выглядит главным\n{primary}. Уверенность: {round(float(session['confidence']) * 100)}%.\n\n"
-        "4. Что выглядит вторичным\nБыстрое переключение может поддерживать петлю, даже если не было исходной причиной.\n\n"
-        "5. Что НЕ похоже на главную проблему\nТы способен(на) замечать и описывать задачу, поэтому полная потеря мотивации выглядит слабее.\n\n"
-        f"6. Что у тебя сохранено\nОсознание конкретной ситуации сохранено; трудность сейчас сосредоточена в точке {bottleneck}.\n\n"
-        "7. Что будем проверять\nОдин микрошаг покажет, снижается ли цена входа без требования закончить всё.\n\n"
-        "8. Ограничение\nЭто рабочая модель, а не диагноз. Она будет обновляться по результатам экспериментов.")
+                               secondary_patterns=[], confidence=session["confidence"])
+    fact_text = "\n".join(f"— «{fact}" + "»" for fact in facts[-3:]) or "Пока нет описания ситуации."
+    short = (f"Вы описали:\n{fact_text}\n\n"
+             f"По вашим ответам мешает: {primary}.\n"
+             f"Труднее всего: {stages.get(bottleneck, stages['UNKNOWN'])}.\n\n"
+             "Это предварительный вывод. Попробуем одно действие?")
+    full = (f"Подробный разбор\n\nЧто вы сообщили\n{fact_text}\n\n"
+            f"Ваши ответы\nМешает: {primary}. Труднее всего: {stages.get(bottleneck, stages['UNKNOWN'])}.\n\n"
+            "Что пока неизвестно\nПочему это происходит и какой способ поможет, ещё нужно проверить.\n\n"
+            "Что дальше\nВыберем одно действие для вашей задачи и посмотрим на результат.\n\n"
+            "Ограничение\nЭто не диагноз. Вы можете исправить любой вывод.")
     session["short_report"], session["full_report"] = short, full
 
 
@@ -136,6 +137,32 @@ def route_user_input(session: MutableMapping[str, Any], content: str, *, kind: s
     """Route genuine user text/voice. Callback labels must never call this."""
     state = _state(session)
     content = content.strip()
+    if kind == "voice" and not valid_transcript(content):
+        return _response("Кажется, голосовое не распозналось. Можете записать ещё раз или написать текстом.")
+    if is_clarification(content):
+        return _response(explain_previous(session.get("last_instruction", ""), str((session.get("case_facts") or [""])[0]), content))
+    if session.get("awaiting_barrier"):
+        session["awaiting_barrier"] = False
+        session.setdefault("structured_answers", []).append({"question_id": "outcome_barrier", "answer": content, "role": "self_report", "kind": kind})
+        return _response("Записано: «" + content + "». Можно выбрать другой способ или закончить на сегодня.", [("Попробовать другой способ", "experiment.next"), ("Закончить", "day.finish")])
+    if session.pop("awaiting_target", False):
+        session.setdefault("case_facts", []).append(content)
+        session["target_task"] = content
+        session["explicit_action"] = content
+        return _dispatch(session, "experiment.start")
+    if state in {DialogState.EXPERIMENT_ACTIVE, DialogState.EXPERIMENT_FEEDBACK}:
+        low = content.casefold().replace("ё", "е")
+        if "не стало хуже" not in low and any(x in low for x in ("стало хуже", "хуже после")):
+            return _classify(session, "NEGATIVE_EFFECT")
+        if any(x in low for x in ("не начал", "не удалось начать", "не получилось начать", "не помог")):
+            return _classify(session, "NO_EFFECT")
+        if any(x in low for x in ("не продолжил", "не закончил")):
+            return _response("Получилось сделать первый шаг или пока не начать? Можно ответить своими словами.")
+        if any(x in low for x in ("сделал шаг", "только шаг", "остановил", "остановилась")):
+            return _classify(session, "PARTIAL")
+        if any(x in low for x in ("продолжил", "продолжила", "закончил", "закончила")):
+            return _classify(session, "PROMISING")
+        return _response("Что получилось после попытки: продолжить дело, сделать только первый шаг или пока не начать? Можно ответить своими словами.")
     if state == DialogState.CORRECTION_INPUT:
         intent = correction_intent(content)
         if intent == "confirm":
@@ -146,7 +173,8 @@ def route_user_input(session: MutableMapping[str, Any], content: str, *, kind: s
             return _response("Что именно стоит изменить? Одной короткой фразой.")
         session.setdefault("corrections", []).append({"kind": kind, "text": content})
         session.setdefault("case_facts", []).append(f"Поправка пользователя: {content}")
-        session["confidence"] = min(0.95, float(session.get("confidence", .25)) + .1)
+        session["confidence"] = .25
+        session["structured_answers"] = []
         _reports(session); session["state"] = DialogState.DAY1_SUMMARY.value
         return _response("Спасибо. Обновил рабочую карту.\n\n" + session["short_report"], _summary_buttons())
     if state in {DialogState.DAY1_INTAKE, DialogState.NEW_CASE_INTAKE}:
@@ -154,12 +182,13 @@ def route_user_input(session: MutableMapping[str, Any], content: str, *, kind: s
                        confidence=.35, state=DialogState.DAY1_CLARIFY.value)
         return _question(session)
     if state == DialogState.DAY1_CLARIFY:
-        session["structured_answers"].append({"question_id": "free_text_clarification", "answer": content, "kind": kind})
+        session["structured_answers"].append({"question_id": "free_text_clarification", "answer": content, "kind": kind, "role": "self_report"})
+        session.setdefault("case_facts", []).append(content)
         session["clarification_count"] += 1; session["confidence"] += .15
         return _advance_clarification(session)
     if state == DialogState.CRISIS_FLOW:
-        return _response("Понял. Сначала уменьшим нагрузку: назови один шаг на 30 секунд. Если в сообщении есть риск для жизни, включится отдельная safety-поддержка.")
-    return _response("Записал это как наблюдение к текущей карте.")
+        return _response("Что сейчас мешает сильнее всего? Можно ответить одной фразой.")
+    return _response("Что сейчас не получается? Можно описать новую ситуацию.")
 
 
 def _summary_buttons() -> list[tuple[str, str]]:
@@ -169,7 +198,7 @@ def _summary_buttons() -> list[tuple[str, str]]:
 
 def _advance_clarification(session: MutableMapping[str, Any]) -> dict[str, Any]:
     count = int(session["clarification_count"])
-    if float(session["confidence"]) >= .65 or count >= 4:
+    if float(session["confidence"]) >= .65 or count >= 2:
         _reports(session); session["state"] = DialogState.DAY1_SUMMARY.value
         return _response(session["short_report"], _summary_buttons())
     return _question(session)
@@ -179,19 +208,20 @@ def _classify(session: MutableMapping[str, Any], classification: str) -> dict[st
     skill = str(session.get("active_skill") or "Открыть без таймера")
     mapping = session["skill_map"]
     messages = {
-        "PROMISING": "Есть хороший первый сигнал: после микрошага ты самостоятельно продолжил задачу. Пока отмечаю этот навык как вероятно полезный. Проверим ещё раз позже.",
-        "PARTIAL": "Похоже, навык помог запуститься, но не помог удержаться. Значит START стал легче, а STAY пока остаётся проблемой.",
-        "NO_EFFECT": "Этот вариант не дал заметного эффекта. Не будем гонять его снова. Следующий тест должен проверять другой механизм.",
-        "NEGATIVE_EFFECT": "Этот шаг усилил избегание. Остановим его и в следующий раз проверим более мягкий механизм.",
+        "PROMISING": "После шага получилось продолжить дело. Сохраним этот результат. Остановиться сейчас тоже можно.",
+        "PARTIAL": "Первый шаг получился, продолжение — пока нет. Это два разных результата. Что помешало продолжить?",
+        "NO_EFFECT": "Этот способ пока не помог. Что помешало попробовать или продолжить?",
+        "NEGATIVE_EFFECT": "После попытки стало хуже. Остановим упражнение. Какая поддержка сейчас нужна?",
     }
     target = {"PROMISING": "successful_skills", "PARTIAL": "partial_skills"}.get(classification, "failed_skills")
     evidence = {"PROMISING": "после шага продолжил задачу", "PARTIAL": "стало легче, но остановился",
-                "NO_EFFECT": "заметного эффекта не было", "NEGATIVE_EFFECT": "избегание усилилось"}[classification]
+                "NO_EFFECT": "заметного эффекта не было", "NEGATIVE_EFFECT": "после попытки стало хуже"}[classification]
     existing = next((x for x in mapping[target] if x["skill"] == skill), None)
     if existing: existing["trials"] += 1
     else: mapping[target].append({"skill": skill, "evidence": evidence, "confidence": .65, "trials": 1})
     mapping["observations"].append(evidence); session["last_classification"] = classification
     session["state"] = DialogState.DAY_OPEN.value
+    session["awaiting_barrier"] = classification != "PROMISING"
     return _response(messages[classification], [("💪 Сделать следующий шаг", "experiment.next"), ("🌙 Завершить", "day.finish")])
 
 
@@ -211,6 +241,8 @@ def route_callback(session: MutableMapping[str, Any], action: str, *, callback_i
         "state_before": before.value, "state_after": after.value, "screen_id": screen_id,
         "handled_by": "skiller_callback_router", "duplicate": duplicate,
         "callback_fell_into_text_router": False, "timestamp": datetime.now(timezone.utc).isoformat()})
+    if result.get("text"):
+        session["last_instruction"] = result["text"]
     return result
 
 
@@ -220,7 +252,7 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
         if state != DialogState.DAY1_CLARIFY:
             return _response("Этот ответ уже учтён. Показываю актуальный шаг.", _summary_buttons() if session.get("short_report") else [])
         question, answer = CLARIFICATION_ANSWERS.get(action, ("functional_bottleneck", action.rsplit(".", 1)[-1]))
-        session["structured_answers"].append({"question_id": question, "answer": answer})
+        session["structured_answers"].append({"question_id": question, "answer": answer, "role": "self_report"})
         session["clarification_count"] += 1; session["confidence"] = min(.95, float(session["confidence"]) + .2)
         return _advance_clarification(session)
     if action == "clarify.other":
@@ -230,7 +262,7 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
             return _response("День уже закрыт. Карта сохранена.", [("🧠 Что я сегодня понял", "map.today_insight")], duplicate=True)
         session["state"] = DialogState.DAY_CLOSED.value; session.pop("active_experiment", None)
         sm = session["skill_map"]; best = (sm["successful_skills"] or sm["partial_skills"] or [{"skill": "пока уточняется"}])[0]["skill"]
-        return _response(f"🌙 День закрыт.\n\nСегодня мы заметили:\n— чаще всего мешало: {sm['primary_pattern']}\n— лучше всего сработало: {best}\n— пока нужно проверить: {sm['next_hypothesis']}\n\nГлавный вывод:\nкарта стала точнее благодаря реальному действию.\n\nЗавтра начнём не с нуля — карта сохранена.",
+        return _response(f"🌙 День закрыт.\n\nСегодня мы заметили:\n— чаще всего мешало: {sm['primary_pattern']}\n— лучше всего сработало: {best}\n— пока нужно проверить: {sm['next_hypothesis']}\n\nГлавный вывод:\nсохраняем только то, что вы сообщили или отметили после попытки.\n\nЗавтра начнём не с нуля — карта сохранена.",
             [("🧠 Что я сегодня понял", "map.today_insight"), ("🧭 Моя карта", "map.full"),
              ("🎯 Разобрать новую ситуацию", "case.new"), ("⚡ Один необязательный шаг", "experiment.extra")])
     if action == "diagnosis.full_report":
@@ -248,9 +280,36 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
                 [("⚡ Один необязательный шаг", "experiment.extra")])
         if int(session.get("experiment_count", 0)) >= 2:
             return _response("На сегодня достаточно: два основных эксперимента уже проведены.")
-        session["experiment_count"] += 1; session["active_skill"] = "Открыть без таймера"
+        task = str(session.get("target_task") or (session.get("case_facts") or [""])[0])
+        if not task:
+            session["awaiting_target"] = True
+            return _response("Какое одно действие нужно для вашей задачи?")
+        session["awaiting_barrier"] = False
+        session["experiment_count"] += 1
+        instruction = ("Попробуйте только это действие: «" + str(session.pop("explicit_action")) + "». Можно остановиться после него.") if session.get("explicit_action") else concrete_step(task, alternative=session["experiment_count"] > 1)
+        if instruction.endswith("?") or instruction.startswith("Какое одно"):
+            session["experiment_count"] -= 1
+            session["awaiting_target"] = True
+            return _response(instruction)
+        recent = session.setdefault("recent_instructions", [])
+        if repeated(instruction, recent):
+            session["experiment_count"] -= 1
+            session["awaiting_barrier"] = True
+            session["state"] = DialogState.DAY_OPEN.value
+            return _response("Этот способ мы уже пробовали. Что в нём не подошло?")
+        session["recent_instructions"] = (recent + [instruction])[-5:]
+        session["active_skill"] = instruction
+        session["last_instruction"] = instruction
         session["state"] = DialogState.EXPERIMENT_ACTIVE.value
-        return _response("🚀 Эксперимент: открой задачу без таймера и сделай один видимый микрошаг.", [("✅ Сделал", "experiment.done"), ("🌙 Завершить", "day.finish")])
+        return _response(instruction + "\n\nЧто получилось?", [
+            ("✅ Получилось сделать", "experiment.done"),
+            ("Пока не получилось начать", "experiment.not_started"),
+            ("🌙 Завершить", "day.finish")])
+    if action == "experiment.not_started":
+        if state != DialogState.EXPERIMENT_ACTIVE:
+            return _response("Этот шаг уже закрыт. Можно описать новую ситуацию.", duplicate=True)
+        return _classify(session, "NO_EFFECT")
+
     if action == "experiment.done":
         if state == DialogState.EXPERIMENT_FEEDBACK:
             return _response("Что произошло после шага?", [("🚀 Продолжил задачу", "experiment.result.promising"),
@@ -340,3 +399,4 @@ def _dispatch(session: MutableMapping[str, Any], action: str) -> dict[str, Any]:
     if action in {"legacy.short_skill", "want_short_skill"}:
         return _dispatch(session, "experiment.start")
     return _response("Показываю актуальный доступный шаг.", _summary_buttons() if session.get("short_report") else [])
+
