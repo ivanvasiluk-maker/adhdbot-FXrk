@@ -3,6 +3,7 @@
 # ============================================================
 
 from core.dialogue_ux import DIALOGUE_RULES
+from core.addressing import address_instructions
 
 import json
 import time
@@ -1282,7 +1283,7 @@ async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") ->
         except Exception:
             return "Это важный шаг. Продолжай."
 
-async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", client=None, model: str = "gpt-4o-mini") -> dict:
+async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", client=None, model: str = "gpt-4o-mini", *, addressing: Optional[Dict[str, Any]] = None) -> dict:
     """Подробный AI анализ"""
     from texts import AI_ANALYSIS_SYSTEM_PROMPT
     
@@ -1295,7 +1296,7 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
         log.warning("[AI] Comprehensive analysis fallback: OpenAI client or model is not configured")
         return fallback
 
-    system = AI_ANALYSIS_SYSTEM_PROMPT
+    system = AI_ANALYSIS_SYSTEM_PROMPT + "\n" + address_instructions(addressing)
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -1392,7 +1393,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     r = await ai_analyze(user_text, client, model)
 
     # Attempt to get a comprehensive analysis (may fallback internally)
-    comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, model)
+    comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, model, addressing=u)
 
     # Prefer comprehensive bucket if present
     bucket = comp.get("bucket") or r.get("bucket") or "mixed"

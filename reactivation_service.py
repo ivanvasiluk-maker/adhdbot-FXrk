@@ -28,13 +28,13 @@ ALLOWED_END = dt.time(21, 0)
 REACTIVATION_VARIANTS = [
     (
         "v1",
-        "Кажется, мы немного зависли. Это не проблема — с прокрастинацией так часто и бывает.\n"
-        "Давай не начинать заново, а сделаем один маленький шаг.",
+        "Можно продолжить с того места, где остановились.\n"
+        "Предложу одно короткое действие для вашей задачи.",
         ["▶️ Продолжить", "⚡ Навык на 2 минуты", "💤 Не сейчас"],
     ),
     (
         "v2",
-        "Прокрастинируешь или просто отвлёкся?\n"
+        "Хотите вернуться к делу?\n"
         "Можно вернуться без чувства вины. Я помогу выбрать одно короткое действие.",
         ["Продолжить с места остановки", "Дать действие попроще", "Напомнить позже"],
     ),
@@ -150,6 +150,8 @@ def can_send_reactivation(u: Dict[str, Any], *, now: Optional[dt.datetime] = Non
     meta = {"day_status": status, "hours_since_last_activity": hours_since_last_activity(u, current)}
     if int(u.get("notifications_enabled") if u.get("notifications_enabled") is not None else 1) != 1:
         return False, "notifications_disabled", meta
+    if u.get("reminder_mode") == "paused":
+        return False, "reminders_paused", meta
     if status != DAY_ACTIVE:
         return False, "day_not_active", meta
     if not (ALLOWED_START <= local.time() <= ALLOWED_END):
@@ -184,3 +186,4 @@ def mark_reactivation_sent(u: Dict[str, Any], variant_id: str, *, now: Optional[
     u["last_bot_message_at"] = utc_iso(current)
     u["reactivation_count_today"] = int(u.get("reactivation_count_today") or 0) + 1
     u["last_reactivation_variant"] = variant_id
+

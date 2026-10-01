@@ -85,6 +85,8 @@ from flows import (
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
     live_analysis_profile_patch, render_analysis_details_by_trainer, build_analysis_result
 )
+from core.addressing import address_instructions
+from core.outgoing_dialogue import OutgoingDialogueMiddleware
 from core.dialogue_ux import (BUTTON_LABELS, OTHER, VOICE_RETRY, VOICE_TEXT, VOICE_SKIP, VOICE_FAILURE,
     context as dialogue_context, valid_transcript, is_clarification, explain_previous, plain_text, review_focus, DIALOGUE_RULES)
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
@@ -165,6 +167,7 @@ GROUP_SESSION_EUR_MIN_LABEL = format_eur_compact(GROUP_SESSION_EUR_MIN)
 GROUP_SESSION_EUR_MAX_LABEL = format_eur_compact(GROUP_SESSION_EUR_MAX)
 GROUP_PROGRAM_TOTAL_MIN_EUR = GROUP_SESSION_EUR_MIN * GROUP_SESSION_COUNT
 GROUP_PROGRAM_TOTAL_MAX_EUR = GROUP_SESSION_EUR_MAX * GROUP_SESSION_COUNT
+GROUP_PROGRAM_PRICE_LABEL = format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR) if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else f"{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_TOTAL_MAX_EUR)}"
 GROUP_PROGRAM_MONTH_MIN_EUR = GROUP_PROGRAM_TOTAL_MIN_EUR / 3
 GROUP_PROGRAM_MONTH_MAX_EUR = GROUP_PROGRAM_TOTAL_MAX_EUR / 3
 ACTIVE_FILE_SKILL_REGISTRY = None
@@ -1199,14 +1202,24 @@ async def handle_dialogue_help(m, u, text):
         ctx["choosing_address"] = True
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         await save_user(u, DB_PATH)
-        await original.answer("Какую форму обращения использовать?", reply_markup=address_keyboard())
+        await original.answer("Как обращаться: на «ты» или на «вы», в каком роде? Можно пропустить: останется нейтральное обращение на «вы».", reply_markup=address_keyboard())
         return True
     forms = {"Мужскую": "male", "Женскую": "female", "Нейтральную": "neutral", "Пропустить": "neutral"}
+    choices = {
+        "Ты · мужской род": ("ty", "male"), "Ты · женский род": ("ty", "female"),
+        "Ты · без указания рода": ("ty", "neutral"),
+        "Вы · мужской род": ("vy", "male"), "Вы · женский род": ("vy", "female"),
+        "Вы · без указания рода": ("vy", "neutral"),
+    }
     if ctx.get("choosing_address") or u.get("stage") == "ask_address":
-        if text not in forms:
+        if text not in forms and text not in choices:
             await original.answer("Выберите форму обращения. Её можно изменить командой /address.", reply_markup=address_keyboard())
             return True
-        u["address_form"] = forms[text]
+        if text in choices:
+            u["address_mode"], u["address_form"] = choices[text]
+        else:
+            u["address_form"] = forms[text]
+            u["address_mode"] = u.get("address_mode") or "vy"
         ctx.pop("choosing_address", None)
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         onboarding = u.get("stage") == "ask_address"
@@ -1216,7 +1229,11 @@ async def handle_dialogue_help(m, u, text):
         if onboarding:
             await m.answer("Какой стиль общения вам ближе?\n\nМарша — поддержка.\nСкинни — короткие прямые инструкции.\nБек — спокойные объяснения.", reply_markup=kb_trainers)
         else:
-            await original.answer("Сохранено. Можно продолжить с прежнего вопроса.", reply_markup=ReplyKeyboardRemove())
+            previous = str(ctx.get("text") or "") if ctx.get("stage") == u.get("stage") else ""
+            markup = ReplyKeyboardRemove()
+            if previous and ctx.get("markup") and not ctx.get("inline"):
+                markup = ReplyKeyboardMarkup(**ctx["markup"])
+            await original.answer("Сохранено.\n\n" + (previous or "Можно продолжить с прежнего вопроса."), reply_markup=markup)
         return True
     if is_clarification(text):
         last = ctx.get("text") or (u.get("last_safe_screen") or {}).get("payload", {}).get("text", "")
@@ -1234,7 +1251,12 @@ async def handle_dialogue_help(m, u, text):
 
 
 def address_keyboard():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=x)] for x in ("Мужскую", "Женскую", "Нейтральную", "Пропустить")], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Ты · мужской род"), KeyboardButton(text="Вы · мужской род")],
+        [KeyboardButton(text="Ты · женский род"), KeyboardButton(text="Вы · женский род")],
+        [KeyboardButton(text="Ты · без указания рода"), KeyboardButton(text="Вы · без указания рода")],
+        [KeyboardButton(text="Пропустить")],
+    ], resize_keyboard=True)
 
 
 def voice_transcription_failure_text() -> str:
@@ -6226,7 +6248,7 @@ def stored_analysis_user_text(u: Dict[str, Any]) -> str:
 async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text: str, reason: str, *, replace_skill: bool = False):
     previous_text = stored_analysis_user_text(u)
     combined_text = clamp_str(f"{previous_text}\n\nУточнение: {extra_text}" if previous_text else extra_text, 1500)
-    comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
+    comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, combined_text)
     comp.pop("user_text", None)
     comp.update(safe_analysis_memory(combined_text, comp))
@@ -7074,7 +7096,7 @@ def short_offer_text() -> str:
         options = []
         if ENABLE_GROUP_OFFER:
             options.append(
-                "👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €240.\n"
+                f"👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}.\n"
                 "8 недель, онлайн-встреча раз в неделю, задания каждый день и поддержка в чате. "
                 "Работаем с вниманием, реальным планированием, тревогой, импульсивностью и возвратом после срывов."
             )
@@ -7087,7 +7109,7 @@ def short_offer_text() -> str:
             "🟢 Сам тест SKILLER пока остаётся бесплатным. Группа и личная работа — отдельные платные форматы."
         )
         return "\n\n".join(options) + (
-            "\n\nЕсли хочешь результат быстрее и с живой поддержкой — выбери формат и напиши Ивану."
+            "\n\nЕсли нужна помощь психолога — выбери формат и напиши Ивану. До записи можно обсудить условия."
             if ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER else ""
         )
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
@@ -7770,7 +7792,7 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
     ])
     if ENABLE_GROUP_OFFER:
         keyboard.append([InlineKeyboardButton(
-            text="👥 Хочу в группу — €240",
+            text=f"👥 Хочу в группу — €{GROUP_PROGRAM_PRICE_LABEL}",
             callback_data=OFFER_CALLBACKS["group"],
         )])
     if voluntary_support_available():
@@ -7786,7 +7808,7 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     if FREE_BETA_ACCESS:
         rows = []
         if ENABLE_GROUP_OFFER:
-            rows.append([InlineKeyboardButton(text="👥 Группа — €240", callback_data=OFFER_CALLBACKS["group"])])
+            rows.append([InlineKeyboardButton(text=f"👥 Группа — €{GROUP_PROGRAM_PRICE_LABEL}", callback_data=OFFER_CALLBACKS["group"])])
         if ENABLE_HUMAN_OFFER:
             rows.append([InlineKeyboardButton(text=f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
         rows.extend([
@@ -7836,7 +7858,7 @@ def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = F
 
 def offer_request_submitted_text(sent: bool) -> str:
     contact = curator_contact_url() or "@Ivan_Vasiliuk"
-    sent_line = "Я отправил заявку Ивану." if sent else "Я записал заявку, но не смог автоматически отправить её в личку Ивану из этого окружения."
+    sent_line = "Я отправил заявку Ивану." if sent else "Заявка сохранена, но не отправлена Ивану. Пожалуйста, напишите ему напрямую."
     return (
         f"{sent_line}\n\n"
         f"Если хочешь ускорить контакт, можно написать напрямую: {contact}\n\n"
@@ -7874,13 +7896,13 @@ def offer_disclaimer_text() -> str:
 
 def tariff_bot_text() -> str:
     return (
-        f"🔵 SKILLER Founding Member — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
+        f"🔵 Расширенный SKILLER — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
         "Для тех, кто хочет решить проблему самостоятельно, но не начинать каждый раз с нового случайного совета.\n\n"
         "Цель полного режима — собрать твой повторяемый протокол:\n"
         "— как начать;\n"
         "— как удержаться после старта;\n"
         "— как вернуться после срыва.\n\n"
-        "Founding Member: эта цена сохранится для тебя, пока подписка остаётся активной.\n"
+        "Цена и условия указаны перед оплатой.\n"
         "Ты сможешь влиять на развитие продукта и первым получать новые функции.\n\n"
         "SKILLER будет сохранять результаты, не предлагать по кругу то, что не помогло, и обновлять заключение по новым попыткам.\n\n"
         "Внутри:\n"
@@ -7909,18 +7931,19 @@ def tariff_live_text() -> str:
 
 
 def tariff_group_text() -> str:
+    installment = f"Можно оплатить двумя частями по €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR / 2)}. " if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else "Условия оплаты можно уточнить до записи. "
     return (
-        "👥 Группа навыков для взрослых с СДВГ — €240\n\n"
+        f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
         "8 недель, 8 онлайн-встреч по одной в неделю. Небольшая группа до 12 человек.\n"
-        "Ведущий — психолог Иван Василюк. Основа — КПТ, ДБТ и метакогнитивные протоколы Safren/Solanto.\n\n"
-        "За программу ты соберёшь рабочую систему:\n"
+        "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
+        "На встречах будем пробовать:\n"
         "— как удерживать внимание и уменьшать отвлечения;\n"
         "— как планировать реалистично, без перегруза;\n"
         "— как проходить тревогу, перфекционизм и прокрастинацию;\n"
         "— как регулировать эмоции и импульсивность;\n"
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
         "Внутри: практика на своих задачах, задания каждый день, чат-поддержка и материалы после встреч.\n\n"
-        "Стоимость всей программы — €240. Можно оплатить двумя частями по €120. "
+        f"Стоимость всей программы — €{GROUP_PROGRAM_PRICE_LABEL}. {installment}"
         "Перед участием — короткая бесплатная встреча, чтобы понять, подходит ли формат.\n\n"
         "Если хочешь место — нажми кнопку ниже. Иван напишет тебе лично."
     )
@@ -7992,7 +8015,7 @@ def offer_details_full_mode_text() -> str:
         options = ["🟢 Бесплатно: SKILLER — тест навыков и личной карты."]
         if ENABLE_GROUP_OFFER:
             options.append(
-                "👥 Группа навыков для взрослых с СДВГ — €240\n"
+                f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n"
                 "8 недель: еженедельная встреча, задания каждый день и поддержка в чате."
             )
         if ENABLE_HUMAN_OFFER:
@@ -9802,24 +9825,14 @@ def day1_insight_text(u: Dict[str, Any], profile: Dict[str, Any]) -> tuple[str, 
         if continued is True else
         "Запуск и удержание могут быть разными проблемами: микрошаг удалось проверить, но продолжение пока не подтверждено."
     )
-    reaction = "желание отойти или переключиться"
-    avoidance = public_enum_text(profile.get("attention_pattern") or profile.get("avoidance_pattern") or "уход от контакта с задачей")
-    prediction = (
-        f"Если гипотеза про «{barrier}» верна, следующий заметный стопор появится в первые минуты "
-        "после контакта с неприятной задачей, а не только после долгой работы."
-    )
+    prediction = "Повторится ли результат, если попробовать этот способ ещё раз в похожей ситуации?"
     text = (
-        "🧠 Я уже вижу одну интересную вещь.\n\n"
-        f"Ты не просто «прокрастинируешь». {start_stay}\n\n"
-        "Текущая рабочая модель:\n"
-        f"{barrier} → {reaction} → {avoidance} → короткое облегчение\n\n"
-        f"{'Первый полезный сигнал' if helpful_signals else 'Что сработало'}: {helped}.\n\n"
-        "Что мы пока не знаем:\n"
-        "— повторится ли найденный эффект;\n"
-        "— что сильнее запускает цикл;\n"
-        "— проблема больше в START или STAY.\n\n"
-        f"🔮 Проверим прогноз\n{prediction}\n\n"
-        "Если повторится — гипотеза станет сильнее. Если нет — изменим модель."
+        "Что удалось заметить\n\n"
+        f"{start_stay}\n\n"
+        f"Что по ответам могло мешать: {barrier}.\n"
+        f"Что сработало: {helped}.\n\n"
+        "Это предварительный вывод по попыткам. Причины трудности ещё нужно уточнить.\n\n"
+        f"Что проверим дальше\n{prediction}"
     )
     return text, prediction
 
@@ -13891,7 +13904,7 @@ async def main_flow(m: Message):
         await log_event(u["user_id"], "onboarding", "name_provided", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         set_legacy_stage(u, "ask_address")
         await save_user(u, DB_PATH)
-        await m.answer("Какую форму обращения использовать? Можно изменить позже командой /address.", reply_markup=address_keyboard())
+        await m.answer("Как обращаться: на «ты» или на «вы», в каком роде? Можно пропустить. Изменить выбор — /address.", reply_markup=address_keyboard())
         return
 
     # ============================================================
@@ -13961,7 +13974,7 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
                 "notice_version": "2026-09-02",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Спасибо. Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            await m.answer("Спасибо. Начнём с одного дела, которое сейчас трудно сделать?", reply_markup=kb_yes_no)
             return
         if text == "❌ Не согласен(на)":
             u["notifications_enabled"] = 0
@@ -14005,7 +14018,7 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer("Выбери другого тренера 👇", reply_markup=kb_trainers)
             return
-        await m.answer("Выбери: ✅ Готов / ✅ Да / ❌ Нет", reply_markup=kb_yes_no)
+        await m.answer("Начнём с одного дела?", reply_markup=kb_yes_no)
         return
 
     # ============================================================
@@ -15095,12 +15108,13 @@ async def main_flow(m: Message):
         set_legacy_stage(u, "waiting_next_day")
         await save_user(u, DB_PATH)
         profile = await get_user_profile(u["user_id"], DB_PATH)
-        await notify_curator_map_review(m, u, profile, "availability_message", text[:240])
+        sent = await notify_curator_map_review(m, u, profile, "availability_message", text[:240])
+        delivery_note = "Заявка отправлена Ивану." if sent else "Не удалось отправить заявку. Пожалуйста, напишите Ивану напрямую."
         await answer_with_keyboard(
             m,
             u,
             f"Записал. Первый шаг пути с куратором — живой разбор твоей карты и выбор главного механизма на ближайшую неделю.\n\n"
-            f"Я отправил заявку Ивану. Если хочешь ускорить контакт, можно написать напрямую: {curator_contact_url() or 'Ивану'}\n\n"
+            f"{delivery_note} Контакт: {curator_contact_url() or '@Ivan_Vasiliuk'}\n\n"
             "Пока ждёшь разбор, короткий маршрут остаётся: один маленький вход в день и кризисный возврат, если сорвёт.",
             kb_training_main,
             "training_main",
@@ -15110,7 +15124,7 @@ async def main_flow(m: Message):
     if u.get("stage") == "offer_request_form":
         request_text = (text or "").strip()
         if len(request_text) < 5:
-            await m.answer("Напиши, пожалуйста, одним сообщением: имя, ник в Telegram, почту и коротко запрос.")
+            await m.answer("Напишите одной фразой, с чем нужна помощь. Если в Telegram нет имени пользователя, добавьте один контакт для ответа.")
             return
         known_username = getattr(m.from_user, "username", None) or u.get("username")
         has_contact = bool(known_username or "@" in request_text or re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", request_text) or re.search(r"\+?\d[\d ()-]{6,}", request_text))
@@ -15193,7 +15207,7 @@ LOST_CALLBACK_TEXT = (
 CURRENT_SCREEN_TEXT = "Этот шаг уже закрыт. Чтобы не путаться, продолжим с текущего места."
 CRISIS_REDIRECT_TEXT = (
     "Похоже, сейчас важнее безопасность, а не тренировка навыка.\n\n"
-    "Если есть риск навредить себе, ты не в безопасности или не можешь остаться один/одна — "
+    "Если есть риск навредить себе, ты не в безопасности или трудно оставаться без поддержки — "
     "позвони 112 или обратись в ближайшую неотложную помощь.\n\n"
     "Если можешь, напиши человеку рядом:\n"
     "«Мне сейчас небезопасно, побудь со мной».\n\n"
@@ -16334,7 +16348,7 @@ async def on_unknown_callback(c: CallbackQuery):
 async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     bucket = u.get("bucket") or "mixed"
     user_text = stored_analysis_user_text(u) or f"У меня проблемы с {bucket}"
-    comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
+    comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, user_text)
     comp["trainer_key"] = u.get("trainer_key", "marsha")
     if comp.get("analysis_fallback"):
@@ -16711,6 +16725,7 @@ async def main() -> int:
             raise RuntimeError("BOT_TOKEN is empty; set the BOT_TOKEN environment variable before starting the bot")
 
         bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+        bot.session.middleware(OutgoingDialogueMiddleware(lambda: DB_PATH))
         # Serialize updates per Telegram user/chat. Rapid taps such as
         # "Открыть карту" -> "Начать всё заново" must not overwrite each
         # other's persisted stage with stale snapshots.

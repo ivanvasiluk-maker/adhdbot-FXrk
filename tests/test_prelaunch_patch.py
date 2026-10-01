@@ -50,10 +50,11 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_day1_insight_is_grounded_and_falsifiable(self):
         text, prediction = bot.day1_insight_text(bot.default_user(1), self.profile())
-        self.assertIn("Текущая рабочая модель", text)
-        self.assertIn("Что мы пока не знаем", text)
-        self.assertIn("🔮 Проверим прогноз", text)
-        self.assertIn("первые минуты", prediction)
+        self.assertIn("Что удалось заметить", text)
+        self.assertIn("Причины трудности ещё нужно уточнить", text)
+        self.assertIn("Что проверим дальше", text)
+        self.assertIn("Повторится ли результат", prediction)
+        self.assertNotIn("короткое облегчение", text)
         self.assertNotIn("scroll_autopilot", text)
 
     def test_day1_insight_does_not_invent_positive_signal(self):

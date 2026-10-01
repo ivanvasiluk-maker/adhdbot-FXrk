@@ -710,7 +710,7 @@ async def test_stuck_flow_asks_effect_before_aftercare():
 
         fail_msg = FakeMessage(uid, "🟡 Не получилось")
         await bot.main_flow(fail_msg)
-        assert "Стопор зафиксирован. Это не провал." in "\n".join(fail_msg.answers)
+        assert "Сложный момент зафиксирован. Это не провал." in "\n".join(fail_msg.answers)
 
         reason_msg = FakeMessage(uid, "📱 Ушёл в телефон / YouTube")
         await bot.main_flow(reason_msg)
@@ -767,7 +767,7 @@ async def test_diagnostic_text_with_stuck_words_does_not_trigger_crisis_flow():
         bot.DB_PATH = old
 
         response_text = "\n".join(m.answers)
-        assert "Стопор зафиксирован. Это не провал." not in response_text, (
+        assert "Сложный момент зафиксирован. Это не провал." not in response_text, (
             "Diagnostic text with 'застрял'/'паник' must not trigger the stuck/crisis flow"
         )
         assert fresh.get("stage") != "failed_options", (

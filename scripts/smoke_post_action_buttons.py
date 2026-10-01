@@ -347,7 +347,7 @@ async def run() -> None:
         assert "опиши как есть" in last_text(describe_msg).lower(), last_text(describe_msg)
         reflected_msg = await send(uid, "Боюсь сделать плохо и стыдно")
         assert "Что было труднее" in last_text(reflected_msg), last_text(reflected_msg)
-        assert "Рабочая гипотеза" in last_text(reflected_msg), last_text(reflected_msg)
+        assert "Рабочая версия" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Минимальный физический шаг" in last_text(reflected_msg), last_text(reflected_msg)
         assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(reflected_msg.answers[-1]["reply_markup"]))
         reflected_msg = await send(uid, "✅ Да, похоже")

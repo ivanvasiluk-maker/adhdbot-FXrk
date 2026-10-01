@@ -1,0 +1,5 @@
+{
+  "name": "communication_preferences",
+  "behavioral_goal": "return",
+  "success_metric": "Track completed attempts and return within 7 days after changing address preferences; audit incorrect address reports. No retention uplift is claimed before measuring the live cohort."
+}

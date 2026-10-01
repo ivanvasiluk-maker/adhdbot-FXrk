@@ -54,14 +54,14 @@ class OfferPathTests(unittest.TestCase):
     def test_subscription_screen_keeps_real_proposition_during_beta(self):
         text = tariff_bot_text()
         self.assertIn(f"€{BASE_OFFER_EUR_LABEL} / месяц", text)
-        self.assertIn("Founding Member", text)
+        self.assertIn("Расширенный SKILLER", text)
         self.assertNotIn("beta", text.lower())
 
     def test_dormant_subscription_is_founding_offer_at_configured_price(self):
         with patch.object(bot, "FREE_BETA_ACCESS", False):
             text = tariff_bot_text()
         self.assertIn(f"€{BASE_OFFER_EUR_LABEL} / месяц", text)
-        self.assertIn("Founding Member", text)
+        self.assertIn("Расширенный SKILLER", text)
         self.assertIn("персональная карта навыков", text)
         self.assertNotIn("Learning Engine", text)
 
