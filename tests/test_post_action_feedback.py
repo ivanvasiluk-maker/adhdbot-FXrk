@@ -43,7 +43,7 @@ class PostActionFeedbackTests(unittest.TestCase):
         ))
         self.assertIn("первое действие осталось неясным", result.interpretation)
         self.assertIn("не повторить то же самое", result.interpretation)
-        self.assertIn("результат проверки, а не оценка тебя", result.reaction)
+        self.assertIn("Можно остановиться или выбрать другой способ", result.reaction)
 
     def test_failure_keyboard_has_four_hypotheses_and_other(self):
         user = bot.default_user(1)
@@ -127,3 +127,4 @@ class NeverDeadEndIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

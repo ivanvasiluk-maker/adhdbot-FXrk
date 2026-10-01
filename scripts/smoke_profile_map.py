@@ -126,13 +126,13 @@ async def run():
         print("[SMOKE] daily_focus:", focus.get("code"))
         has_group_offer = "👥 Хочу в группу — €240" in kb_texts
         has_live_offer = any("👤 Личная терапия" in t for t in kb_texts)
-        has_primary_map = "📌 Краткое заключение" in offer_text and "Как держится проблема" in offer_text
-        has_day3_conclusion = "Главный узел" in offer_text and "лучший сигнал" in offer_text.lower()
+        has_primary_map = "📌 Краткое заключение" in offer_text and "Что ещё нужно проверить" in offer_text
+        has_day3_conclusion = "Что было труднее" in offer_text and "лучший сигнал" in offer_text.lower()
         has_personal_offer = (
-            "Продолжить бесплатный тест" in kb_texts
+            "🟢 Продолжить бесплатно" in kb_texts
             and has_group_offer and has_live_offer
         )
-        has_model_value = "START → STAY → RETURN" in offer_text
+        has_model_value = "начать, продолжить и вернуться" in offer_text
         has_selling_specifics = (
             "выбери формат и напиши Ивану" in offer_text
             and "📖 Почему такой вывод" in kb_texts
@@ -178,3 +178,4 @@ async def run():
 
 if __name__ == "__main__":
     asyncio.run(run())
+

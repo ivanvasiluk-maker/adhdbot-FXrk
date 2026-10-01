@@ -85,6 +85,10 @@ from flows import (
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
     live_analysis_profile_patch, render_analysis_details_by_trainer, build_analysis_result
 )
+from core.addressing import address_instructions
+from core.outgoing_dialogue import OutgoingDialogueMiddleware
+from core.dialogue_ux import (BUTTON_LABELS, OTHER, VOICE_RETRY, VOICE_TEXT, VOICE_SKIP, VOICE_FAILURE,
+    context as dialogue_context, valid_transcript, is_clarification, explain_previous, plain_text, review_focus, DIALOGUE_RULES)
 from nlp_fallback import is_misunderstood, is_too_hard, is_timer_too_hard
 from core.engine import (
     get_next_screen as engine_get_next_screen,
@@ -163,6 +167,7 @@ GROUP_SESSION_EUR_MIN_LABEL = format_eur_compact(GROUP_SESSION_EUR_MIN)
 GROUP_SESSION_EUR_MAX_LABEL = format_eur_compact(GROUP_SESSION_EUR_MAX)
 GROUP_PROGRAM_TOTAL_MIN_EUR = GROUP_SESSION_EUR_MIN * GROUP_SESSION_COUNT
 GROUP_PROGRAM_TOTAL_MAX_EUR = GROUP_SESSION_EUR_MAX * GROUP_SESSION_COUNT
+GROUP_PROGRAM_PRICE_LABEL = format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR) if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else f"{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR)}–{format_eur_compact(GROUP_PROGRAM_TOTAL_MAX_EUR)}"
 GROUP_PROGRAM_MONTH_MIN_EUR = GROUP_PROGRAM_TOTAL_MIN_EUR / 3
 GROUP_PROGRAM_MONTH_MAX_EUR = GROUP_PROGRAM_TOTAL_MAX_EUR / 3
 ACTIVE_FILE_SKILL_REGISTRY = None
@@ -306,7 +311,7 @@ async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model:
     if not (client and model):
         return fallback.get(trainer_key, fallback["marsha"])
 
-    system = (
+    system = DIALOGUE_RULES + "\n" + (
         "Ты тренер навыков саморегуляции. Ответь очень коротко (1–2 предложения). "
         "Учитывай стиль: skinny=жестко, marsha=поддержка, beck=логика. "
         "Цель: отразить переживание пользователя и дать крошечный следующий ориентир без давления. "
@@ -1126,26 +1131,153 @@ def infer_evening_checkin_answer(raw: str) -> str:
     return ""
 
 
+class DialogueMessage:
+    """Preserve Telegram's API while remembering the actual conversational screen."""
+    def __init__(self, message, user):
+        self.original = message
+        self.user = user
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    async def answer(self, text, **kwargs):
+        return await self._send("answer", text, kwargs)
+
+    async def edit_text(self, text, **kwargs):
+        return await self._send("edit_text", text, kwargs)
+
+    async def _send(self, method, text, kwargs):
+        text = plain_text(text)
+        markup = kwargs.get("reply_markup")
+        labels = []
+        if isinstance(markup, ReplyKeyboardMarkup):
+            rows = []
+            for row in markup.keyboard:
+                rows.append([button.model_copy(update={"text": BUTTON_LABELS.get(button.text, button.text)}) for button in row])
+            labels = [b.text for row in rows for b in row]
+            protected = str(self.user.get("stage") or "") in {"privacy_consent", "notification_consent", "restart_onboarding_confirm", "safety_mode", "ask_name", "ask_address", "await_trainer"}
+            if not protected and labels and not text.startswith(VOICE_FAILURE) and not any("друг" in x.casefold() or "своими словами" in x.casefold() for x in labels) and len(labels) < MAX_KEYBOARD_BUTTONS:
+                rows.append([KeyboardButton(text=OTHER)])
+            markup = markup.model_copy(update={"keyboard": rows, "input_field_placeholder": "Можно написать или отправить голосовое"})
+            kwargs["reply_markup"] = markup
+        elif isinstance(markup, InlineKeyboardMarkup):
+            rows = [[button.model_copy(update={"text": BUTTON_LABELS.get(button.text, button.text)}) for button in row] for row in markup.inline_keyboard]
+            markup = markup.model_copy(update={"inline_keyboard": rows})
+            kwargs["reply_markup"] = markup
+            labels = [b.text for row in rows for b in row]
+        # A yes/no keyboard must have a question, not just an assertion.
+        if labels and "?" not in text and all(re.fullmatch(r"[✅❌🤷\s]*(Да|Нет|Немного)", x) for x in labels):
+            text += "\n\nЭто похоже на вашу ситуацию?"
+        sent = await getattr(self.original, method)(text, **kwargs)
+        transient = text.startswith(("Распознаю", "Получился такой текст:", VOICE_FAILURE))
+        if not transient:
+            ctx = dialogue_context(self.user.get("dialogue_context"))
+            recent = list(ctx.get("recent") or [])
+            ctx.update(text=text[:3500], stage=self.user.get("stage"), recent=(recent + [text[:1500]])[-5:])
+            ctx["markup"] = markup.model_dump(mode="json") if markup is not None and hasattr(markup, "model_dump") else None
+            ctx["inline"] = isinstance(markup, InlineKeyboardMarkup)
+            self.user["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+            await save_user_best_effort(self.user)
+        return sent
+
+
+def dialogue_message(message, user):
+    return message if isinstance(message, DialogueMessage) else DialogueMessage(message, user)
+
+
+async def handle_dialogue_help(m, u, text):
+    ctx = dialogue_context(u.get("dialogue_context"))
+    original = m.original if isinstance(m, DialogueMessage) else m
+    if text in {VOICE_RETRY, VOICE_TEXT, VOICE_SKIP, OTHER}:
+        if text == VOICE_RETRY:
+            response = "Нажмите и удерживайте микрофон в Telegram, затем запишите ответ."
+        elif text == VOICE_SKIP:
+            response = "Голосовое пропущено. Текущий вопрос сохранён. Можно ответить позже или написать текстом."
+        else:
+            response = "Напишите ответ обычными словами. Я продолжу с этого же места."
+        # Keep the pending question intact, including after a failed recording.
+        await original.answer(response, reply_markup=ReplyKeyboardRemove())
+        return True
+    if text == "/address":
+        ctx["choosing_address"] = True
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await original.answer("Как обращаться: на «ты» или на «вы», в каком роде? Можно пропустить: останется нейтральное обращение на «вы».", reply_markup=address_keyboard())
+        return True
+    forms = {"Мужскую": "male", "Женскую": "female", "Нейтральную": "neutral", "Пропустить": "neutral"}
+    choices = {
+        "Ты · мужской род": ("ty", "male"), "Ты · женский род": ("ty", "female"),
+        "Ты · без указания рода": ("ty", "neutral"),
+        "Вы · мужской род": ("vy", "male"), "Вы · женский род": ("vy", "female"),
+        "Вы · без указания рода": ("vy", "neutral"),
+    }
+    if ctx.get("choosing_address") or u.get("stage") == "ask_address":
+        if text not in forms and text not in choices:
+            await original.answer("Выберите форму обращения. Её можно изменить командой /address.", reply_markup=address_keyboard())
+            return True
+        if text in choices:
+            u["address_mode"], u["address_form"] = choices[text]
+        else:
+            u["address_form"] = forms[text]
+            u["address_mode"] = u.get("address_mode") or "vy"
+        ctx.pop("choosing_address", None)
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        onboarding = u.get("stage") == "ask_address"
+        if onboarding:
+            set_legacy_stage(u, "await_trainer")
+        await save_user(u, DB_PATH)
+        if onboarding:
+            await m.answer("Какой стиль общения вам ближе?\n\nМарша — поддержка.\nСкинни — короткие прямые инструкции.\nБек — спокойные объяснения.", reply_markup=kb_trainers)
+        else:
+            previous = str(ctx.get("text") or "") if ctx.get("stage") == u.get("stage") else ""
+            markup = ReplyKeyboardRemove()
+            if previous and ctx.get("markup") and not ctx.get("inline"):
+                markup = ReplyKeyboardMarkup(**ctx["markup"])
+            await original.answer("Сохранено.\n\n" + (previous or "Можно продолжить с прежнего вопроса."), reply_markup=markup)
+        return True
+    if is_clarification(text):
+        last = ctx.get("text") or (u.get("last_safe_screen") or {}).get("payload", {}).get("text", "")
+        task = current_task_title(u, "")
+        explanation = explain_previous(last, task, text)
+        markup = None
+        # Replay options only from the still-current state; never resurrect a
+        # consent, payment or stale callback screen from another flow.
+        if ctx.get("stage") == u.get("stage") and ctx.get("markup") and not ctx.get("inline"):
+            markup = ReplyKeyboardMarkup(**ctx["markup"])
+        await original.answer(explanation, reply_markup=markup, parse_mode=None)
+        await log_event(u["user_id"], u.get("stage", ""), "instruction_explained", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+        return True
+    return False
+
+
+def address_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Ты · мужской род"), KeyboardButton(text="Вы · мужской род")],
+        [KeyboardButton(text="Ты · женский род"), KeyboardButton(text="Вы · женский род")],
+        [KeyboardButton(text="Ты · без указания рода"), KeyboardButton(text="Вы · без указания рода")],
+        [KeyboardButton(text="Пропустить")],
+    ], resize_keyboard=True)
+
+
 def voice_transcription_failure_text() -> str:
-    if not OPENAI_API_KEY or client is None:
-        return (
-            "Голосовой ввод сейчас не подключён на сервере. Нужен OPENAI_API_KEY; "
-            "пока ответь текстом или выбери кнопку."
-        )
-    return (
-        "Не удалось распознать это голосовое. Попробуй отправить ещё раз чуть короче "
-        "или ответь текстом / кнопкой."
-    )
+    return VOICE_FAILURE
+
+
+def voice_retry_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=VOICE_RETRY), KeyboardButton(text=VOICE_TEXT)],
+        [KeyboardButton(text=VOICE_SKIP)],
+    ], resize_keyboard=True)
 
 
 async def transcribe_voice_for_current_prompt(m: Message, u: Dict[str, Any]) -> Optional[str]:
     """Allow voice answers in free-text prompts without changing their state handlers."""
     if not m.voice or u.get("stage") not in VOICE_FREE_TEXT_STAGES:
         return None
-    await m.answer("Слушаю голосовое и перевожу в текст…")
+    await m.answer("Распознаю голосовое…")
     voice_text = await whisper_transcribe(m)
-    if not voice_text:
-        await m.answer(voice_transcription_failure_text())
+    if not valid_transcript(voice_text):
+        await m.answer(voice_transcription_failure_text(), reply_markup=voice_retry_keyboard())
         return ""
     await log_event(
         u.get("user_id"),
@@ -1155,7 +1287,7 @@ async def transcribe_voice_for_current_prompt(m: Message, u: Dict[str, Any]) -> 
         DB_PATH,
         SHEETS_WEBHOOK_URL,
     )
-    await m.answer(f"Распознал: {clamp_str(voice_text, 700)}")
+    await m.answer(f"Получился такой текст: «{clamp_str(voice_text, 700)}»")
     return voice_text
 
 
@@ -3547,6 +3679,7 @@ def _select_downscale_skill(u: Dict[str, Any]) -> str:
 
 async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
     """Send a keyboard only if it respects the reply-keyboard button limit and log it."""
+    m = dialogue_message(m, u)
     if any(keyword in (keyboard_name or "") for keyword in ATTEMPT_ROUTE_KEYWORDS):
         updates: Dict[str, Any] = {}
         if "close" in (keyboard_name or "") or "stop" in (keyboard_name or "") or "success" in (keyboard_name or ""):
@@ -5769,17 +5902,12 @@ def _recommended_skill_from_answers(kind: str, answers: List[str]) -> tuple[str,
 
 
 def _analysis_clarify_summary(kind: str, answers: List[str]) -> str:
-    sid, skill_name = _recommended_skill_from_answers(kind, answers)
-    first = answers[0] if answers else "нет ответа"
-    second = answers[1] if len(answers) > 1 else "нет ответа"
-    third = answers[2] if len(answers) > 2 else "нет ответа"
-    return (
-        "Теперь картина точнее.\n\n"
-        f"По ответам видно: в момент входа сильнее всего звучит «{first}», затем обычно включается «{second}», а после отвлечения — «{third}».\n\n"
-        "Это пока рабочая гипотеза, но она уже лучше объясняет твой цикл.\n\n"
-        "Поэтому сегодня не будем требовать «начать работать».\n"
-        f"Проверим более точный вход: {skill_name}."
-    )
+    # Keep the semantic role of each answer. A chosen future action is not
+    # an observed consequence of distraction.
+    questions = _ANALYSIS_CLARIFY_SETS.get(kind, _ANALYSIS_CLARIFY_SETS["fear"])
+    lines = [f"— {question.rstrip(chr(63))}: «{answer}»."
+             for (question, _), answer in zip(questions, answers)]
+    return "Вот ваши ответы:\n" + "\n".join(lines) + "\n\nВыбранный способ ещё нужно попробовать. Перейдём к практике?"
 
 
 def _analysis_details_comp_from_user(u: Dict[str, Any]) -> Dict[str, Any]:
@@ -5838,6 +5966,11 @@ async def handle_analysis_clarification_answer(m: Message, u: Dict[str, Any], te
         comp = {}
     if isinstance(comp, dict):
         comp["clarifying_answers"] = answers[-5:]
+        comp["clarifying_evidence"] = [
+            {"question": q, "answer": answer,
+             "role": "skill_preference" if any(word in q.lower() for word in ("попробовать", "могло бы помочь")) else "self_report"}
+            for (q, _), answer in zip(_ANALYSIS_CLARIFY_SETS.get(kind, _ANALYSIS_CLARIFY_SETS["fear"]), answers)
+        ]
         comp["selected_skill"] = sid
         u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, DB_PATH)
@@ -6115,7 +6248,7 @@ def stored_analysis_user_text(u: Dict[str, Any]) -> str:
 async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text: str, reason: str, *, replace_skill: bool = False):
     previous_text = stored_analysis_user_text(u)
     combined_text = clamp_str(f"{previous_text}\n\nУточнение: {extra_text}" if previous_text else extra_text, 1500)
-    comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
+    comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, combined_text)
     comp.pop("user_text", None)
     comp.update(safe_analysis_memory(combined_text, comp))
@@ -6963,7 +7096,7 @@ def short_offer_text() -> str:
         options = []
         if ENABLE_GROUP_OFFER:
             options.append(
-                "👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €240.\n"
+                f"👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}.\n"
                 "8 недель, онлайн-встреча раз в неделю, задания каждый день и поддержка в чате. "
                 "Работаем с вниманием, реальным планированием, тревогой, импульсивностью и возвратом после срывов."
             )
@@ -6976,7 +7109,7 @@ def short_offer_text() -> str:
             "🟢 Сам тест SKILLER пока остаётся бесплатным. Группа и личная работа — отдельные платные форматы."
         )
         return "\n\n".join(options) + (
-            "\n\nЕсли хочешь результат быстрее и с живой поддержкой — выбери формат и напиши Ивану."
+            "\n\nЕсли нужна помощь психолога — выбери формат и напиши Ивану. До записи можно обсудить условия."
             if ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER else ""
         )
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
@@ -7000,9 +7133,8 @@ def offer_short_conclusion_text(u: Dict[str, Any], summary: Dict[str, Any], prof
         "Что вижу\n"
         f"— ситуация: {task}\n"
         f"— Главный узел: {obstacle}\n\n"
-        "Как держится проблема\n"
-        "важная задача → напряжение или неопределённость → уход / переделка / остановка "
-        "→ короткое облегчение → давление усиливается.\n\n"
+        "Что ещё нужно проверить\n"
+        "Почему это происходит и какой способ поможет именно вам.\n\n"
         "Что уже проверили\n"
         f"— попыток: {attempts}\n"
         f"— лучший сигнал: {helpful}\n"
@@ -7015,7 +7147,7 @@ def offer_short_conclusion_text(u: Dict[str, Any], summary: Dict[str, Any], prof
         "— START: начинать без долгой внутренней борьбы\n"
         "— STAY: оставаться в задаче после первого шага\n"
         "— RETURN: возвращаться после телефона, паузы или срыва\n\n"
-        "Проблема меняется от способа входа, значит её можно тренировать. Цель продолжения — собрать твой повторяемый протокол START → STAY → RETURN."
+        "Цель — найти подходящий вам способ начать, продолжить и вернуться после отвлечения."
     )
 
 
@@ -7649,7 +7781,7 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
         keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить со SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
     if ENABLE_HUMAN_OFFER:
         keyboard.append([InlineKeyboardButton(
-            text=f"👤 Разобрать с человеком — от €{HUMAN_SKILL_SESSION_EUR_LABEL}",
+            text=f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес",
             callback_data=OFFER_CALLBACKS["live"],
         )])
     keyboard.extend([
@@ -7660,10 +7792,11 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
     ])
     if ENABLE_GROUP_OFFER:
         keyboard.append([InlineKeyboardButton(
-            text=f"👥 Группа — €{GROUP_SESSION_EUR_MIN_LABEL}–{GROUP_SESSION_EUR_MAX_LABEL}/занятие",
+            text=f"👥 Хочу в группу — €{GROUP_PROGRAM_PRICE_LABEL}",
             callback_data=OFFER_CALLBACKS["group"],
         )])
-    keyboard.append([InlineKeyboardButton(text="🟢 Пока продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])])
+    if voluntary_support_available():
+        keyboard.append([InlineKeyboardButton(text="💚 Поддержать SKILLER — €4,99/мес", url=VOLUNTARY_SUPPORT_URL)])
     if test_payment_allowed(user_id, user_is_test_user):
         keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
     if is_admin(user_id) and PAYMENT_TEST_URL:
@@ -7675,7 +7808,7 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     if FREE_BETA_ACCESS:
         rows = []
         if ENABLE_GROUP_OFFER:
-            rows.append([InlineKeyboardButton(text="👥 Группа — €240", callback_data=OFFER_CALLBACKS["group"])])
+            rows.append([InlineKeyboardButton(text=f"👥 Группа — €{GROUP_PROGRAM_PRICE_LABEL}", callback_data=OFFER_CALLBACKS["group"])])
         if ENABLE_HUMAN_OFFER:
             rows.append([InlineKeyboardButton(text=f"👤 Личная терапия — €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
         rows.extend([
@@ -7725,7 +7858,7 @@ def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = F
 
 def offer_request_submitted_text(sent: bool) -> str:
     contact = curator_contact_url() or "@Ivan_Vasiliuk"
-    sent_line = "Я отправил заявку Ивану." if sent else "Я записал заявку, но не смог автоматически отправить её в личку Ивану из этого окружения."
+    sent_line = "Я отправил заявку Ивану." if sent else "Заявка сохранена, но не отправлена Ивану. Пожалуйста, напишите ему напрямую."
     return (
         f"{sent_line}\n\n"
         f"Если хочешь ускорить контакт, можно написать напрямую: {contact}\n\n"
@@ -7763,13 +7896,13 @@ def offer_disclaimer_text() -> str:
 
 def tariff_bot_text() -> str:
     return (
-        f"🔵 SKILLER Founding Member — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
+        f"🔵 Расширенный SKILLER — €{BASE_OFFER_EUR_LABEL} / месяц\n\n"
         "Для тех, кто хочет решить проблему самостоятельно, но не начинать каждый раз с нового случайного совета.\n\n"
         "Цель полного режима — собрать твой повторяемый протокол:\n"
         "— как начать;\n"
         "— как удержаться после старта;\n"
         "— как вернуться после срыва.\n\n"
-        "Founding Member: эта цена сохранится для тебя, пока подписка остаётся активной.\n"
+        "Цена и условия указаны перед оплатой.\n"
         "Ты сможешь влиять на развитие продукта и первым получать новые функции.\n\n"
         "SKILLER будет сохранять результаты, не предлагать по кругу то, что не помогло, и обновлять заключение по новым попыткам.\n\n"
         "Внутри:\n"
@@ -7798,18 +7931,19 @@ def tariff_live_text() -> str:
 
 
 def tariff_group_text() -> str:
+    installment = f"Можно оплатить двумя частями по €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR / 2)}. " if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else "Условия оплаты можно уточнить до записи. "
     return (
-        "👥 Группа навыков для взрослых с СДВГ — €240\n\n"
+        f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
         "8 недель, 8 онлайн-встреч по одной в неделю. Небольшая группа до 12 человек.\n"
-        "Ведущий — психолог Иван Василюк. Основа — КПТ, ДБТ и метакогнитивные протоколы Safren/Solanto.\n\n"
-        "За программу ты соберёшь рабочую систему:\n"
+        "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
+        "На встречах будем пробовать:\n"
         "— как удерживать внимание и уменьшать отвлечения;\n"
         "— как планировать реалистично, без перегруза;\n"
         "— как проходить тревогу, перфекционизм и прокрастинацию;\n"
         "— как регулировать эмоции и импульсивность;\n"
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
         "Внутри: практика на своих задачах, задания каждый день, чат-поддержка и материалы после встреч.\n\n"
-        "Стоимость всей программы — €240. Можно оплатить двумя частями по €120. "
+        f"Стоимость всей программы — €{GROUP_PROGRAM_PRICE_LABEL}. {installment}"
         "Перед участием — короткая бесплатная встреча, чтобы понять, подходит ли формат.\n\n"
         "Если хочешь место — нажми кнопку ниже. Иван напишет тебе лично."
     )
@@ -7881,7 +8015,7 @@ def offer_details_full_mode_text() -> str:
         options = ["🟢 Бесплатно: SKILLER — тест навыков и личной карты."]
         if ENABLE_GROUP_OFFER:
             options.append(
-                "👥 Группа навыков для взрослых с СДВГ — €240\n"
+                f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n"
                 "8 недель: еженедельная встреча, задания каждый день и поддержка в чате."
             )
         if ENABLE_HUMAN_OFFER:
@@ -9691,24 +9825,14 @@ def day1_insight_text(u: Dict[str, Any], profile: Dict[str, Any]) -> tuple[str, 
         if continued is True else
         "Запуск и удержание могут быть разными проблемами: микрошаг удалось проверить, но продолжение пока не подтверждено."
     )
-    reaction = "желание отойти или переключиться"
-    avoidance = public_enum_text(profile.get("attention_pattern") or profile.get("avoidance_pattern") or "уход от контакта с задачей")
-    prediction = (
-        f"Если гипотеза про «{barrier}» верна, следующий заметный стопор появится в первые минуты "
-        "после контакта с неприятной задачей, а не только после долгой работы."
-    )
+    prediction = "Повторится ли результат, если попробовать этот способ ещё раз в похожей ситуации?"
     text = (
-        "🧠 Я уже вижу одну интересную вещь.\n\n"
-        f"Ты не просто «прокрастинируешь». {start_stay}\n\n"
-        "Текущая рабочая модель:\n"
-        f"{barrier} → {reaction} → {avoidance} → короткое облегчение\n\n"
-        f"{'Первый полезный сигнал' if helpful_signals else 'Что сработало'}: {helped}.\n\n"
-        "Что мы пока не знаем:\n"
-        "— повторится ли найденный эффект;\n"
-        "— что сильнее запускает цикл;\n"
-        "— проблема больше в START или STAY.\n\n"
-        f"🔮 Проверим прогноз\n{prediction}\n\n"
-        "Если повторится — гипотеза станет сильнее. Если нет — изменим модель."
+        "Что удалось заметить\n\n"
+        f"{start_stay}\n\n"
+        f"Что по ответам могло мешать: {barrier}.\n"
+        f"Что сработало: {helped}.\n\n"
+        "Это предварительный вывод по попыткам. Причины трудности ещё нужно уточнить.\n\n"
+        f"Что проверим дальше\n{prediction}"
     )
     return text, prediction
 
@@ -9777,9 +9901,12 @@ async def day_close_metrics_text(u: Dict[str, Any], review_override: Optional[Di
     attempts = max(counts["attempts_today"], int((profile.get("personal_working_model") or {}).get("evidence_count") or 0) if isinstance(profile.get("personal_working_model"), dict) else 0)
     profile_card = day1_profile_card_text(u, profile, attempts)
     functional_state = _functional_state_with_review(profile, review)
-    focus = DAY_REVIEW_FUNCTION_LABELS.get(
-        str(functional_state.primary_problem or "").lower(), "узел ещё уточняется",
-    )
+    focus = review_focus(review, functional_state.primary_problem)
+    explicit = str(review.get("function") or "").upper()
+    conflict = bool(explicit in {"START", "STAY", "RETURN"} and functional_state.primary_problem
+                    and explicit != str(functional_state.primary_problem).upper())
+    if conflict:
+        focus += ". В ответах за день есть разные результаты; пока не выбираем одну главную трудность"
     state = str(review.get("state") or "не отмечено")
     sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
     skill = dict(SKILLS_DB.get(sid) or {})
@@ -9792,25 +9919,13 @@ async def day_close_metrics_text(u: Dict[str, Any], review_override: Optional[Di
     )
     milestone_block = f"\n\n🧭 Накопительный вывод\n{milestone}" if milestone else ""
     return (
-        f"{trainer_style_line(u.get('trainer_key') or 'marsha', 'close')}\n\n"
-        "🌙 Предварительное заключение за день\n\n"
-        f"Главный узел: {focus}.\n"
-        f"Состояние: {state}.\n\n"
-        f"{profile_card}\n\n"
-        "Что наблюдали по действиям\n"
-        f"— завершённых проверок: {counts['attempts_today']}\n"
-        f"— продолжений целевой задачи: {counts['continued_actions_today']}\n"
-        f"— остановок после микрошагa: {counts['stopped_after_step_today']}\n"
-        f"— возвратов после отвлечения: {counts['returns_today']}\n\n"
-        "Это данные о поведении, а не оценка продуктивности.\n\n"
-        "🧠 Инсайт дня\n"
-        f"{day_review_insight_text(review)}\n\n"
-        "🧩 Навык / мысль, которую забираем с собой\n"
-        f"{learning}\n\n"
-        "Статусы навыков:\n"
-        f"{skill_map_lines(skill_map, 3)}\n\n"
-        "Завтра проверим следующий тест из карты. Один повтор уточнит вывод лучше, чем ещё один общий совет."
-        f"{milestone_block}"
+        "На сегодня можно закончить.\n\n"
+        f"По вашему ответу труднее всего было: {focus}.\n"
+        f"Что мешало: {review.get('barrier') or 'не отмечено'}.\n"
+        f"Состояние: {review.get('state') or 'не отмечено'}.\n"
+        f"Завершённых попыток сегодня: {counts['attempts_today']}.\n"
+        f"Продолжить дело получилось: {counts['continued_actions_today']} раз.\n\n"
+        "Результаты сохранены. Когда захотите вернуться, напишите, с чем нужна помощь."
     )
 
 
@@ -11447,6 +11562,9 @@ BARRIER_BUTTONS = {
 }
 
 PUBLIC_ENUM_LABELS = {
+    "entry_small_step": "Маленький видимый шаг",
+    "unclear_instruction": "первое действие было непонятно",
+    "phone_away_3_min": "Телефон вне руки на 3 минуты",
     "scroll_autopilot": "автоматически ухожу в быстрые стимулы",
     "attention_escape": "переключаюсь с задачи",
     "fear_of_error": "страх ошибки",
@@ -11478,7 +11596,7 @@ def public_enum_text(value: Any) -> str:
         label_value = skill.get("name") or skill.get("title") or skill.get("display_name")
         if label_value:
             return str(label_value)
-    text = raw
+    text = raw.replace("*", "_").strip("_") if re.fullmatch(r"[a-z0-9_*]+", raw) else raw
     for internal, public in PUBLIC_ENUM_LABELS.items():
         text = text.replace(internal, public)
         text = text.replace(internal.replace("_", "*"), public)
@@ -11789,6 +11907,14 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
     if stage == "day_review_function":
         function = DAY_REVIEW_FUNCTION_BY_BUTTON.get(text)
         if not function:
+            low_review = text.casefold().replace("ё", "е")
+            if "не начал" in low_review or "не могу начать" in low_review or "не получилось начать" in low_review:
+                function = "start"
+            elif "верну" in low_review or "возврат" in low_review:
+                function = "returned" if "получилось" in low_review and "не получилось" not in low_review else "return"
+            elif "останов" in low_review or "продолж" in low_review:
+                function = "stay"
+        if not function:
             await answer_with_keyboard(m, u, "Где сегодня чаще ломалась цепочка?", kb_day_review_function, "day_review_function")
             return True
         review["function"] = function
@@ -11804,7 +11930,7 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
             await save_user(u, DB_PATH)
             await m.answer("Напиши одной короткой фразой, что мешало.")
             return True
-        barrier = DAY_REVIEW_BARRIER_BY_BUTTON.get(text)
+        barrier = DAY_REVIEW_BARRIER_BY_BUTTON.get(text) or (text[:180] if len(text.strip()) >= 3 and not is_known_reply_button(text) else "")
         if not barrier:
             await answer_with_keyboard(m, u, "Что сильнее всего мешало?", kb_day_review_barrier, "day_review_barrier")
             return True
@@ -11816,7 +11942,7 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
             return True
         review["barrier"] = value
     elif stage == "day_review_state":
-        state = DAY_REVIEW_STATE_BY_BUTTON.get(text)
+        state = DAY_REVIEW_STATE_BY_BUTTON.get(text) or (text[:180] if len(text.strip()) >= 3 and not is_known_reply_button(text) else "")
         if not state:
             await answer_with_keyboard(m, u, "В каком состоянии ты чаще был сегодня?", kb_day_review_state, "day_review_state")
             return True
@@ -12248,7 +12374,9 @@ async def handle_successful_payment(m: Message):
 async def main_flow(m: Message):
     uid = m.from_user.id
     u = await get_user(uid, DB_PATH)
+    m = dialogue_message(m, u)
     text = (m.text or "").strip()
+    text = {v: k for k, v in BUTTON_LABELS.items()}.get(text, text)
     low = text.lower()
 
     # Calendar rollover is routing, not training: it must happen before any
@@ -12264,14 +12392,17 @@ async def main_flow(m: Message):
         text = voice_text.strip()
         low = text.lower()
     elif m.voice:
-        await m.answer("Слушаю голосовое и сначала проверяю безопасность…")
+        await m.answer("Распознаю голосовое…")
         global_voice_text = await whisper_transcribe(m)
-        if not global_voice_text:
-            await m.answer(voice_transcription_failure_text())
+        if not valid_transcript(global_voice_text):
+            await m.answer(voice_transcription_failure_text(), reply_markup=voice_retry_keyboard())
             return
         text = global_voice_text.strip()
         low = text.lower()
         await log_event(u.get("user_id"), u.get("stage", ""), "global_voice_transcribed", {"len": len(text)}, DB_PATH, SHEETS_WEBHOOK_URL)
+
+    if m.voice and text:
+        m._voice_transcript = text
 
     # Safety owns the message before any diagnostic, router, offer, or legacy
     # branch. This prevents a high-risk phrase or stale crisis button from
@@ -12283,6 +12414,9 @@ async def main_flow(m: Message):
         return
     if text and (has_red_crisis_phrase(text) or has_crisis_safety_signal(text, u.get("stage") or "")):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
+        return
+
+    if await handle_dialogue_help(m, u, text):
         return
 
     # Closing the day is a global destination. It must outrank the action
@@ -12328,12 +12462,15 @@ async def main_flow(m: Message):
     # A callback may put the action router into a dedicated text/voice state.
     # Consume that input here before every legacy intake or story-analysis path.
     skiller_session = _skiller_session(u)
-    if SKILLER_ACTION_ROUTER_ENABLED and skiller_session.get("state") in {
+    if SKILLER_ACTION_ROUTER_ENABLED and (skiller_session.get("awaiting_target") or skiller_session.get("awaiting_barrier") or skiller_session.get("state") in {
+        SkillerDialogState.DAY1_INTAKE.value,
         SkillerDialogState.DAY1_CLARIFY.value,
+        SkillerDialogState.EXPERIMENT_ACTIVE.value,
+        SkillerDialogState.EXPERIMENT_FEEDBACK.value,
         SkillerDialogState.CORRECTION_INPUT.value,
         SkillerDialogState.NEW_CASE_INTAKE.value,
         SkillerDialogState.CRISIS_FLOW.value,
-    } and text:
+    }) and text and not priority_kind:
         routed = route_skiller_user_input(skiller_session, text, kind="voice" if m.voice else "text")
         _save_skiller_session(u, skiller_session)
         await save_user(u, DB_PATH)
@@ -13765,18 +13902,9 @@ async def main_flow(m: Message):
         if text and text.lower() != "пропустить":
             u["name"] = text[:50]
         await log_event(u["user_id"], "onboarding", "name_provided", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        set_legacy_stage(u, "await_trainer")
+        set_legacy_stage(u, "ask_address")
         await save_user(u, DB_PATH)
-        # Показываем всех тренеров
-        trainers_intro = (
-            "\U0001F408\u200D\u2B1B Тренеры: кто будет вести тебя?\n\n"
-            "🤍 Марша — мягкая и поддерживающая. Помогает возвращаться без стыда и не бросать после срывов.\n"
-            "🐈‍⬛ Скинни — прямой и требовательный. Даст чёткий маршрут и жёсткие рамки, без лишних разговоров.\n"
-            "🧠 Бек — аналитичный и спокойный. Объяснит, что происходит и почему это работает.\n\n"
-            "Выбери стиль, который тебе ближе — его можно будет сменить."
-        )
-        await m.answer(trainers_intro)
-        await m.answer("Ок. Выбери тренера:", reply_markup=kb_trainers)
+        await m.answer("Как обращаться: на «ты» или на «вы», в каком роде? Можно пропустить. Изменить выбор — /address.", reply_markup=address_keyboard())
         return
 
     # ============================================================
@@ -13846,7 +13974,7 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
                 "notice_version": "2026-09-02",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Спасибо. Готов начать разбор и перейти к первому дню?", reply_markup=kb_yes_no)
+            await m.answer("Спасибо. Начнём с одного дела, которое сейчас трудно сделать?", reply_markup=kb_yes_no)
             return
         if text == "❌ Не согласен(на)":
             u["notifications_enabled"] = 0
@@ -13890,7 +14018,7 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer("Выбери другого тренера 👇", reply_markup=kb_trainers)
             return
-        await m.answer("Выбери: ✅ Готов / ✅ Да / ❌ Нет", reply_markup=kb_yes_no)
+        await m.answer("Начнём с одного дела?", reply_markup=kb_yes_no)
         return
 
     # ============================================================
@@ -13961,14 +14089,15 @@ async def main_flow(m: Message):
     # await_problem_text
     if u["stage"] == "await_problem_text":
         if m.voice:
-            await m.answer("Слушаю голосовое и перевожу в текст…")
+            await m.answer("Распознаю голосовое…")
             user_text = await whisper_transcribe(m)
             if not user_text:
                 await m.answer("Не смог разобрать голосовое. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
                 return
             await m.answer(f"Распознал: {clamp_str(user_text, 700)}")
         elif not text or text.lower() == "пропустить":
-            user_text = "Прокрастинация/избегание, хочу начать, но откладываю."
+            await m.answer("С каким делом сейчас нужна помощь? Можно написать одну фразу или прислать голосовое.")
+            return
         else:
             user_text = text
             await save_extracted_task_context(
@@ -13988,14 +14117,8 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer("Ок. Выбери режим:", reply_markup=kb_input_mode)
             return
-        if not m.voice:
-            await m.answer("Пришли голосовое 🎙")
-            return
-        await m.answer("Слушаю голосовое и перевожу в текст…")
-        t = await whisper_transcribe(m)
+        t = await whisper_transcribe(m) if m.voice else text
         if not t:
-            set_legacy_stage(u, "await_problem_text")
-            await save_user(u, DB_PATH)
             await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
             return
         await m.answer(f"Распознал: {clamp_str(t, 700)}")
@@ -14626,7 +14749,7 @@ async def main_flow(m: Message):
 
         # Если сразу прислал голосовое — обрабатываем без лишних шагов
         if m.voice:
-            await m.answer("Слушаю голосовое и перевожу в текст…")
+            await m.answer("Распознаю голосовое…")
             t = await whisper_transcribe(m)
             if t:
                 u["crisis_text"] = t
@@ -14672,7 +14795,7 @@ async def main_flow(m: Message):
 
     if u.get("stage") == "crisis_text":
         if m.voice and not text:
-            await m.answer("Слушаю голосовое и перевожу в текст…")
+            await m.answer("Распознаю голосовое…")
             t = await whisper_transcribe(m)
             if not t:
                 await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
@@ -14985,12 +15108,13 @@ async def main_flow(m: Message):
         set_legacy_stage(u, "waiting_next_day")
         await save_user(u, DB_PATH)
         profile = await get_user_profile(u["user_id"], DB_PATH)
-        await notify_curator_map_review(m, u, profile, "availability_message", text[:240])
+        sent = await notify_curator_map_review(m, u, profile, "availability_message", text[:240])
+        delivery_note = "Заявка отправлена Ивану." if sent else "Не удалось отправить заявку. Пожалуйста, напишите Ивану напрямую."
         await answer_with_keyboard(
             m,
             u,
             f"Записал. Первый шаг пути с куратором — живой разбор твоей карты и выбор главного механизма на ближайшую неделю.\n\n"
-            f"Я отправил заявку Ивану. Если хочешь ускорить контакт, можно написать напрямую: {curator_contact_url() or 'Ивану'}\n\n"
+            f"{delivery_note} Контакт: {curator_contact_url() or '@Ivan_Vasiliuk'}\n\n"
             "Пока ждёшь разбор, короткий маршрут остаётся: один маленький вход в день и кризисный возврат, если сорвёт.",
             kb_training_main,
             "training_main",
@@ -15000,7 +15124,7 @@ async def main_flow(m: Message):
     if u.get("stage") == "offer_request_form":
         request_text = (text or "").strip()
         if len(request_text) < 5:
-            await m.answer("Напиши, пожалуйста, одним сообщением: имя, ник в Telegram, почту и коротко запрос.")
+            await m.answer("Напишите одной фразой, с чем нужна помощь. Если в Telegram нет имени пользователя, добавьте один контакт для ответа.")
             return
         known_username = getattr(m.from_user, "username", None) or u.get("username")
         has_contact = bool(known_username or "@" in request_text or re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", request_text) or re.search(r"\+?\d[\d ()-]{6,}", request_text))
@@ -15083,7 +15207,7 @@ LOST_CALLBACK_TEXT = (
 CURRENT_SCREEN_TEXT = "Этот шаг уже закрыт. Чтобы не путаться, продолжим с текущего места."
 CRISIS_REDIRECT_TEXT = (
     "Похоже, сейчас важнее безопасность, а не тренировка навыка.\n\n"
-    "Если есть риск навредить себе, ты не в безопасности или не можешь остаться один/одна — "
+    "Если есть риск навредить себе, ты не в безопасности или трудно оставаться без поддержки — "
     "позвони 112 или обратись в ближайшую неотложную помощь.\n\n"
     "Если можешь, напиши человеку рядом:\n"
     "«Мне сейчас небезопасно, побудь со мной».\n\n"
@@ -15654,6 +15778,7 @@ async def validate_callback_screen(c: CallbackQuery, u: Dict[str, Any], source: 
 
 
 async def answer_with_inline_screen(m: Message, u: Dict[str, Any], text: str, markup: InlineKeyboardMarkup, prefix: str):
+    m = dialogue_message(m, u)
     screen_id = new_screen_id(prefix)
     attempt = await bump_active_attempt_screen(u, f"inline_screen:{prefix}")
     await set_active_screen(u, screen_id)
@@ -15665,6 +15790,7 @@ async def answer_with_inline_screen(m: Message, u: Dict[str, Any], text: str, ma
 
 
 async def edit_with_inline_screen(message, u: Dict[str, Any], text: str, markup: InlineKeyboardMarkup, prefix: str):
+    message = dialogue_message(message, u)
     screen_id = new_screen_id(prefix)
     attempt = await bump_active_attempt_screen(u, f"inline_edit:{prefix}")
     await set_active_screen(u, screen_id)
@@ -15753,7 +15879,7 @@ async def on_skiller_action_callback(c: CallbackQuery) -> None:
     # Telegram retries and fast double taps must not create duplicate DB events.
     if not telemetry.get("duplicate"):
         await log_event(c.from_user.id, "callback_router", "callback_routed", telemetry, DB_PATH, SHEETS_WEBHOOK_URL)
-    await c.message.answer(result["text"], reply_markup=_skiller_markup(result.get("buttons") or []))
+    await dialogue_message(c.message, u).answer(result["text"], reply_markup=_skiller_markup(result.get("buttons") or []))
     await c.answer()
 
 @router.callback_query(lambda c: (c.data or "").startswith("prediction:"))
@@ -16222,7 +16348,7 @@ async def on_unknown_callback(c: CallbackQuery):
 async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
     bucket = u.get("bucket") or "mixed"
     user_text = stored_analysis_user_text(u) or f"У меня проблемы с {bucket}"
-    comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL)
+    comp = await ai_analyze_comprehensive(user_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, user_text)
     comp["trainer_key"] = u.get("trainer_key", "marsha")
     if comp.get("analysis_fallback"):
@@ -16297,6 +16423,9 @@ async def show_comprehensive_analysis(m: Message, u: Dict[str, Any]):
 # ============================================================
 
 async def whisper_transcribe(m: Message) -> Optional[str]:
+    cached = getattr(m, "_voice_transcript", None)
+    if cached is not None:
+        return cached
     if client is None:
         log.warning("[AI] Whisper disabled: OpenAI client or API key is not configured")
         try:
@@ -16322,6 +16451,7 @@ async def whisper_transcribe(m: Message) -> Optional[str]:
             model=OPENAI_WHISPER_MODEL,
             file=bio,
             language="ru",
+            **({"response_format": "verbose_json"} if OPENAI_WHISPER_MODEL == "whisper-1" else {}),
         )
         text = getattr(tr, "text", None)
         if not text:
@@ -16330,9 +16460,11 @@ async def whisper_transcribe(m: Message) -> Optional[str]:
             except Exception:
                 text = None
         text = (text or "").strip()
-        if not text:
-            log.warning("[AI] Whisper returned empty transcription")
-        return text or None
+        segments = tr.get("segments") if isinstance(tr, dict) else getattr(tr, "segments", None)
+        if not valid_transcript(text, segments):
+            log.info("[AI] Voice rejected: no reliable speech")
+            return None
+        return text
     except Exception as e:
         log.exception("whisper error: %s", e)
         try:
@@ -16593,6 +16725,7 @@ async def main() -> int:
             raise RuntimeError("BOT_TOKEN is empty; set the BOT_TOKEN environment variable before starting the bot")
 
         bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
+        bot.session.middleware(OutgoingDialogueMiddleware(lambda: DB_PATH))
         # Serialize updates per Telegram user/chat. Rapid taps such as
         # "Открыть карту" -> "Начать всё заново" must not overwrite each
         # other's persisted stage with stale snapshots.
@@ -16639,3 +16772,4 @@ async def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
+

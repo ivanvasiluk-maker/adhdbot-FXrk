@@ -15,13 +15,13 @@ class PersonalWorkingModelTests(unittest.TestCase):
             successful=True, evidence_ref="experiment:1", step_size="открыть файл",
         )
         self.assertEqual(model.confidence, "hypothesis")
-        self.assertIn("Сегодня появилась гипотеза", render_working_model(model.as_dict()))
+        self.assertIn("помогло в 1 из 1 попыток", render_working_model(model.as_dict()))
         model = update_working_model(
             model.as_dict(), barrier="неясность", skill_title="Один шаг", context="study",
             successful=True, evidence_ref="experiment:2",
         )
         self.assertEqual(model.confidence, "repeating")
-        self.assertIn("Кажется, это повторяется", render_working_model(model.as_dict()))
+        self.assertIn("помогло в 2 из 2 попыток", render_working_model(model.as_dict()))
 
     def test_success_and_failure_are_counted_separately(self):
         model = update_working_model({}, barrier="тревога", skill_title="Таймер", context="work", successful=False, evidence_ref="e:1")
@@ -56,10 +56,11 @@ class ContentAndClosureTests(unittest.TestCase):
 
     def test_closure_and_return_keep_interaction_open(self):
         closure = render_session_closure("помогло открыть файл")
-        self.assertIn("если хочется продолжить", closure)
+        self.assertIn("напишите новую ситуацию", closure)
         self.assertNotIn("до завтра", closure.lower())
-        self.assertIn("Проверим тот же принцип", render_return_continuity("помогло открыть файл."))
+        self.assertIn("Хотите продолжить с этого", render_return_continuity("помогло открыть файл."))
 
 
 if __name__ == "__main__":
     unittest.main()
+

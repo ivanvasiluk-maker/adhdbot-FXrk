@@ -7,6 +7,7 @@ from core.skiller_router import ACTIONS, CLARIFICATION_ANSWERS, DialogState, new
 class SkillerDay1RouterTests(unittest.TestCase):
     def test_finish_is_hard_action(self):
         session = new_session(DialogState.DAY_OPEN)
+        session["target_task"] = "написать отчёт"
         result = route_callback(session, "day.finish", callback_id="finish-1")
         self.assertEqual(session["state"], DialogState.DAY_CLOSED.value)
         self.assertNotIn("Что чаще ломает вход", result["text"])
@@ -14,7 +15,7 @@ class SkillerDay1RouterTests(unittest.TestCase):
     def test_clarification_is_structured_and_never_a_story(self):
         session = new_session(DialogState.DAY1_CLARIFY)
         result = route_callback(session, "clarify.entry.overload", callback_id="barrier-1")
-        self.assertEqual(session["structured_answers"], [{"question_id": "entry_barrier", "answer": "overload"}])
+        self.assertEqual(session["structured_answers"], [{"question_id": "entry_barrier", "answer": "overload", "role": "self_report"}])
         self.assertEqual(session["clarification_count"], 1)
         self.assertIn("Если бы других задач", result["text"])
         self.assertNotIn("😵 Перегруз", session["case_facts"])
@@ -26,7 +27,7 @@ class SkillerDay1RouterTests(unittest.TestCase):
         route_callback(session, "clarify.function.stay")
         result = route_callback(session, "diagnosis.full_report")
         self.assertIn("квартальный отчёт", result["text"])
-        self.assertIn("8. Ограничение", result["text"])
+        self.assertIn("Ограничение", result["text"])
 
     def test_text_or_voice_correction_updates_same_case(self):
         session = new_session(DialogState.DAY1_INTAKE)
@@ -39,6 +40,7 @@ class SkillerDay1RouterTests(unittest.TestCase):
 
     def test_offer_continue_restores_state(self):
         session = new_session(DialogState.DAY1_SUMMARY)
+        session["target_task"] = "написать отчёт"
         blocked = route_callback(session, "offer.subscription")
         result = route_callback(session, "offer.continue")
         self.assertEqual(session["state"], DialogState.DAY1_SUMMARY.value)
@@ -67,6 +69,7 @@ class SkillerDay1RouterTests(unittest.TestCase):
 
     def test_feedback_is_one_question_and_never_more_than_two(self):
         session = new_session(DialogState.DAY1_SUMMARY)
+        session["target_task"] = "написать отчёт"
         route_callback(session, "experiment.start")
         result = route_callback(session, "experiment.done")
         self.assertEqual(session["feedback_questions"], 1)
@@ -92,6 +95,7 @@ class SkillerDay1RouterTests(unittest.TestCase):
 
     def test_callback_retry_is_idempotent_and_telemetered(self):
         session = new_session(DialogState.DAY1_SUMMARY)
+        session["target_task"] = "написать отчёт"
         route_callback(session, "experiment.start", callback_id="telegram-42", user_id=9, screen_id="summary")
         retry = route_callback(session, "experiment.start", callback_id="telegram-42", user_id=9, screen_id="summary")
         self.assertEqual(session["experiment_count"], 1)
@@ -102,12 +106,14 @@ class SkillerDay1RouterTests(unittest.TestCase):
 
     def test_stale_button_has_safe_equivalent_not_text_analysis(self):
         session = new_session(DialogState.DAY_OPEN)
+        session["target_task"] = "написать отчёт"
         result = route_callback(session, "legacy.short_skill", callback_id="old-1")
         self.assertEqual(session["state"], DialogState.EXPERIMENT_ACTIVE.value)
-        self.assertIn("Эксперимент", result["text"])
+        self.assertIn("Что получилось?", result["text"])
 
     def test_distinct_double_tap_does_not_duplicate_experiment_or_result(self):
         session = new_session(DialogState.DAY1_SUMMARY)
+        session["target_task"] = "написать отчёт"
         route_callback(session, "experiment.start", callback_id="tap-1")
         retry = route_callback(session, "experiment.start", callback_id="tap-2")
         self.assertTrue(retry["duplicate"])
@@ -160,7 +166,7 @@ class ThreeJourneyCases(unittest.TestCase):
         summary = route_callback(session, functional)
         self.assertEqual(session["state"], DialogState.DAY1_SUMMARY.value)
         self.assertIn(story, session["full_report"])
-        self.assertIn("Твоя рабочая карта", summary["text"])
+        self.assertIn("Вы описали:", summary["text"])
         route_callback(session, "experiment.start")
         route_callback(session, "experiment.done")
         feedback = route_callback(session, outcome)
@@ -174,23 +180,24 @@ class ThreeJourneyCases(unittest.TestCase):
         session, feedback = self._complete(
             "Открываю квартальный отчёт, вижу десять задач и ухожу в мессенджер",
             "clarify.entry.overload", "clarify.function.stay", "experiment.result.promising")
-        self.assertIn("хороший первый сигнал", feedback["text"])
+        self.assertIn("получилось продолжить", feedback["text"])
         self.assertEqual(len(session["skill_map"]["successful_skills"]), 1)
 
     def test_case_evaluation_fear_then_partial(self):
         session, feedback = self._complete(
             "Третий день не отправляю письмо клиенту, потому что боюсь его реакции",
             "clarify.entry.fear", "clarify.function.start", "experiment.result.partial")
-        self.assertIn("STAY", feedback["text"])
+        self.assertIn("продолжение", feedback["text"])
         self.assertEqual(len(session["skill_map"]["partial_skills"]), 1)
 
     def test_case_distraction_then_no_effect(self):
         session, feedback = self._complete(
             "Начинаю читать документ и через минуту автоматически открываю телефон",
             "clarify.entry.distraction", "clarify.function.stay", "experiment.result.no_effect")
-        self.assertIn("не дал заметного эффекта", feedback["text"])
+        self.assertIn("пока не помог", feedback["text"])
         self.assertEqual(len(session["skill_map"]["failed_skills"]), 1)
 
 
 if __name__ == "__main__":
     unittest.main()
+

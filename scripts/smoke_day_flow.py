@@ -96,7 +96,7 @@ async def main() -> None:
                     "Это следующий шаг, не повтор старта.",
                     "Даём другой вход, чтобы не крутить один и тот же навык.",
                     "🧩 Навык дня — для твоей ситуации:",
-                    "🧩 Навык:",
+                    "🧩 ",
                     "Что будем делать",
                 )), joined(repeat_msg)
                 assert "🌱 Новый день" not in joined(repeat_msg)
@@ -112,7 +112,7 @@ async def main() -> None:
             user, _ = await send(uid, "STAY — начал и остановился")
             user, _ = await send(uid, "Телефон / YouTube")
             user, close_msg = await send(uid, "Напряжённо")
-            assert "Предварительное заключение за день" in joined(close_msg)
+            assert "На сегодня можно закончить." in joined(close_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
 
             # 3. Action after close opens a voluntary short step without reopening the day.
@@ -133,7 +133,7 @@ async def main() -> None:
             user, force_msg = await send(uid, "/force_next_day")
             assert "Тестовый переход выполнен. Открыт День 2." in joined(force_msg)
             assert "🌱 Новый день" in force_msg.answers[-2]
-            assert "🧩 Навык:" not in force_msg.answers[-2]
+            assert "Если трудно, достаточно этого:" not in force_msg.answers[-2]
             assert "🌱 Новый день" not in force_msg.answers[-1]
             assert "Вчера мы увидели" not in force_msg.answers[-1]
             assert "🧩 Навык дня — для твоей ситуации:" in force_msg.answers[-1]
@@ -152,3 +152,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

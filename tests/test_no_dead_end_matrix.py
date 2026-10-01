@@ -23,7 +23,7 @@ class NeverDeadEndAcceptanceTests(unittest.TestCase):
 
     def test_02_not_done_changes_interpretation(self):
         text = reflection().render()
-        self.assertIn("не сработал", text)
+        self.assertIn("не получилось", text)
         self.assertIn("не повторить то же самое", text)
 
     def test_03_partial_is_not_full_failure(self):
@@ -41,13 +41,13 @@ class NeverDeadEndAcceptanceTests(unittest.TestCase):
 
     def test_07_one_case_is_hypothesis(self):
         model = update_working_model({}, barrier="неясность", skill_title="Шаг", context="work", successful=True, evidence_ref="e1")
-        self.assertIn("гипотеза", render_working_model(model.as_dict()))
+        self.assertIn("Пока неясно, повторится ли", render_working_model(model.as_dict()))
 
     def test_08_repeated_case_is_visible(self):
         model = {}
         for ref in ("e1", "e2"):
             model = update_working_model(model, barrier="неясность", skill_title="Шаг", context="work", successful=True, evidence_ref=ref).as_dict()
-        self.assertIn("повторяется", render_working_model(model))
+        self.assertIn("2 из 2 попыток", render_working_model(model))
 
     def test_09_reviewed_material_is_available(self):
         self.assertIsNotNone(CONTENT_REGISTRY.select(barrier_type="too_hard"))
@@ -68,3 +68,4 @@ class NeverDeadEndAcceptanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

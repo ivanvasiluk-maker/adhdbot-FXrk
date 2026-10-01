@@ -1,0 +1,5 @@
+{
+  "name": "dialogue_ux_recovery",
+  "behavioral_goal": "recover",
+  "success_metric": "After rollout compare the share of users who complete an attempt within 24 hours after clarification, voice retry or return, and day-2/day-7 return rates against the prior cohort. This patch does not claim measured uplift."
+}

@@ -80,7 +80,8 @@ class TrainerVoiceTests(unittest.TestCase):
     def test_start_success_and_stay_failure_shift_to_stay_in_three_voices(self):
         content = day_summary_content(start_skill_name="Плохой черновик", stay_skill_name="Одна вкладка")
         texts = [render_message(trainer, content).text for trainer in TRAINERS]
-        self.assertTrue(all("STAY" in text for text in texts))
+        self.assertTrue(all("продолжение" in text for text in texts))
+        self.assertTrue(all("STAY" not in text for text in texts))
         self.assertEqual(len(set(texts)), 3)
         self.assertTrue(all(render_message(trainer, content).target_function == "STAY" for trainer in TRAINERS))
 
@@ -95,3 +96,4 @@ class TrainerVoiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

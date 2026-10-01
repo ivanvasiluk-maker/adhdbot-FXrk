@@ -1,0 +1,171 @@
+"""Small, deterministic dialogue safeguards; no diagnosis and no network calls."""
+from __future__ import annotations
+
+import json
+import re
+from difflib import SequenceMatcher
+from typing import Any
+
+OTHER = "✍️ Ответить своими словами"
+VOICE_RETRY = "🎙 Записать ещё раз"
+VOICE_TEXT = "⌨️ Написать текстом"
+VOICE_SKIP = "Пропустить голосовое"
+VOICE_FAILURE = "Кажется, голосовое не распозналось. Можете записать ещё раз или написать текстом."
+
+# Captions change at the boundary; legacy handlers keep stable command values.
+# Callback action IDs are never rewritten.
+BUTTON_LABELS = {
+    "✅ Готов": "✅ Можно начинать",
+    "🟢 Продолжить beta бесплатно": "🟢 Продолжить без оплаты",
+    "✅ Согласен(на), продолжить": "✅ Даю согласие, продолжить",
+    "❌ Не согласен(на)": "❌ Не даю согласие",
+    "✍️ Опишу сам(а)": "✍️ Опишу своими словами",
+
+    "✅ Сделал": "✅ Получилось сделать",
+    "❌ Не сделал": "❌ Не получилось начать",
+    "🟡 Попробовал, но не вышло": "🟡 Попытка не удалась",
+    "🚀 Продолжил задачу": "🚀 Получилось продолжить",
+    "🙂 Стало легче, но остановился": "🙂 Получилось сделать только шаг",
+    "😣 Стало хуже / сильнее избегаю": "😣 Стало хуже",
+    "🧩 Ещё меньше": "🧩 Подобрать более простое действие",
+    "🆘 Мне всё ещё плохо": "🆘 Сейчас нужна поддержка",
+    "START — не начал": "Не получилось начать",
+    "STAY — начал и остановился": "Начало получилось, продолжение — нет",
+    "RETURN — не вернулся после отвлечения": "Не получилось вернуться после перерыва",
+}
+
+PLAIN_TERMS = {
+    "SKILLER Full": "расширенный SKILLER", "Founding Member": "ранний доступ",
+    "бесплатный beta-доступ": "бесплатный доступ", "beta-доступ": "пробный доступ",
+    "beta-теста": "пробного запуска", "beta-тесте": "пробном запуске", "beta-тест": "пробный запуск",
+    "beta": "тестирование",
+    "Body doubling": "Работа рядом с другим человеком", "body doubling": "работа рядом с другим человеком",
+    "username": "имя пользователя", "check-in": "короткие", "онбординг": "знакомство", "фидбек": "отзыв",
+    "основной паттерн": "что чаще мешает", "паттерн": "повторяющийся ход событий", "паттерны": "повторяющиеся трудности",
+    "гипотеза": "версия", "гипотезу": "версию", "гипотезы": "версии", "гипотезе": "версии", "гипотезой": "версией",
+    "паттернов": "повторяющихся трудностей", "паттерна": "повторяющегося хода событий",
+    "механизм проблемы": "то, как возникает трудность", "стопор": "сложный момент", "ресурс": "запас сил",
+    "внешний контур присутствия": "поддержку другого человека", "протокол": "план", "анти-пример": "неподходящий способ",
+
+    "Открыть без таймера": "Подготовить всё для первого действия",
+    "цена входа": "трудность первого действия",
+    "цену входа": "трудность первого действия",
+    "стоимость первого контакта с задачей": "трудность начала",
+    "вход через восстановление": "сначала отдохнуть",
+    "открыть дело": "выбрать дело для первого шага",
+    "включить фокус": "убрать одно отвлечение",
+    "Главный узел:": "Что было труднее:",
+    "поведенческий эксперимент": "короткая проверка на практике",
+    "рабочие паттерны": "повторяющиеся трудности",
+    "рабочих паттернах": "повторяющихся трудностях",
+    "микрошаг": "короткое действие",
+}
+
+DIALOGUE_RULES = """
+Пользовательский язык: короткие предложения на русском, уважительное «вы».
+Используй нейтральные по роду конструкции: «Получилось попробовать?».
+Обычно достаточно 1 предложения отражения и 1 конкретного действия или вопроса.
+Не больше одного вопроса за сообщение. Не задавай вопрос, на который уже ответили.
+Не показывай START/STAY/RETURN, названия полей, проценты уверенности и внутренние коды.
+Не приписывай эмоции, мысли, причины и выполненные действия без прямых данных.
+Выбор навыка означает только желание попробовать; это не поведение и не результат.
+Если задача неизвестна, уточни её. Не выдумывай файл, письмо или документ.
+После неудачи меняй способ или уточни помеху; не повторяй совет уменьшать шаг.
+Вопрос «что это значит» объясняет последнюю инструкцию, не начинает новый разбор.
+Не используй чувство вины, угрозу потерять прогресс или давление вернуться.
+""".strip()
+
+
+def context(value: Any) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        result = json.loads(value or "{}")
+        return result if isinstance(result, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def valid_transcript(text: str, segments: Any = None) -> bool:
+    """Keep short real answers (да/нет/я/0); reject noise, not unfamiliar words."""
+    clean = str(text or "").strip()
+    if segments:
+        def bad(segment):
+            get = segment.get if isinstance(segment, dict) else lambda k, d=None: getattr(segment, k, d)
+            return float(get("no_speech_prob", 0) or 0) >= .8 or float(get("avg_logprob", 0) or 0) < -1.5
+        if all(bad(s) for s in segments):
+            return False
+    if re.fullmatch(r"\d{1,2}(?:[.,]\d)?", clean):
+        return True
+    words = re.findall(r"[^\W\d_]+", clean, re.UNICODE)
+    if not words:
+        return False
+    short = clean.casefold().strip(" .!?…")
+    if len("".join(words)) <= 2 and short not in {"да", "не", "я", "мы", "он", "вы", "ты", "ок", "no", "ok"}:
+        return False
+    if short in {"мм", "ммм", "эм", "ээ", "эээ", "мгм", "а-а", "субтитры", "продолжение следует"}:
+        return False
+    return True
+
+
+def is_clarification(text: str) -> bool:
+    low = " ".join(str(text or "").casefold().replace("ё", "е").split()).strip(" .!?…")
+    if any(x in low for x in ("ты меня не понял", "вы меня не поняли", "не про меня", "не так понял")):
+        return False
+    return bool(re.match(r"^(?:а |и |я )?(?:что (?:это |именно )?значит|что такое|как (?:именно|это) |приведи(?:те)? пример|объясни(?:те)?|поясни(?:те)?|не понял[аи]?(?:$|[ ,:])|не понимаю (?:инструкцию|задание|вопрос|что|как))", low))
+
+
+def concrete_step(task: str, *, alternative: bool = False) -> str:
+    low = str(task or "").casefold()
+    if any(x in low for x in ("почт", "письм", "email")):
+        return "Выберите одно письмо и напишите первую фразу ответа." if alternative else "Откройте почту и выберите одно письмо. Пока отвечать не нужно."
+    if any(x in low for x in ("презентац", "слайд")):
+        return "Запишите на бумаге мысль для одного слайда." if alternative else "Откройте презентацию и выберите один слайд. Пока менять его не нужно."
+    if any(x in low for x in ("уборк", "убрать", "квартир", "посуд")):
+        return "Уберите один предмет на место." if alternative else "Выберите одну поверхность, с которой начнёте уборку."
+    if any(x in low for x in ("стать", "отчёт", "отчет", "текст", "документ")):
+        return "Запишите одну мысль для текста на бумаге." if alternative else "Откройте нужный текст и напишите один черновой заголовок."
+    if any(x in low for x in ("звон", "позвон")):
+        return "Запишите первую фразу будущего разговора. Звонить пока не нужно."
+    return "Какое одно действие нужно для вашей задачи? Например, для уборки — убрать один предмет." if low.strip() else "Что именно вы сейчас хотите сделать?"
+
+
+def explain_previous(previous: str, task: str = "", question: str = "") -> str:
+    low = (question + " " + previous).casefold()
+    if any(x in low for x in ("фокус", "вкладк")):
+        return "Речь о том, чтобы убрать одно отвлечение. Например, закрыть YouTube, оставив нужную страницу. Можно выбрать другое отвлечение."
+    if any(x in low for x in ("открыть", "видим", "микрошаг", "действие", "шаг")):
+        return concrete_step(task)
+    if any(x in low for x in ("что произошло", "помогло", "результат", "после")):
+        return "Расскажите только о том, что произошло после попытки. Например: «Начать получилось, но через минуту пришлось остановиться». Что произошло у вас?"
+    if previous:
+        return "Можно ответить обычными словами, без терминов. Например: «Пока не знаю» — тоже ответ. Что именно непонятно в последнем сообщении?"
+    return "Какую фразу нужно объяснить? Можете скопировать её сюда."
+
+
+def plain_text(text: str) -> str:
+    # Protect quoted user text and URLs from linguistic substitutions.
+    chunks = re.split(r"(«[^»]*»|https?://\S+)", str(text or ""))
+    for i in range(0, len(chunks), 2):
+        part = chunks[i]
+        for old, new in sorted(PLAIN_TERMS.items(), key=lambda item: -len(item[0])):
+            part = re.sub(r"(?<!\w)" + re.escape(old) + r"(?!\w)", lambda m: new[:1].upper() + new[1:] if m[0][:1].isupper() else new, part, flags=re.I)
+        for code, label in {"START": "начало", "STAY": "продолжение", "RETURN": "возвращение"}.items():
+            part = re.sub(r"\b" + code + r"\b", label, part)
+        chunks[i] = part
+    return "".join(chunks)
+
+
+def repeated(text: str, recent: list[str]) -> bool:
+    def norm(s):
+        return " ".join(re.findall(r"\w+", s.casefold()))
+    value = norm(text)
+    return len(value) > 70 and any(SequenceMatcher(None, value, norm(old)).ratio() > .9 for old in recent[-5:])
+
+
+def review_focus(review: dict, inferred: str) -> str:
+    labels = {"start": "начать", "stay": "продолжить после первого шага", "return": "вернуться после отвлечения", "returned": "вернуться после отвлечения получилось"}
+    explicit = str(review.get("function") or "").lower()
+    if explicit in labels:
+        return labels[explicit]
+    return labels.get(str(inferred or "").lower(), "пока неясно")
