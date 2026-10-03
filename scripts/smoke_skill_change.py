@@ -74,7 +74,7 @@ async def main() -> None:
             await save_user(u, bot.DB_PATH)
 
             active_labels = {button.text for row in bot.action_keyboard().keyboard for button in row}
-            assert active_labels == {"✅ Сделал", "🟡 Попробовал, но не вышло", "↘️ Нужно проще", "🌙 Закрыть день"}
+            assert active_labels == {"✅ Сделал", "🟡 Частично", "🟡 Попробовал, но не вышло", "↘️ Нужно проще", "🌙 Закрыть день"}
             # Старое сообщение Telegram всё ещё должно безопасно открыть замену,
             # даже если эта кнопка больше не перегружает основной экран.
             u, prompt = await send(uid, "🔄 Сменить навык")
@@ -114,3 +114,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

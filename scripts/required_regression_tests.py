@@ -291,7 +291,7 @@ async def test_show_offer_force_enables_offer_prerequisites():
         joined = "\n".join(msg.answers)
         assert "Группа навыков" in joined
         assert "€240" in joined
-        assert "Личная терапия" in joined
+        assert "Личная работа" in joined
         assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}" in joined
         assert "тест SKILLER пока остаётся бесплатным" in joined
 
@@ -322,9 +322,9 @@ async def test_free_beta_allows_support_offers_but_blocks_bot_checkout():
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
         live_text = "\n".join(live_cb.message.answers)
-        assert "Личная терапия с Иваном Василюком" in live_text
+        assert "Личная работа с Иваном Василюком" in live_text
         assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц" in live_text
-        assert "задания каждый день" in live_text
+        assert "согласуем до оплаты" in live_text
 
         bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
         old_payment_url, old_payments_enabled = bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS
@@ -334,7 +334,7 @@ async def test_free_beta_allows_support_offers_but_blocks_bot_checkout():
         finally:
             bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS = old_payment_url, old_payments_enabled
         bot_text = "\n".join(bot_cb.message.answers)
-        assert "beta-тест" in bot_text
+        assert "тестирование" in bot_text
         assert "Founding Member" not in bot_text
         assert "€" not in bot_text
 
@@ -371,7 +371,7 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
         auto_text = "\n".join(auto_msg.answers)
         assert "Группа навыков" in auto_text
         assert "€240" in auto_text
-        assert "Личная терапия" in auto_text
+        assert "Личная работа" in auto_text
         assert "тест SKILLER пока остаётся бесплатным" in auto_text
         assert "Оплатить" not in auto_text
 
@@ -402,10 +402,10 @@ async def test_support_request_form_remains_available_during_free_beta():
         opened = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
         assert opened["stage"] == "offer_request_form"
-        assert opened.get("pending_offer_request_format") == "Личная терапия с ежедневными заданиями"
+        assert opened.get("pending_offer_request_format") == "Личная работа — условия обсудим заранее"
         joined = "\n".join(request_cb.message.answers)
         assert "соберём заявку" in joined
-        assert "Личная терапия с ежедневными заданиями" in joined
+        assert "Личная работа — условия обсудим заранее" in joined
 
 
 async def test_day_intro_is_not_sent_twice():
@@ -452,9 +452,9 @@ def test_day3_offer_low_data_stays_honest():
     summary = {"done_count": 1, "skill_map": {"skills": []}}
     profile = {"successful_skills": ["open_only"]}
     text = bot.day3_personal_offer_text(summary, profile)
-    assert "Три дня — уже достаточно" in text
-    assert "заявку можно оставить без оплаты" in text
-    assert "Пока это не окончательные выводы." in text
+    assert "Что сегодня заметили" in text
+    assert "Заявка без оплаты" in text
+    assert "Что проверим дальше" in text
     assert "первый рабочий вход" not in text
     assert "мы уже увидели твой паттерн" not in text.lower()
     assert "не потерять темп" not in text.lower()
@@ -475,11 +475,11 @@ def test_day3_offer_after_three_attempts_uses_real_facts():
     }
     profile = {}
     text = bot.day3_personal_offer_text(summary, profile)
-    assert "Три дня — уже достаточно" in text
-    assert "— попыток уже было: 4" in text
-    assert "— что выглядит полезным: Открыть задачу (2 раз)" in text
-    assert "— пока неясно: Плохой черновик (2 раз), следующий тест — проверить вход через плохой черновик." in text
-    assert "заявку можно оставить без оплаты" in text
+    assert "Что сегодня заметили" in text
+    assert "Отмеченных попыток: 4" in text
+    assert "Полезный способ пока не подтверждён" in text
+    assert "Уточним, в какой момент дело остановилось" in text
+    assert "Заявка без оплаты" in text
     assert "путь с куратором" not in text.lower()
     assert "не потерять темп" not in text.lower()
 
@@ -577,13 +577,13 @@ def test_offer_text_and_map_are_specific_without_curator_button():
         "skill_map": {"skills": [{"skill_id": "bad_draft", "title": "Плохой черновик", "completed_count": 2, "helpful_count": 1}]},
     }
     text = bot.day3_personal_offer_text(summary, {})
-    assert "Факты по твоим попыткам:" in text
-    assert "Пока это не окончательные выводы." in text
-    assert "Базовый режим остаётся доступным." in text
+    assert "Отмеченных попыток:" in text
+    assert "Что проверим дальше" in text
+    assert "Можно продолжать самостоятельно" in text
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
     assert "👥 Хочу в группу — €240" in keyboard_text
-    assert f"👤 Личная терапия — €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in keyboard_text
+    assert f"👤 Личная работа — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in keyboard_text
     assert "Продолжить бесплатно" in keyboard_text
     callbacks = [button.callback_data for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row]
     assert callbacks.count(bot.OFFER_CALLBACKS["stay_free"]) == 1
@@ -955,7 +955,6 @@ async def test_completed_experiment_does_not_recomplete_old_attempt():
 
         done_msg = FakeMessage(uid, "✅ Сделал")
         await bot.main_flow(done_msg)
-        await bot.main_flow(FakeMessage(uid, "Да"))
         await bot.main_flow(FakeMessage(uid, "Помогло"))
         await bot.main_flow(FakeMessage(uid, "Продолжил задачу"))
         after_effect = await get_user(uid, bot.DB_PATH)
@@ -1097,7 +1096,6 @@ async def test_minimal_feedback_records_completion_helpfulness_and_continuation(
         attempt_id = bot.active_attempt(u).get("attempt_id")
         await save_user(u, bot.DB_PATH)
         await bot.main_flow(FakeMessage(uid, "✅ Сделал"))
-        await bot.main_flow(FakeMessage(uid, "Да"))
         await bot.main_flow(FakeMessage(uid, "Помогло"))
         await bot.main_flow(FakeMessage(uid, "Продолжил задачу"))
         import aiosqlite, json
@@ -1304,7 +1302,7 @@ def test_bot_tariff_keeps_real_copy_but_no_checkout_during_beta():
     buttons = [button for row in kb.inline_keyboard for button in row]
     pay_buttons = [button for button in buttons if getattr(button, "text", "") == f"💳 Оформить за €{bot.BASE_OFFER_EUR_LABEL}"]
     assert not pay_buttons
-    assert any("beta бесплатно" in getattr(button, "text", "") for button in buttons)
+    assert any("бесплатно" in getattr(button, "text", "") for button in buttons)
     assert f"€{bot.BASE_OFFER_EUR_LABEL}" in bot.tariff_bot_text()
 
 

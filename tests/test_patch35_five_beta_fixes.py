@@ -21,7 +21,7 @@ class Patch35FiveBetaFixesTests(unittest.IsolatedAsyncioTestCase):
             bot, "get_user_profile", new=AsyncMock(return_value={})
         ), patch.object(bot, "build_skill_map_data", new=AsyncMock(return_value={"skills": []})):
             text = await bot.day_close_metrics_text(user, review)
-        self.assertIn("труднее всего было: начать", text)
+        self.assertIn("Где пока труднее\nначать", text)
         self.assertNotIn("STAY", text)
         self.assertIn("скука или отсутствие быстрой отдачи", text)
         self.assertIn("спокойно или устойчиво", text)
@@ -33,8 +33,8 @@ class Patch35FiveBetaFixesTests(unittest.IsolatedAsyncioTestCase):
             "helpfulness": "some", "continued_after_skill": False,
         }}
         text = bot.day1_profile_card_text(bot.default_user(35002), profile, 1)
-        self.assertIn("START — «Телефон вне руки на 3 минуты» помог начать", text)
-        self.assertIn("STAY — после старта продолжить не удалось", text)
+        self.assertIn("После шага стало легче, но дело не продолжилось", text)
+        self.assertIn("продолжить после первого шага", text)
         self.assertNotIn("Пока не помогало", text)
 
     def test_public_copy_never_exposes_technical_skill_ids(self):

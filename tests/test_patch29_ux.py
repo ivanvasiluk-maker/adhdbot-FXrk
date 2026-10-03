@@ -134,7 +134,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         }
         skill_map = {"skills": [{"skill_id": "visible_next_step", "status": "confirmed"}]}
         rendered = bot.short_daily_map_text(profile, skill_map, user)
-        self.assertEqual(rendered.lower().count("— сделать следующий шаг видимым"), 1)
+        self.assertEqual(rendered.lower().count("способ «сделать следующий шаг видимым»"), 1)
 
     def test_feedback_anchor_uses_active_experiment_not_previous_skill(self):
         user = bot.default_user(29011)
@@ -234,7 +234,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         rendered = "\n".join(call.args[0] for call in message.answer.await_args_list)
         self.assertIn("Группа навыков", rendered)
         self.assertIn("€240", rendered)
-        self.assertIn("Личная терапия", rendered)
+        self.assertIn("Личная работа", rendered)
         self.assertIn("тест SKILLER пока остаётся бесплатным", rendered)
         self.assertNotIn("Оплатить", rendered)
         self.assertEqual(user.get("offer_mode"), "auto")
@@ -356,3 +356,4 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -48,8 +48,8 @@ class Patch37BetaFeedbackAndOffersTests(unittest.TestCase):
         self.assertNotIn("Как будет звучать этот же разбор", text)
 
     def test_offer_copy_has_current_formats(self):
-        self.assertIn("€200", bot.tariff_live_text())
-        self.assertIn("задания каждый день", bot.tariff_live_text())
+        self.assertIn("от €99", bot.tariff_live_text())
+        self.assertIn("согласуем до оплаты", bot.tariff_live_text())
         self.assertIn("задания каждый день", bot.tariff_group_text())
 
 

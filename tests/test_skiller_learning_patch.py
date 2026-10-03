@@ -178,16 +178,17 @@ class ConsistentLearningModelTests(unittest.TestCase):
         card = bot.day1_profile_card_text(
             {"day": 1}, {"learning_model": model, "last_day_review": {"function": "return"}}, 1,
         )
-        self.assertIn("RETURN     🔴", card)
-        self.assertNotIn("RETURN     🟢", card)
+        self.assertIn("Где пока труднее\nвернуться после отвлечения", card)
+        self.assertNotIn("возврат подтверждён", card)
 
     def test_profile_card_explains_state_relief_without_task_effect(self):
         feedback = {"skill_id": "breath", "completed": True, "helpfulness": "helped",
                     "continued_after_skill": False, "state_effect": "positive", "task_effect": "none"}
         card = bot.day1_profile_card_text({"day": 1}, {"last_skill_feedback": feedback}, 1)
-        self.assertIn("помог снизить напряжение", card)
-        self.assertIn("не помог продолжить целевое действие", card)
+        self.assertIn("После шага стало легче", card)
+        self.assertIn("но дело не продолжилось", card)
 
 
 if __name__ == "__main__":
     unittest.main()
+

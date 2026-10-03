@@ -118,14 +118,18 @@ async def main() -> None:
             # 3. Action after close opens a voluntary short step without reopening the day.
             user, voluntary_msg = await send(uid, "💪 Давай действие")
             assert user["current_day_id"] == day_id
-            assert "День уже закрыт. Это не отменяется." in joined(voluntary_msg)
-            assert "🧩 Мини-навык: Оставить видимый следующий шаг" in joined(voluntary_msg)
+            assert "Добровольный шаг. День остаётся завершённым." in joined(voluntary_msg)
+            assert "🧩 " in joined(voluntary_msg), joined(voluntary_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             user, done_msg = await send(uid, "✅ Сделал")
-            assert "Готово. Это дополнительный шаг" in joined(done_msg)
+            assert "Насколько это помогло?" in joined(done_msg)
+            user, benefit_msg = await send(uid, "Помогло")
+            assert "Что произошло дальше?" in joined(benefit_msg)
+            user, result_msg = await send(uid, "Продолжил задачу")
+            assert "Предлагаю следующий шаг:" in joined(result_msg), joined(result_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             user, second_extra_msg = await send(uid, "➕ Ещё один короткий шаг")
-            assert "День уже закрыт. Это не отменяется." in joined(second_extra_msg)
+            assert "Добровольный шаг. День остаётся завершённым." in joined(second_extra_msg)
             assert "добровольный дополнительный подход сегодня уже был" not in joined(second_extra_msg)
 
             # 4-5. force_next_day closes/opens atomically, preserves total progress, resets daily attempts.

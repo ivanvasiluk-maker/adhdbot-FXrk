@@ -1135,32 +1135,18 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
     from texts import bucket_type_honest_explanation
     if comp.get("request_kind") and comp.get("request_kind") != "task_problem":
         return comp.get("support_text") or support_text(comp["request_kind"], comp.get("observed_changes"))
-    bucket = str(comp.get("bucket") or "mixed")
-    if bucket not in ("anxiety", "low_energy", "distractibility", "mixed"):
-        bucket = "mixed"
-    honest_block = "\n\n---\n\n" + bucket_type_honest_explanation(bucket)
-
-    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
-    details_by_trainer = analysis_result.get("detailed_analysis_by_trainer") if isinstance(analysis_result.get("detailed_analysis_by_trainer"), dict) else {}
-    scripted = details_by_trainer.get(trainer_key) or details_by_trainer.get("marsha")
-    if scripted:
-        return str(scripted) + honest_block
-
-    pattern = str(comp.get("live_pattern") or "default_start_block")
-    core_hypothesis = _analysis_result_core_hypothesis(pattern)
+    result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
     signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
-    evidence = [str(x) for x in signals.get("facts", []) if x]
-    if not evidence:
-        return (
-            "## 🧭 Почему я сейчас думаю именно так\n\n"
-            "Пока у меня мало данных, поэтому не буду делать вид, что всё понял. "
-            "Давай уточним 3 короткими вопросами — и я соберу первую рабочую модель.\n\n"
-            "Это пока не диагноз и не окончательный вывод. Это рабочий цикл, который мы проверяем по твоим действиям."
-        ) + honest_block
-    recommended_variant = str((comp.get("analysis_result") or {}).get("recommended_variant") or _recommended_skill_for_pattern(pattern).get("recommended_variant") or "open_only")
-    skills_focus = comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else []
-    details = _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus)
-    return (details.get(trainer_key) or details["marsha"]) + honest_block
+    facts = result.get("evidence_signals") or signals.get("facts") or []
+    facts = [str(item) for item in facts if item][:4]
+    if not result:
+        return "Пока мало данных для вывода. Ответьте на текущий вопрос — затем уточним, что мешает и какой шаг проверить."
+    hypothesis = result.get("core_hypothesis") or comp.get("specific_pattern") or "Причину ещё уточняем"
+    first = result.get("first_check") or result.get("recommended_skill_name") or "Назовите одно конкретное дело."
+    return ("Что есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
+            + "\n\nЧто может мешать\n" + str(hypothesis)
+            + "\nЭто предварительная версия, а не диагноз.\n\nЧто проверим\n" + str(first)
+            + "\n\nПосле шага отдельно посмотрим: стало ли легче и получилось ли продолжить дело. Если станет хуже, остановимся и подберём другой подход.")
 
 
 def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Dict[str, Any]] = None) -> str:
