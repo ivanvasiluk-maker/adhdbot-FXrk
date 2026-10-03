@@ -22,6 +22,7 @@ import logging
 import threading
 import uuid
 from core.case_sessions import begin_case, parsed as parse_case_data
+from core.request_routing import DEVICE_LABELS, observed_changes, support_text, request_kind
 import datetime as dt
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -1104,6 +1105,10 @@ VOICE_FREE_TEXT_STAGES = {
     "awaiting_conclusion_correction",
     "personal_model_correction",
     "closed_day_new_situation",
+    "request_context",
+    "request_support",
+    "request_device",
+    "request_task",
     "crisis_text",
     "crisis_effect_await",
     "day_review_barrier_other",
@@ -1190,6 +1195,76 @@ class DialogueMessage:
 
 def dialogue_message(message, user):
     return message if isinstance(message, DialogueMessage) else DialogueMessage(message, user)
+
+
+def request_support_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Разобрать конкретное дело")],
+        [KeyboardButton(text="Уточнить мой запрос")],
+        [KeyboardButton(text="На этом пока остановиться")],
+    ], resize_keyboard=True)
+
+
+async def handle_request_route(m, u, text):
+    if text.startswith("/") or u.get("stage") not in {"request_context", "request_support", "request_device", "request_task"}:
+        return False
+    comp = parse_case_data(u.get("analysis_json"), {})
+    if u.get("stage") == "request_task":
+        if not text:
+            await m.answer("Какое одно дело хотите разобрать?")
+            return True
+        await run_analysis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        return True
+    if u.get("stage") == "request_device":
+        device = DEVICE_LABELS.get(text)
+        if not device:
+            from core.request_routing import device_from_text
+            device = device_from_text(text)
+        if not device:
+            await m.answer("Выберите устройство: телефон, компьютер или оба.")
+            return True
+        summary = comp.get("input_signal_summary") or {}
+        safe_case = ". ".join(str(x) for x in (
+            summary.get("specific_pattern"), summary.get("avoidance_behavior"), summary.get("useful_signal")) if x)
+        sources = (comp.get("analysis_signals") or {}).get("escapes") or []
+        source = " / ".join(sources) or "сайты"
+        place = {"phone": "на телефоне", "computer": "на том же компьютере, где работаю",
+                 "both": "на телефоне и на компьютере"}[device]
+        device_fact = "Отвлекаюсь на " + source + " " + place + "."
+        await run_analysis(m, u, safe_case + ". " + device_fact, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        return True
+    kind = comp.get("request_kind") or "other"
+    new_kind = request_kind(text)
+    if kind == "other" and new_kind == "task_problem":
+        await run_analysis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        return True
+    if new_kind in {"health_or_medication", "emotional_state", "relationship"} and new_kind != kind:
+        kind = new_kind
+        comp["request_kind"] = kind
+    if text == "На этом пока остановиться":
+        u["closed_day_additional_active"] = 0
+        set_legacy_stage(u, "day_core_stop" if day_closed_today(u) else "training_main")
+        await save_user(u, DB_PATH)
+        await m.answer("Хорошо. Можно вернуться позже.", reply_markup=kb_completed_day_open if day_closed_today(u) else kb_training_main)
+        return True
+    if text == "Разобрать конкретное дело":
+        set_legacy_stage(u, "request_task")
+        await save_user(u, DB_PATH)
+        await m.answer("Какое одно дело хотите разобрать?", reply_markup=ReplyKeyboardRemove())
+        return True
+    if text == "Уточнить мой запрос":
+        set_legacy_stage(u, "request_context")
+        await save_user(u, DB_PATH)
+        await m.answer("Что важно уточнить?", reply_markup=ReplyKeyboardRemove())
+        return True
+    facts = list(dict.fromkeys([*(comp.get("observed_changes") or []), *observed_changes(text)]))
+    comp["observed_changes"] = facts
+    comp["support_text"] = support_text(kind, facts)
+    u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+    set_legacy_stage(u, "request_support")
+    await save_user(u, DB_PATH)
+    await m.answer(comp["support_text"], reply_markup=request_support_keyboard())
+    return True
 
 
 async def handle_dialogue_help(m, u, text):
@@ -9415,6 +9490,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         "misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await",
         "analysis_clarify_questions", "analysis_clarify_done", "analysis_action_transition",
         "analysis_action_extra_clarification", "analysis_action_postponed",
+        "request_context", "request_support", "request_device", "request_task",
     }:
         # The daily session stays closed, but the new situation must finish its own route.
         return False
@@ -11690,6 +11766,10 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
     comp["hypothesis"] = comp.get("specific_pattern") or PUBLIC_ENUM_LABELS[barrier]
     comp["analysis_result"] = build_analysis_result(comp, stored_analysis_user_text(u))
     analysis_result = comp["analysis_result"]
+    if comp.get("request_device") and analysis_result.get("recommended_variant") in SKILLS_DB:
+        skill_id = analysis_result["recommended_variant"]
+        comp["selected_skill"] = skill_id
+        comp["recommended_skill"] = skill_id
     conclusion = preliminary_diagnosis_conclusion_text(
         comp.get("specific_pattern") or comp.get("live_pattern") or PUBLIC_ENUM_LABELS[barrier],
         comp.get("useful_signal") or f"чаще всего вход ломает {PUBLIC_ENUM_LABELS[barrier]}",
@@ -12487,6 +12567,9 @@ async def main_flow(m: Message):
             await m.answer(render_last_explanation_context(u))
         return
 
+    if await handle_request_route(m, u, text):
+        return
+
     # Closing the day is a global destination. It must outrank the action
     # router and every completed-experiment menu, otherwise a stale keyboard
     # can consume it as case text or answer with "Эксперимент уже выполнен".
@@ -12616,6 +12699,9 @@ async def main_flow(m: Message):
     # post-day state.
     if day_closed_today(u) and is_closed_day_voluntary_action_request(text, low, u):
         if int(u.get("closed_day_additional_active") or 0):
+            if parse_case_data(u.get("analysis_json"), {}).get("request_kind") not in {None, "task_problem"}:
+                await m.answer("Чтобы разобрать дело, выберите «Разобрать конкретное дело» и назовите его.")
+                return
             if not parse_case_data(u.get("analysis_json"), {}).get("analysis_result"):
                 await m.answer("Сначала ответьте на текущий вопрос — затем выберем действие по этой ситуации.")
                 return

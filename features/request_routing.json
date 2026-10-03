@@ -1,0 +1,11 @@
+{
+  "name": "request_routing_before_task_training",
+  "behavioral_goal": "recover",
+  "success_metric": "Track users who receive a relevant next step after non-task requests or device clarification; audit incorrect routing and unanswered clarification questions.",
+  "acceptance": [
+    "Health, emotional, relationship and unclear requests do not automatically become procrastination analysis.",
+    "Health replies do not diagnose or select medication; existing crisis handling precedes all routing.",
+    "Device clarification waits for a reply; computer distractions select a computer action.",
+    "Anxiety and overload do not default to body-first without reported physiological load."
+  ]
+}
