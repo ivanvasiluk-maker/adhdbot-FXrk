@@ -32,6 +32,23 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn('ленивое состояние', plain_text('Это ленивое состояние.'))
         self.assertEqual(plain_text('«Я ленивый»'), '«Я ленивый»')
 
+    def test_new_support_text_respects_address_preferences(self):
+        from core.addressing import render_address
+        from core.request_routing import support_text, observed_changes
+        source = support_text('health_or_medication', observed_changes('Снизилась активность, изменился аппетит'))
+        for mode in ('ty', 'vy'):
+            for form in ('male', 'female', 'neutral'):
+                rendered = render_address(source, {'address_mode':mode, 'address_form':form})
+                if mode == 'ty':
+                    self.assertIn('Ты описываешь', rendered)
+                    self.assertIn('Ты упоминаешь', rendered)
+                    self.assertIn('обсуди', rendered)
+                    self.assertNotIn('обсудите', rendered)
+                    self.assertNotIn('описываете', rendered)
+                else:
+                    self.assertIn('Вы описываете', rendered)
+                    self.assertIn('обсудите', rendered)
+
     def test_device_is_not_guessed_from_youtube(self):
         self.assertIsNone(device_from_text('Отвлекаюсь на YouTube и сайты переписок'))
         self.assertEqual(device_from_text('На компьютере смотрю YouTube'), 'computer')
