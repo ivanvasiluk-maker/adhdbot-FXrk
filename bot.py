@@ -1199,12 +1199,14 @@ async def handle_dialogue_help(m, u, text):
         await original.answer(response, reply_markup=ReplyKeyboardRemove())
         return True
     if text == "/address":
-        ctx["choosing_address"] = True
+        ctx["choosing_address"] = "mode"
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         await save_user(u, DB_PATH)
-        await original.answer("Как обращаться: на «ты» или на «вы», в каком роде? Можно пропустить: останется нейтральное обращение на «вы».", reply_markup=address_keyboard())
+        await original.answer("Давайте на «ты» или на «вы»?", reply_markup=address_keyboard())
         return True
     forms = {"Мужскую": "male", "Женскую": "female", "Нейтральную": "neutral", "Пропустить": "neutral"}
+    gender_choices = {"Мужской": "male", "Женский": "female", "Можно без рода": "neutral"}
+    modes = {"На ты": "ty", "На вы": "vy"}
     choices = {
         "Ты · мужской род": ("ty", "male"), "Ты · женский род": ("ty", "female"),
         "Ты · без указания рода": ("ty", "neutral"),
@@ -1212,14 +1214,29 @@ async def handle_dialogue_help(m, u, text):
         "Вы · без указания рода": ("vy", "neutral"),
     }
     if ctx.get("choosing_address") or u.get("stage") == "ask_address":
-        if text not in forms and text not in choices:
-            await original.answer("Выберите форму обращения. Её можно изменить командой /address.", reply_markup=address_keyboard())
+        step = ctx.get("choosing_address")
+        if text in modes:
+            u["address_mode"] = modes[text]
+            ctx["choosing_address"] = "gender"
+            u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+            await save_user(u, DB_PATH)
+            await original.answer("Какой род использовать?", reply_markup=gender_keyboard())
             return True
-        if text in choices:
+        # Old keyboards remain usable after an update; new screens never show
+        # combined choices. A gender answer only belongs to the second step.
+        if text in gender_choices and step == "gender":
+            u["address_form"] = gender_choices[text]
+        elif text in choices:
             u["address_mode"], u["address_form"] = choices[text]
-        else:
+        elif text in forms:
             u["address_form"] = forms[text]
             u["address_mode"] = u.get("address_mode") or "vy"
+        else:
+            if step == "gender":
+                await original.answer("Какой род использовать?", reply_markup=gender_keyboard())
+            else:
+                await original.answer("Давайте на «ты» или на «вы»?", reply_markup=address_keyboard())
+            return True
         ctx.pop("choosing_address", None)
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         onboarding = u.get("stage") == "ask_address"
@@ -1252,10 +1269,14 @@ async def handle_dialogue_help(m, u, text):
 
 def address_keyboard():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Ты · мужской род"), KeyboardButton(text="Вы · мужской род")],
-        [KeyboardButton(text="Ты · женский род"), KeyboardButton(text="Вы · женский род")],
-        [KeyboardButton(text="Ты · без указания рода"), KeyboardButton(text="Вы · без указания рода")],
-        [KeyboardButton(text="Пропустить")],
+        [KeyboardButton(text="На ты"), KeyboardButton(text="На вы")],
+    ], resize_keyboard=True)
+
+
+def gender_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Мужской"), KeyboardButton(text="Женский")],
+        [KeyboardButton(text="Можно без рода")],
     ], resize_keyboard=True)
 
 
@@ -13904,7 +13925,7 @@ async def main_flow(m: Message):
         await log_event(u["user_id"], "onboarding", "name_provided", {}, DB_PATH, SHEETS_WEBHOOK_URL)
         set_legacy_stage(u, "ask_address")
         await save_user(u, DB_PATH)
-        await m.answer("Как обращаться: на «ты» или на «вы», в каком роде? Можно пропустить. Изменить выбор — /address.", reply_markup=address_keyboard())
+        await m.answer("Давайте на «ты» или на «вы»?", reply_markup=address_keyboard())
         return
 
     # ============================================================
