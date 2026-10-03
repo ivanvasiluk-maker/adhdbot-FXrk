@@ -55,7 +55,11 @@ def build_post_action_reflection(context: ReflectionContext) -> PostActionReflec
 
     if successful:
         reaction = f"Получилось выполнить действие: {action}."
-        if context.helpfulness in {"helped", "some"}:
+        if context.helpfulness == "worse":
+            interpretation = "После шага стало хуже. Выполнение действия не означает, что способ помог."
+            principle = f"проверяли «{skill}», состояние ухудшилось"
+            anchor = "Этот способ пока не повторяем. Можно остановиться или выбрать другой вариант."
+        elif context.helpfulness in {"helped", "some"}:
             interpretation = f"По вашему ответу, способ «{skill}» помог в этой попытке."
             principle = f"{skill} — {action}"
             anchor = f"Когда снова возникнет «{situation}», начни с действия «{action}», а не со всей задачи."
@@ -63,7 +67,8 @@ def build_post_action_reflection(context: ReflectionContext) -> PostActionReflec
             interpretation = "Действие выполнено, но по вашему ответу заметного облегчения нет."
             principle = f"проверяли «{skill}», полезность пока не подтверждена"
             anchor = "Сохраним результат попытки. В следующий раз можно выбрать другой способ."
-        pattern = _short(context.known_pattern, f"в ситуации «{situation}» движение появилось после одного проверяемого действия", 180)
+        pattern = (f"В ситуации «{situation}» после шага стало хуже." if context.helpfulness == "worse" else
+                   _short(context.known_pattern, f"в ситуации «{situation}» движение появилось после одного проверяемого действия", 180))
     else:
         reaction = f"Действие «{action}» пока не получилось. Можно остановиться или выбрать другой способ."
         interpretation = f"По вашему ответу: {barrier}. Важно не повторить то же самое, а подобрать другой способ."

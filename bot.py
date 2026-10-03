@@ -3230,7 +3230,7 @@ def day_finish_summary_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
     downscales = int(today.get("step_reductions") or 0)
     slips = int(today.get("slips") or 0)
 
-    if downscales <= 2:
+    if 0 < downscales <= 2:
         best_signal = "Пока есть 1–2 сигнала, что уменьшение шага может помогать. Нужно ещё несколько попыток, чтобы это проверить."
     elif downscales:
         best_signal = "Есть несколько отметок, что упрощение шага помогает входить в задачу мягче."
@@ -4123,7 +4123,7 @@ def skill_family_success_count(u: Dict[str, Any], skill_id: str) -> int:
 
 
 def skill_family_no_change_count(u: Dict[str, Any], skill_id: str) -> int:
-    return sum(1 for a in skill_family_attempts(u, skill_id) if str(a.get("effect") or "") in {"no_change", "harder", "custom"} or str(a.get("result") or "") in {"done_no_relief", "done_heavier"})
+    return sum(1 for a in skill_family_attempts(u, skill_id) if str(a.get("effect") or "") in {"no_change", "harder", "custom", "worse", "not_helped"} or str(a.get("result") or "") in {"done_no_relief", "done_heavier"})
 
 
 def last_skill_family(u: Dict[str, Any]) -> str:
@@ -4943,6 +4943,8 @@ def effect_status_from_minimal_feedback(helpfulness: str, continued: Any) -> str
     helpfulness = str(helpfulness or "unknown")
     if helpfulness in {"helped", "some"}:
         return "helped_start" if continued is True else "felt_easier"
+    if helpfulness == "worse":
+        return "worse"
     if helpfulness == "not_helped":
         return "neutral"
     return "unknown"
@@ -5000,7 +5002,7 @@ async def persist_personal_working_model(
     skill = SKILLS_DB.get(sid) or {}
     result = classify_experiment_result(
         completed=feedback.get("completed") is True or feedback.get("partial") is True,
-        subjective_effect={"helped": "helped", "some": "a_little", "not_helped": "did_not_help"}.get(
+        subjective_effect={"helped": "helped", "some": "a_little", "not_helped": "did_not_help", "worse": "worse"}.get(
             str(feedback.get("helpfulness") or ""), "unknown"),
         after_action={
             "Продолжил задачу": "continued_target_task",
@@ -5056,12 +5058,14 @@ async def ask_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, source: s
         return False
     feedback = minimal_feedback_base(u, source=source)
     set_minimal_feedback(u, feedback)
-    set_legacy_stage(u, "minimal_feedback_done")
+    feedback["completed"] = True
+    set_minimal_feedback(u, feedback)
+    set_legacy_stage(u, "minimal_feedback_help")
     u["skill_done_effect_source"] = source
     set_current_state(u, STATE_PAUSED, close_action=True)
     sync_active_attempt(u, bump=True, attempt_status="completed", effect_status="unknown", is_closed=True)
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, "Получилось сделать?", kb_minimal_feedback_done, "minimal_feedback_done")
+    await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
     return True
 
 async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
@@ -5080,7 +5084,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         "Пока не знаю": "unknown",
     }.get(str(feedback.get("next_after_skill") or ""), "unknown")
     subjective_effect = {
-        "helped": "helped", "some": "a_little", "not_helped": "did_not_help",
+        "helped": "helped", "some": "a_little", "not_helped": "did_not_help", "worse": "worse",
     }.get(helpfulness, "unknown")
     experiment_result = classify_experiment_result(
         completed=completed or partial, subjective_effect=subjective_effect, after_action=after_action,
@@ -5108,6 +5112,17 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         after_action=after_action,
         target_function=current_target_function,
     )
+    attempts = user_skill_attempts(u)
+    if attempts:
+        attempts[-1].update({
+            "completed": completed, "partial": partial, "subjective_effect": subjective_effect,
+            "continued_target_task": continued,
+            "returned_after_distraction": continued if feedback.get("source") == "return" else None,
+            "barrier": feedback.get("barrier") or "",
+            "context": {"task_title": str(u.get("current_task_title") or ""),
+                        "case_id": parse_case_data(u.get("current_case_json"), {}).get("case_id")},
+        })
+        u["skill_attempts"] = attempts[-50:]
     await bot_record_action_event(u, "skill_result_reported", skill_id=sid, metadata={**feedback, "minimal_feedback": True})
     profile = await get_user_profile(u["user_id"], DB_PATH)
     observation = str(feedback.get("barrier") or feedback.get("mechanism") or "")
@@ -5180,7 +5195,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     await save_user(u, DB_PATH)
     await answer_with_keyboard(
         m, u, (
-            "Сегодня заметили:\n" + voice.text
+            "Сегодня заметили:\n" + (reflection.interpretation if helpfulness == "worse" else voice.text)
             + f"\n\nЗапомнить: {reflection.memory_anchor}"
         ),
         kb_post_action_reflection, "post_action_reflection",

@@ -11,7 +11,7 @@ MasteryStatus = Literal["NEW", "LEARNING", "PRACTICING", "GENERALIZING", "MASTER
 ScaffoldingLevel = Literal["full", "reduced", "minimal", "none"]
 ExperimentResult = Literal["STRONG_SUCCESS", "WEAK_SUCCESS", "EXECUTED_ONLY", "FAILED", "UNKNOWN"]
 TargetFunction = Literal["START", "STAY", "RETURN", "EMOTION_REGULATION"]
-SubjectiveEffect = Literal["helped", "a_little", "did_not_help", "unknown"]
+SubjectiveEffect = Literal["helped", "a_little", "did_not_help", "worse", "unknown"]
 AfterAction = Literal["continued_target_task", "stopped_after_step", "did_something_else", "unknown"]
 NodeStatus = Literal["green", "yellow", "red"]
 Effect = Literal["positive", "none", "negative", "unknown"]
@@ -106,7 +106,7 @@ class ExperimentEvidence:
         if self.state_effect:
             return self.state_effect
         return "positive" if self.subjective_effect in {"helped", "a_little"} else \
-            "negative" if self.subjective_effect == "did_not_help" else "unknown"
+            "negative" if self.subjective_effect in {"did_not_help", "worse"} else "unknown"
 
     @property
     def normalized_task_effect(self) -> Effect:
@@ -266,7 +266,7 @@ def skill_cooldown_remaining(history: Sequence[ExperimentEvidence], skill_id: st
     for offset, item in enumerate(reversed(history)):
         if item.skill_id != skill_id:
             continue
-        required = 5 if item.result == "FAILED" or item.subjective_effect == "did_not_help" else 3
+        required = 5 if item.result == "FAILED" or item.subjective_effect in {"did_not_help", "worse"} else 3
         if item.result == "STRONG_SUCCESS":
             required = 3
         return max(0, required - offset)
@@ -548,3 +548,4 @@ def regression_message() -> str:
         "Похоже, сейчас снова нужна небольшая опора. Это не потеря навыка и не наказание — "
         "на время вернём короткую подсказку и проверим навык в следующей похожей ситуации."
     )
+

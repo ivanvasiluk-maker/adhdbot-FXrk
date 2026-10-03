@@ -721,12 +721,10 @@ async def test_stuck_flow_asks_effect_before_aftercare():
         done_msg = FakeMessage(uid, "✅ Сделал")
         await bot.main_flow(done_msg)
         assert any(marker in "\n".join(done_msg.answers) for marker in (
-            "Стало хоть на 5% легче?", "Получилось сделать?",
+            "Насколько это помогло?",
         ))
 
-        effect_msg = FakeMessage(uid, "Да")
-        await bot.main_flow(effect_msg)
-        effect_text = "\n".join(effect_msg.answers)
+        effect_text = "\n".join(done_msg.answers)
         assert "Насколько это помогло?" in effect_text
 
         help_msg = FakeMessage(uid, "Помогло")
@@ -1140,7 +1138,10 @@ async def test_minimal_feedback_no_goes_to_not_done_reason_branch():
         })
         bot.mark_action_card_active(u)
         await save_user(u, bot.DB_PATH)
-        await bot.main_flow(FakeMessage(uid, "✅ Сделал"))
+        # Legacy pending completion questions remain recoverable after upgrade.
+        bot.set_legacy_stage(u, "minimal_feedback_done")
+        bot.set_minimal_feedback(u, bot.minimal_feedback_base(u, source="legacy"))
+        await save_user(u, bot.DB_PATH)
         no_msg = FakeMessage(uid, "Нет")
         await bot.main_flow(no_msg)
         fresh = await get_user(uid, bot.DB_PATH)
@@ -1403,16 +1404,14 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
         fresh = await get_user(uid, bot.DB_PATH)
         first_response = "\n".join(done_msg.answers)
         assert any(marker in first_response for marker in (
-            "Что изменилось после этого шага?", "Получилось сделать?",
+            "Насколько это помогло?",
         ))
         assert "потерял место" not in first_response.lower()
         assert "старый экран" not in first_response.lower()
         assert "возвращаю" not in first_response.lower()
         assert int(fresh.get("done_count") or 0) == 1
-        assert fresh.get("stage") == "minimal_feedback_done"
+        assert fresh.get("stage") == "minimal_feedback_help"
 
-        done_feedback = FakeMessage(uid, "Да")
-        await bot.main_flow(done_feedback)
         help_feedback = FakeMessage(uid, "Помогло")
         await bot.main_flow(help_feedback)
         next_feedback = FakeMessage(uid, "Продолжил задачу")
