@@ -1275,6 +1275,9 @@ USER_FIELDS = [
     "day_closed",
     "today_closed",
     "daily_training_completed",
+    "closed_day_additional_active",
+    "current_case_json",
+    "case_history_json",
     "interaction_allowed",
     "today_started",
     "last_day_closed_at",
@@ -1523,6 +1526,9 @@ def default_user(uid: int) -> Dict[str, Any]:
         "day_closed": 0,
         "today_closed": 0,
         "daily_training_completed": 0,
+        "closed_day_additional_active": 0,
+        "current_case_json": None,
+        "case_history_json": None,
         "interaction_allowed": 1,
         "today_started": 0,
         "last_day_closed_at": None,
@@ -2355,6 +2361,8 @@ async def get_user(uid: int, db_path: str) -> Dict[str, Any]:
 
 async def save_user(u: Dict[str, Any], db_path: str):
     """Persist one user snapshot with optimistic concurrency protection."""
+    from core.case_sessions import sync_case_analysis
+    sync_case_analysis(u)
     state = sync_user_state_aliases(dict(u))
     expected_revision = int(u.get("_loaded_row_revision", state.get("row_revision") or 0))
     state["row_revision"] = expected_revision + 1
@@ -2500,6 +2508,9 @@ EXTRA_USER_COLS = {
     "day_closed": "INTEGER DEFAULT 0",
     "today_closed": "INTEGER DEFAULT 0",
     "daily_training_completed": "INTEGER DEFAULT 0",
+    "closed_day_additional_active": "INTEGER DEFAULT 0",
+    "current_case_json": "TEXT",
+    "case_history_json": "TEXT",
     "interaction_allowed": "INTEGER DEFAULT 1",
     "today_started": "INTEGER DEFAULT 0",
     "last_day_closed_at": "TEXT",

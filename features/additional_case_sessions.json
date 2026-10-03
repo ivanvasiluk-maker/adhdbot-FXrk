@@ -1,0 +1,10 @@
+{
+  "name": "additional_case_after_daily_core",
+  "behavioral_goal": "return",
+  "success_metric": "Share of users who finish a new optional situation after daily core completion without restarting the program; monitor blocked details and lost clarification answers.",
+  "acceptance": [
+    "A new case id persists between messages and archives prior reasoning separately.",
+    "Daily completion and the program day remain unchanged; the new case can reach a voluntary experiment.",
+    "Details open the current analysis regardless of completion or experiment limits and preserve pending answers."
+  ]
+}

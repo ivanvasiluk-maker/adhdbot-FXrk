@@ -21,6 +21,7 @@ import asyncio
 import logging
 import threading
 import uuid
+from core.case_sessions import begin_case, parsed as parse_case_data
 import datetime as dt
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -1044,6 +1045,12 @@ def short_daily_map_text(
 
 
 async def send_user_map(m: Message, u: Dict[str, Any], source: str):
+    if int(u.get("closed_day_additional_active") or 0):
+        comp = _analysis_details_comp_from_user(u)
+        await m.answer("Новая ситуация — отдельная проверка. Прежние результаты сохранены в истории.\n\n"
+                       + (render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha")
+                          if comp.get("analysis_result") else "Сначала ответьте на текущий вопрос, чтобы уточнить эту ситуацию."))
+        return
     profile = await get_user_profile(u["user_id"], DB_PATH)
     skill_map = await build_skill_map_data(u, profile)
     profile["_skill_map"] = skill_map
@@ -8146,6 +8153,7 @@ def reset_daily_state_for_local_date(u: Dict[str, Any]) -> bool:
         "day_closed": 0,
         "today_closed": 0,
         "daily_training_completed": 0,
+        "closed_day_additional_active": 0,
         "daily_primary_skill_done": 0,
         "optional_step_counter": 0,
         "closed_day_extra_step_count": 0,
@@ -8993,6 +9001,7 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     u["day_closed"] = 0
     u["today_closed"] = 0
     u["daily_training_completed"] = 0
+    u["closed_day_additional_active"] = 0
     u["interaction_allowed"] = 1
     u["day_status"] = "active"
     u.setdefault("day_intro_sent", 0)
@@ -9179,7 +9188,7 @@ DAY_CLOSED_CONTINUE_PROMPT = (
     "Хочешь сделать ещё один короткий добровольный подход?"
 )
 DAY_CLOSED_ALLOWED_KINDS = {"map", "trainer_switch", "crisis", "tomorrow"}
-DAY_CLOSED_BLOCKED_KINDS = {"other_skill", "change_skill", "stuck", "more", "details", "why", "enough", "close_day"}
+DAY_CLOSED_BLOCKED_KINDS = {"other_skill", "change_skill", "stuck", "more", "enough", "close_day"}
 DAY_CLOSED_VOLUNTARY_ACTIONS = {"action", "repeat"}
 DAY_CLOSED_VOLUNTARY_ACTION_TEXTS = {
     "➕ Ещё один короткий шаг",
@@ -9346,7 +9355,8 @@ async def start_closed_day_additional_analysis(m: Message, u: Dict[str, Any], te
     """USER_MESSAGE wins over completed daily training without reopening that training."""
     u["interaction_allowed"] = 1
     u["daily_training_completed"] = 1
-    u["closed_day_additional_active"] = 1
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    begin_case(u, profile)
     set_legacy_stage(u, "closed_day_additional_analysis")
     await save_user(u, DB_PATH)
     await log_event(
@@ -9378,7 +9388,6 @@ async def open_closed_day_analysis_step(m: Message, u: Dict[str, Any]) -> None:
     u["daily_skill_name"] = skill.get("name") or sid
     u["daily_skill_status"] = "voluntary_extra"
     u["current_action_context"] = "optional_after_close"
-    u["closed_day_additional_active"] = 0
     set_legacy_stage(u, "closed_day_voluntary_step")
     set_current_state(u, STATE_PAUSED, close_action=False)
     await save_user(u, DB_PATH)
@@ -9404,6 +9413,8 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         "await_problem_text", "awaiting_barrier_choice", "analysis_need_more",
         "confirm_analysis", "analysis_details", "working_map", "social_support_await",
         "misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await",
+        "analysis_clarify_questions", "analysis_clarify_done", "analysis_action_transition",
+        "analysis_action_extra_clarification", "analysis_action_postponed",
     }:
         # The daily session stays closed, but the new situation must finish its own route.
         return False
@@ -9444,17 +9455,27 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         return True
     if u.get("stage") in {"closed_day_voluntary_step", "closed_day_voluntary_tiny"}:
         if text in {"✅ Сделал", "✅ Сделал(а)"} or ("сделал" in low and "не сделал" not in low):
+            case = parse_case_data(u.get("current_case_json"), {})
+            if int(u.get("closed_day_additional_active") or 0):
+                case.update(status="completed", completed=True, subjective_effect="unknown")
+                u["current_case_json"] = json.dumps(case, ensure_ascii=False)
+                u["closed_day_additional_active"] = 0
             set_legacy_stage(u, "day_core_stop")
             set_current_state(u, STATE_PAUSED, close_action=True)
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_DONE_TEXT, kb_closed_day_extra_done, "day_core_stop")
             return True
         if text in {"🟡 Не получилось", "🟡 Попробовал, но не вышло", "🟡 Не вышло"}:
+            case = parse_case_data(u.get("current_case_json"), {})
+            if int(u.get("closed_day_additional_active") or 0):
+                case.update(status="not_completed", completed=False, subjective_effect="unknown")
+                u["current_case_json"] = json.dumps(case, ensure_ascii=False)
             set_legacy_stage(u, "closed_day_voluntary_failed")
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_FAILED_TEXT, kb_closed_day_extra_failed, "closed_day_voluntary_failed")
             return True
         if text in {"🌙 Точно закрыть день", "🌙 Завершить"}:
+            u["closed_day_additional_active"] = 0
             set_legacy_stage(u, "day_core_stop")
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
@@ -9466,6 +9487,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
             await answer_with_keyboard(m, u, CLOSED_DAY_VOLUNTARY_TINY_TEXT, kb_closed_day_extra_tiny, "closed_day_voluntary_tiny")
             return True
         if text == "🌙 Завершить":
+            u["closed_day_additional_active"] = 0
             set_legacy_stage(u, "day_core_stop")
             await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, DAY_ALREADY_CLOSED_TEXT, kb_day_core_stop, "day_core_stop")
@@ -9971,6 +9993,7 @@ async def mark_day_closed(u: Dict[str, Any], source: str):
     u["day_closed"] = 1
     u["today_closed"] = 1
     u["daily_training_completed"] = 1
+    u["closed_day_additional_active"] = 0
     u["interaction_allowed"] = 1
     u["last_day_closed_at"] = closed_at
     u["day_status"] = "closed"
@@ -10063,6 +10086,12 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
 
 async def handle_action_request(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None, *, repeat: bool = False):
     user = user or await get_user(user_id, DB_PATH)
+    if int(user.get("closed_day_additional_active") or 0) and day_closed_today(user):
+        if not parse_case_data(user.get("analysis_json"), {}).get("analysis_result"):
+            await message.answer("Сначала ответьте на текущий вопрос — затем выберем действие по этой ситуации.")
+            return
+        await open_closed_day_analysis_step(message, user)
+        return
     profile = await get_user_profile(user_id, DB_PATH)
     skill_map = await build_skill_map_data(user, profile)
     user["current_skill_status_text"] = current_skill_status_note(user, skill_map)
@@ -11672,7 +11701,7 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket") or u.get("bucket") or "mixed"
     plan = build_28_day_plan(u["bucket"])
-    if plan:
+    if plan and not int(u.get("closed_day_additional_active") or 0):
         plan[0] = skill_id
         u["plan_json"] = json.dumps(plan, ensure_ascii=False)
     set_legacy_stage(u, "confirm_analysis")
@@ -12437,7 +12466,25 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    if text == "🎯 Разобрать ещё одну ситуацию" and day_closed_today(u):
+        u["closed_day_additional_active"] = 0
+        set_legacy_stage(u, "closed_day_new_situation")
+        await save_user(u, DB_PATH)
+        await m.answer("Опишите новую ситуацию одним сообщением или голосом.")
+        return
+
     if await handle_dialogue_help(m, u, text):
+        return
+
+    if text in {"📚 Подробнее", "📚 Подробнее про разбор", "📚 Почему так?", "🤔 Зачем это?"} or low == "подробнее":
+        if text == "📚 Подробнее про разбор" and pending_stuck_validation(u):
+            await handle_stuck_validation_choice(m, u, text)
+            return
+        comp = _analysis_details_comp_from_user(u)
+        if comp:
+            await m.answer(render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha"))
+        else:
+            await m.answer(render_last_explanation_context(u))
         return
 
     # Closing the day is a global destination. It must outrank the action
@@ -12568,6 +12615,12 @@ async def main_flow(m: Message):
     # buttons like «➕ Ещё один короткий шаг» cannot be swallowed by stale
     # post-day state.
     if day_closed_today(u) and is_closed_day_voluntary_action_request(text, low, u):
+        if int(u.get("closed_day_additional_active") or 0):
+            if not parse_case_data(u.get("analysis_json"), {}).get("analysis_result"):
+                await m.answer("Сначала ответьте на текущий вопрос — затем выберем действие по этой ситуации.")
+                return
+            await open_closed_day_analysis_step(m, u)
+            return
         await open_closed_day_voluntary_step(m, u)
         return
 
@@ -12583,7 +12636,7 @@ async def main_flow(m: Message):
         return
 
     # PATCH-21: a meaningful user message always outranks the completed-day UI.
-    if day_closed_today(u) and closed_day_substantive_message(text):
+    if day_closed_today(u) and not int(u.get("closed_day_additional_active") or 0) and str(u.get("stage") or "") not in {"personal_model_correction", "trainer_switch", "closed_day_voluntary_step", "closed_day_voluntary_tiny", "closed_day_voluntary_failed"} and closed_day_substantive_message(text):
         await start_closed_day_additional_analysis(m, u, text)
         return
 
@@ -14275,7 +14328,8 @@ async def main_flow(m: Message):
                 await answer_with_keyboard(m, u, social_support_prompt_text(), kb_social_support, "social_support")
                 return
             set_legacy_stage(u, "working_map")
-            set_legacy_day(u, 1)
+            if not int(u.get("closed_day_additional_active") or 0):
+                set_legacy_day(u, 1)
             ensure_first_start_date(u)
             set_last_explanation_context(
                 u,

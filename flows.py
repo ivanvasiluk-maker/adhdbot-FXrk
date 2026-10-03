@@ -1430,8 +1430,9 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         plan_ids[0] = recommended_variant
     if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
-    u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
-    set_legacy_day(u, 1)
+    if not int(u.get("closed_day_additional_active") or 0):
+        u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
+        set_legacy_day(u, 1)
 
     # set stage to confirm comprehensive analysis and persist
     set_legacy_stage(u, "confirm_analysis")
