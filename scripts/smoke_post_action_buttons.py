@@ -187,7 +187,7 @@ async def run() -> None:
         for stage in ("waiting_next_day", "done", "day_core_stop"):
             await set_post_action_user(uid, db_path, stage, rounds=1)
             map_msg = await send(uid, "🧭 Моя карта")
-            assert "Твоя карта" in last_text(map_msg) or "Твоя рабочая карта" in last_text(map_msg) or "Карта дня" in last_text(map_msg) or "Твоя короткая карта" in last_text(map_msg), last_text(map_msg)
+            assert all(section in last_text(map_msg) for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше")), last_text(map_msg)
 
             # After opening the map, the same post-action menu must still work when that button
             # belongs to the current menu; stale buttons must return to the closed-day context.
@@ -250,14 +250,15 @@ async def run() -> None:
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         stale_repeat_msg = await send(uid, "🔁 Ещё круг")
         assert (
-            "день уже закрыт, и минимум ты выполнил" in last_text(stale_repeat_msg).lower()
+            "добровольный шаг. день остаётся завершённым" in last_text(stale_repeat_msg).lower()
             or "день уже закрыт. это не отменяется" in last_text(stale_repeat_msg).lower()
         ), last_text(stale_repeat_msg)
-        assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Не получилось", "🌙 Точно закрыть день"}} | {OTHER}
+        assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Частично", "🟡 Не получилось", "🌙 Точно закрыть день"}} | {OTHER}
         assert "Если трудно, достаточно этого:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
         voluntary_done_msg = await send(uid, "✅ Сделал")
-        assert "дополнительный шаг" in last_text(voluntary_done_msg).lower(), last_text(voluntary_done_msg)
-        assert "день остаётся закрытым" in last_text(voluntary_done_msg).lower(), last_text(voluntary_done_msg)
+        assert "Насколько это помогло?" in last_text(voluntary_done_msg), last_text(voluntary_done_msg)
+        saved = await get_user(uid, db_path)
+        assert bot.day_closed_today(saved), saved
 
         u = await get_user(uid, db_path)
         u.update({"stage": "ask_name", "name": ""})
@@ -282,7 +283,7 @@ async def run() -> None:
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         training_map_msg = await send(uid, "🧭 Моя карта")
-        assert "Твоя карта" in last_text(training_map_msg) or "Карта дня" in last_text(training_map_msg), last_text(training_map_msg)
+        assert "Что сегодня заметили" in last_text(training_map_msg), last_text(training_map_msg)
 
         await set_post_action_user(uid, db_path, "done", rounds=1)
         more_msg = await send(uid, "Ещё")
@@ -316,9 +317,9 @@ async def run() -> None:
         assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}} | {OTHER}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
-        assert "Получилось сделать?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
-        assert keyboard_texts(done_feedback_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"Да", "Частично", "Нет"}} | {OTHER}
-        help_prompt = await send(uid, "Да")
+        assert "Насколько это помогло?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
+        assert "Получилось сделать?" not in last_text(done_feedback_prompt)
+        help_prompt = done_feedback_prompt
         assert "Насколько это помогло?" in last_text(help_prompt), last_text(help_prompt)
         assert keyboard_texts(help_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"Помогло", "Немного", "Не помогло", "Стало хуже"}} | {OTHER}
         next_prompt = await send(uid, "Не помогло")
@@ -382,18 +383,18 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         success_msg = await send(uid, "✅ Сделал")
-        assert "Получилось сделать?" in last_text(success_msg), last_text(success_msg)
-        success_msg = await send(uid, "Да")
+        assert "Насколько это помогло?" in last_text(success_msg), last_text(success_msg)
         assert "Насколько это помогло?" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "Помогло")
         assert "Что произошло дальше?" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "Продолжил задачу")
         assert "сигнал" in all_text(success_msg).lower() or "помог" in all_text(success_msg).lower(), all_text(success_msg)
         success_buttons = all_keyboard_texts(success_msg)
-        assert {"Ещё один маленький шаг", "Продолжить задачу самому", "Закрыть день"}.issubset(success_buttons), success_buttons
+        assert {"Проверить", "Не сейчас", "Выбрать другой вариант"}.issubset(success_buttons), success_buttons
 
-        repeat1_msg = await send(uid, "Ещё один маленький шаг")
-        assert "следующ" in last_text(repeat1_msg).lower() or "🧩 " in last_text(repeat1_msg), last_text(repeat1_msg)
+        repeat1_msg = await send(uid, "Проверить")
+        assert "Что сейчас мешает делу" in last_text(repeat1_msg), last_text(repeat1_msg)
+        assert (await get_user(uid, db_path))["stage"] == "request_task"
 
         await set_post_action_user(uid, db_path, "success_menu", rounds=1)
         u = await get_user(uid, db_path)

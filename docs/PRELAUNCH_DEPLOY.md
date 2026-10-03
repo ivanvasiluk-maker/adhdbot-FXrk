@@ -32,3 +32,10 @@ Production is never deployed directly from an AI-generated commit.
 7. Run `BOT_STARTUP_CHECK=1 python bot.py` against production configuration.
 8. Deploy `main`, then smoke-test `/health`, `/whoami`, `/privacy`, free navigation, voice transcription, and both support-request paths. Bot payment remains disabled during the free beta.
 9. Roll back to the previous reviewed commit and database backup if startup, routing, or payment smoke checks fail.
+
+
+## Launch candidate, 3 October 2026
+
+Candidate branch: `codex/skiller-launch-sprint1-20261003`, PR #140. Before promotion follow the nine journeys in `docs/LAUNCH_AUDIT_2026-10-03.md` on a separate test bot.
+
+Set `PERSONAL_MONTH_FROM_EUR=99` and `GROUP_PROGRAM_EUR=240`. The former fixed `HUMAN_SKILL_SESSION_EUR` environment setting is superseded; group per-session values derive from the programme price. The programme final summary uses saved plan length, falling back to `PROGRAM_REVIEW_DAY=28` when no plan exists. Keep bot payment flags as reviewed; these changes sell separate live support and do not enable checkout.

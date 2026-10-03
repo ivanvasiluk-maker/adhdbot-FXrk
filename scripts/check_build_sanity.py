@@ -57,7 +57,7 @@ OFFER_REQUIRED_BUTTONS = (
     "🟢 Продолжить бесплатно",
     "🔵 Подписка — €",
     "👥 Группа навыков",
-    "👤 Личная терапия",
+    "👤 Личная работа",
 )
 OFFER_REQUIRED_CALLBACKS = (
     "offer:bot",
@@ -331,3 +331,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

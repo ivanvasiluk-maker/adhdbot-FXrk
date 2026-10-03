@@ -50,10 +50,10 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_day1_insight_is_grounded_and_falsifiable(self):
         text, prediction = bot.day1_insight_text(bot.default_user(1), self.profile())
-        self.assertIn("Что удалось заметить", text)
-        self.assertIn("Причины трудности ещё нужно уточнить", text)
+        self.assertIn("Что сегодня заметили", text)
+        self.assertIn("Что могло мешать", text)
         self.assertIn("Что проверим дальше", text)
-        self.assertIn("Повторится ли результат", prediction)
+        self.assertIn("Уточним, в какой момент", prediction)
         self.assertNotIn("короткое облегчение", text)
         self.assertNotIn("scroll_autopilot", text)
 
@@ -61,7 +61,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         profile = self.profile()
         profile["personal_working_model"]["helpful_interventions"] = {}
         text, _ = bot.day1_insight_text(bot.default_user(1), profile)
-        self.assertIn("полезный сигнал пока не подтверждён", text)
+        self.assertIn("Полезный способ пока не подтверждён", text)
         self.assertNotIn("Первый полезный сигнал:", text)
 
     def test_day1_profile_and_full_map_have_required_sections(self):
@@ -70,7 +70,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         profile = self.profile()
         card = bot.day1_profile_card_text(user, profile, 2)
         full_map = bot.render_prelaunch_full_map(user, profile, {},)
-        for section in ("START", "STAY", "RETURN", "Экспериментов", "Уверенность модели"):
+        for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше"):
             self.assertIn(section, card)
         for section in ("Что сейчас чаще ломается", "Что уже помогало", "Что пока неизвестно", "Следующий эксперимент", "Данных собрано"):
             self.assertIn(section, full_map)
@@ -160,16 +160,16 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         profile.update({"last_successful_skill": "bad_draft", "action_done_count": 3})
         summary = bot.build_profile_map_summary(user, profile)
         text = bot.offer_screen_text(user, summary, profile)
-        self.assertIn("Краткое заключение", text)
-        self.assertIn("Главный узел", text)
-        self.assertIn("Что вижу", text)
-        self.assertIn("Что будем делать", text)
-        self.assertIn("Что надо развивать", text)
-        self.assertIn("начать, продолжить и вернуться", text)
+        self.assertIn("Что сегодня заметили", text)
+        self.assertIn("Где пока труднее", text)
+        self.assertIn("Что сегодня заметили", text)
+        self.assertIn("Что проверим дальше", text)
+        self.assertIn("Где пока труднее", text)
+        self.assertIn("Продолжение дела проверяем отдельно", text)
         self.assertNotIn("→ короткое облегчение", text)
         self.assertIn("Группа навыков", text)
         self.assertIn("€240", text)
-        self.assertIn("Личная терапия", text)
+        self.assertIn("Личная работа", text)
         self.assertIn(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц", text)
         self.assertIn("тест SKILLER пока остаётся бесплатным", text)
 
@@ -216,10 +216,10 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(bot, "answer_with_keyboard", new=answer):
             await bot.send_user_map(message, user, "persistent_button")
         rendered = answer.await_args.args[2]
-        self.assertIn("Карта дня", rendered)
-        self.assertIn("Что вижу сейчас", rendered)
-        self.assertIn("Что будем делать", rendered)
-        self.assertIn("Что развиваем", rendered)
+        self.assertIn("Что сегодня заметили", rendered)
+        self.assertIn("Что сегодня заметили", rendered)
+        self.assertIn("Что проверим дальше", rendered)
+        self.assertIn("Где пока труднее", rendered)
         self.assertNotIn("Карту покажу после первого действия", rendered)
 
     def test_short_map_prefers_specific_hypothesis_over_placeholder(self):

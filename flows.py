@@ -4,6 +4,7 @@
 
 from core.dialogue_ux import DIALOGUE_RULES
 from core.addressing import address_instructions
+from core.request_routing import request_kind, digital_distraction, device_from_text, observed_changes, support_text, physiological_load
 
 import json
 import time
@@ -15,7 +16,7 @@ import re
 import uuid
 from typing import Dict, Any, Optional, List
 import aiosqlite
-from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from aiogram import Bot
 
 from texts import (
@@ -490,6 +491,8 @@ def _clean_analysis_phrase(value: Any, fallback: str, limit: int = 120) -> str:
     text = clamp_str(str(value or "").strip(), limit)
     if not text:
         text = fallback
+    if re.search(r"\bленив[а-я]*\b", text, flags=re.I):
+        return fallback
     lowered = text.lower()
     for forbidden, replacement in ANALYSIS_FORBIDDEN_REPLACEMENTS.items():
         if forbidden in lowered:
@@ -647,7 +650,7 @@ def detect_live_analysis_pattern(user_text: str) -> str:
     anxiety_mechanism = detect_anxiety_case_mechanism(user_text)
     if anxiety_mechanism:
         return f"anxious_{anxiety_mechanism}"
-    if any(x in text for x in ("залип", "ютуб", "youtube", "сообщения", "почта", "на минуту", "лента", "скрол")):
+    if any(x in text for x in ("залип", "ютуб", "youtube", "отвлекаюсь", "сообщения", "почта", "на минуту", "лента", "скрол")):
         return "attention_escape"
     if any(x in text for x in ("нет сил", "устал", "выгор", "не в форме", "не могу думать")):
         return "low_energy_overload"
@@ -1091,9 +1094,24 @@ def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str
         "помогает ли внешний контакт / body doubling",
     ]
     rec = _recommended_skill_for_pattern(pattern)
+    if data.get("request_device") in {"computer", "both"} and pattern in {"attention_escape", "anxious_quick_rewards"}:
+        rec = {"recommended_core_skill": "attention_container", "recommended_variant": "one_tab_focus"}
+    if pattern == "anxious_anxiety" and data.get("physiological_load") is False:
+        rec = {"recommended_core_skill": "fact_check", "recommended_variant": "check_the_facts_light"}
+    if pattern == "anxious_overload" and data.get("physiological_load") is False:
+        rec = {"recommended_core_skill": "choice_reduction", "recommended_variant": "visible_next_step"}
     recommended_variant = rec.get("recommended_variant", "open_only")
     skill_name = _skill_display_name(recommended_variant)
     skill_reason = _skill_reason(recommended_variant, pattern)
+    first_check = skill_name
+    if data.get("request_device") in {"computer", "both"} and recommended_variant == "one_tab_focus":
+        first_check = "Оставьте одно рабочее окно. Закройте лишние вкладки или включите полноэкранный режим на две минуты."
+        if data.get("request_device") == "both":
+            first_check += " Телефон тоже уберите из руки."
+    elif data.get("request_device") == "phone" and recommended_variant == "phone_far_3min":
+        first_check = "Положите телефон вне руки на две минуты и вернитесь к одному выбранному делу."
+    elif recommended_variant == "check_the_facts_light" and pattern in {"anxious_fear_error", "anxious_anxiety", "anxious_overload"}:
+        first_check = "Назовите конкретное опасение. Что можно проверить? Выберите один небольшой безопасный шаг для этой проверки."
     skills_focus = data.get("skills_focus") if isinstance(data.get("skills_focus"), list) else []
     if data.get("useful_signal") and isinstance(signals, dict):
         signals = {**signals, "useful_signal": data.get("useful_signal")}
@@ -1105,9 +1123,9 @@ def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str
         **rec,
         "recommended_skill_name": skill_name,
         "recommended_skill_reason": skill_reason,
-        "first_check": skill_name,
+        "first_check": first_check,
         "primary_analysis_by_trainer": _primary_analysis_scripts(pattern, evidence, core_hypothesis),
-        "detailed_analysis_by_trainer": _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus),
+        "detailed_analysis_by_trainer": {key: value + "\n\nПервый шаг: " + first_check for key, value in _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus).items()},
         "working_map_by_trainer": _working_map_scripts(pattern, core_hypothesis),
     }
 
@@ -1115,32 +1133,20 @@ def build_analysis_result(comp: Dict[str, Any], user_text: str = "") -> Dict[str
 def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = "marsha") -> str:
     """Expand only the current analysis with facts and hypotheses separated."""
     from texts import bucket_type_honest_explanation
-    bucket = str(comp.get("bucket") or "mixed")
-    if bucket not in ("anxiety", "low_energy", "distractibility", "mixed"):
-        bucket = "mixed"
-    honest_block = "\n\n---\n\n" + bucket_type_honest_explanation(bucket)
-
-    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
-    details_by_trainer = analysis_result.get("detailed_analysis_by_trainer") if isinstance(analysis_result.get("detailed_analysis_by_trainer"), dict) else {}
-    scripted = details_by_trainer.get(trainer_key) or details_by_trainer.get("marsha")
-    if scripted:
-        return str(scripted) + honest_block
-
-    pattern = str(comp.get("live_pattern") or "default_start_block")
-    core_hypothesis = _analysis_result_core_hypothesis(pattern)
+    if comp.get("request_kind") and comp.get("request_kind") != "task_problem":
+        return comp.get("support_text") or support_text(comp["request_kind"], comp.get("observed_changes"))
+    result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
     signals = comp.get("analysis_signals") if isinstance(comp.get("analysis_signals"), dict) else {}
-    evidence = [str(x) for x in signals.get("facts", []) if x]
-    if not evidence:
-        return (
-            "## 🧭 Почему я сейчас думаю именно так\n\n"
-            "Пока у меня мало данных, поэтому не буду делать вид, что всё понял. "
-            "Давай уточним 3 короткими вопросами — и я соберу первую рабочую модель.\n\n"
-            "Это пока не диагноз и не окончательный вывод. Это рабочий цикл, который мы проверяем по твоим действиям."
-        ) + honest_block
-    recommended_variant = str((comp.get("analysis_result") or {}).get("recommended_variant") or _recommended_skill_for_pattern(pattern).get("recommended_variant") or "open_only")
-    skills_focus = comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else []
-    details = _detailed_analysis_scripts(pattern, evidence, core_hypothesis, signals, recommended_variant, skills_focus)
-    return (details.get(trainer_key) or details["marsha"]) + honest_block
+    facts = result.get("evidence_signals") or signals.get("facts") or []
+    facts = [str(item) for item in facts if item][:4]
+    if not result:
+        return "Пока мало данных для вывода. Ответьте на текущий вопрос — затем уточним, что мешает и какой шаг проверить."
+    hypothesis = result.get("core_hypothesis") or comp.get("specific_pattern") or "Причину ещё уточняем"
+    first = result.get("first_check") or result.get("recommended_skill_name") or "Назовите одно конкретное дело."
+    return ("Что есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
+            + "\n\nЧто может мешать\n" + str(hypothesis)
+            + "\nЭто предварительная версия, а не диагноз.\n\nЧто проверим\n" + str(first)
+            + "\n\nПосле шага отдельно посмотрим: стало ли легче и получилось ли продолжить дело. Если станет хуже, остановимся и подберём другой подход.")
 
 
 def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Dict[str, Any]] = None) -> str:
@@ -1368,10 +1374,49 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         preliminary_diagnosis_conclusion_text,
     )
 
+    kind = request_kind(user_text)
+    if kind != "task_problem":
+        facts = observed_changes(user_text)
+        comp = {"request_kind": kind, "analysis_id": "request_" + uuid.uuid4().hex[:12],
+                "observed_changes": facts, "support_text": support_text(kind, facts),
+                "specific_pattern": None, "selected_skill": None}
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        enough = bool(facts) and (len(user_text.split()) >= 12 or bool(re.search(r"(?:недел|месяц|год|\d+\s*дн)", user_text.lower())))
+        set_legacy_stage(u, "request_support" if kind == "crisis" or enough else "request_context")
+        await save_user(u, db_path)
+        await log_event(u["user_id"], "analysis", "request_routed", {"request_kind": kind}, db_path, sheets_webhook)
+        if kind == "crisis":
+            await m.answer(comp["support_text"], reply_markup=ReplyKeyboardRemove())
+        elif enough:
+            await m.answer(comp["support_text"], reply_markup=ReplyKeyboardMarkup(keyboard=[
+                [KeyboardButton(text="Разобрать конкретное дело")],
+                [KeyboardButton(text="Уточнить мой запрос")],
+                [KeyboardButton(text="На этом пока остановиться")]], resize_keyboard=True))
+        else:
+            intro = "\n".join(facts) or {"health_or_medication": "Это вопрос о самочувствии или лечении.",
+                    "emotional_state": "Сначала разберём состояние.", "relationship": "Это ситуация в отношениях.",
+                    "other": "Хочу понять, какая помощь нужна."}[kind]
+            note = "\nПо одному описанию диагноз не определяется." if kind == "health_or_medication" else ""
+            question = "Что изменилось и как давно?" if kind in {"health_or_medication", "emotional_state"} else "Что произошло и что вы хотите изменить?"
+            await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardRemove())
+        return
+    device = device_from_text(user_text)
+    if digital_distraction(user_text) and not device:
+        comp = safe_analysis_memory(user_text)
+        comp.update(request_kind=kind, request_device=None, device_question_pending=True)
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        set_legacy_stage(u, "request_device")
+        await save_user(u, db_path)
+        await m.answer("Где чаще отвлекаетесь?", reply_markup=ReplyKeyboardMarkup(keyboard=[
+            [KeyboardButton(text="На телефоне")], [KeyboardButton(text="На том же компьютере, где работаю")],
+            [KeyboardButton(text="И там и там")]], resize_keyboard=True))
+        return
+
     if analysis_needs_more_input(user_text):
         analysis_id = f"analysis_{uuid.uuid4().hex[:12]}"
         memory = safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True)
         memory.update(analysis_routing_memory(memory, analysis_id))
+        memory.update(request_kind=kind, request_device=device, physiological_load=physiological_load(user_text))
         u["analysis_json"] = json.dumps(memory, ensure_ascii=False)
         set_legacy_stage(u, "awaiting_barrier_choice")
         u["current_screen_id"] = analysis_id
@@ -1405,6 +1450,9 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     comp = normalize_analysis(comp, user_text, r)
     comp["trainer_key"] = u.get("trainer_key", "marsha")
     comp_to_store = dict(comp)
+    comp_to_store["request_kind"] = kind
+    comp_to_store["request_device"] = device
+    comp_to_store["physiological_load"] = physiological_load(user_text)
     comp_to_store.pop("user_text", None)
     comp_to_store.update(safe_analysis_memory(user_text, comp_to_store))
     comp_to_store.update(analysis_routing_memory(comp_to_store, f"analysis_{uuid.uuid4().hex[:12]}"))
@@ -1420,6 +1468,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         await m.answer(analysis_need_more_text(user_text), reply_markup=barrier_choice_keyboard(analysis_id))
         return
     comp_to_store["analysis_result"] = analysis_result
+    if device or analysis_result.get("pattern") in {"anxious_anxiety", "anxious_overload"}:
+        comp_to_store["selected_skill"] = analysis_result.get("recommended_variant") or comp_to_store.get("selected_skill")
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
     u["analysis_action_transition_shown"] = 0
 
@@ -1430,8 +1480,9 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         plan_ids[0] = recommended_variant
     if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
-    u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
-    set_legacy_day(u, 1)
+    if not int(u.get("closed_day_additional_active") or 0):
+        u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
+        set_legacy_day(u, 1)
 
     # set stage to confirm comprehensive analysis and persist
     set_legacy_stage(u, "confirm_analysis")

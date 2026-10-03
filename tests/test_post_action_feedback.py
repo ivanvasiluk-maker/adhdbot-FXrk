@@ -82,7 +82,7 @@ class NeverDeadEndIntegrationTests(unittest.IsolatedAsyncioTestCase):
             old_path = bot.DB_PATH
             bot.DB_PATH = file.name
             messages = [
-                FakeMessage(902, "✅ Сделал"), FakeMessage(902, "Да"),
+                FakeMessage(902, "✅ Сделал"),
                 FakeMessage(902, "Помогло"), FakeMessage(902, "Продолжил задачу"),
             ]
             try:

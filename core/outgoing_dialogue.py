@@ -4,7 +4,7 @@ import aiosqlite
 from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 from core.addressing import render_address
-from core.dialogue_ux import BUTTON_LABELS
+from core.dialogue_ux import BUTTON_LABELS, plain_text
 
 
 class OutgoingDialogueMiddleware(BaseRequestMiddleware):
@@ -30,7 +30,7 @@ class OutgoingDialogueMiddleware(BaseRequestMiddleware):
             return await make_request(bot, method)
         # Explicit Telegram entity offsets must not be invalidated by rewriting.
         entities = getattr(method, 'entities' if text_key == 'text' else 'caption_entities', None)
-        changes = {} if entities else {text_key: render_address(value, dict(row))}
+        changes = {} if entities else {text_key: render_address(plain_text(value), dict(row))}
         markup = getattr(method, 'reply_markup', None)
         if isinstance(markup, (InlineKeyboardMarkup, ReplyKeyboardMarkup)):
             field = 'inline_keyboard' if isinstance(markup, InlineKeyboardMarkup) else 'keyboard'
