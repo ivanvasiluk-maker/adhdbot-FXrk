@@ -1365,7 +1365,7 @@ def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str
     pattern = normalized.get("live_pattern") or comp.get("live_pattern") or detect_live_analysis_pattern(raw_hint)
     return render_analysis_by_trainer(str(pattern), str(key), normalized)
 
-async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini", *, on_action=None):
+async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini", *, on_action=None, moment_help=False):
     """Запустить анализ"""
     from texts import (
         kb_analysis_confirm,
@@ -1389,6 +1389,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
             await m.answer(comp["support_text"], reply_markup=ReplyKeyboardRemove())
         elif enough:
             await m.answer(comp["support_text"], reply_markup=ReplyKeyboardMarkup(keyboard=[
+                *([[KeyboardButton(text="Вернуться к тренировке")]] if moment_help else []),
                 [KeyboardButton(text="Разобрать конкретное дело")],
                 [KeyboardButton(text="Уточнить мой запрос")],
                 [KeyboardButton(text="На этом пока остановиться")]], resize_keyboard=True))
@@ -1398,7 +1399,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
                     "other": "Хочу понять, какая помощь нужна."}[kind]
             note = "\nПо одному описанию диагноз не определяется." if kind == "health_or_medication" else ""
             question = "Что изменилось и как давно?" if kind in {"health_or_medication", "emotional_state"} else "Что произошло и что вы хотите изменить?"
-            await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardRemove())
+            await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Вернуться к тренировке")]], resize_keyboard=True) if moment_help else ReplyKeyboardRemove())
         return
     device = device_from_text(user_text)
     if digital_distraction(user_text) and not device:
@@ -1491,7 +1492,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         plan_ids[0] = recommended_variant
     if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
-    if not int(u.get("closed_day_additional_active") or 0):
+    if not moment_help and not int(u.get("closed_day_additional_active") or 0):
         u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
         set_legacy_day(u, 1)
 

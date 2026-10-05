@@ -410,10 +410,12 @@ async def run() -> None:
             "last_day_closed_at": None,
         })
         await save_user(u, db_path)
+        locked_before = u.get("day_core_skill_id")
         next_step_msg = await send(uid, "💪 Продолжить тренировку")
         next_step_text = last_text(next_step_msg)
-        assert "🧩 " in next_step_text, next_step_text
-        assert "Открыть без таймера" not in next_step_text, next_step_text
+        assert any(title in next_step_text for title in ("Один короткий подход", "Проверим этот способ", "Кусочек настоящего дела")), next_step_text
+        assert "После попытки можно остановиться" in next_step_text, next_step_text
+        assert (await get_user(uid, db_path))["day_core_skill_id"] == locked_before
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         skip_msg = await send(uid, "Пропустить")
