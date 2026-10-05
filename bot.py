@@ -21,6 +21,7 @@ import asyncio
 import logging
 import threading
 import uuid
+from core.conversation_intent import resolve_intent, STOP_WORDS
 from core.case_sessions import begin_case, parsed as parse_case_data
 from core.request_routing import DEVICE_LABELS, observed_changes, support_text, request_kind
 import datetime as dt
@@ -1079,6 +1080,7 @@ async def send_user_map(m: Message, u: Dict[str, Any], source: str):
     await answer_with_keyboard(m, u, txt, markup, u.get("stage") or "training_main")
 
 VOICE_FREE_TEXT_STAGES = {
+    "intent_understand_context", "intent_act_context", "offer_request_form",
     "ask_name",
     "await_trainer",
     "notification_consent",
@@ -1197,6 +1199,121 @@ def request_support_keyboard():
         [KeyboardButton(text="Уточнить мой запрос")],
         [KeyboardButton(text="На этом пока остановиться")],
     ], resize_keyboard=True)
+
+
+async def handle_application_input(m, u, text):
+    if u.get("stage") == "offer_request_form" and (text.lower().strip(" .!?") in STOP_WORDS or text == "/cancel"):
+        if not await restore_offer_return(m, u):
+            set_legacy_stage(u, OFFER_MENU_STAGE)
+            await save_user(u, DB_PATH)
+            await m.answer("Запись остановлена. Заявка не отправлена.")
+        return True
+    if text.startswith("/"):
+        return False
+    if u.get("stage") == "offer_request_form":
+        request_text = (text or "").strip()
+        if len(request_text) < 5:
+            await m.answer("Напишите одной фразой, с чем нужна помощь. Если в Telegram нет имени пользователя, добавьте один контакт для ответа.")
+            return True
+        known_username = getattr(m.from_user, "username", None) or u.get("username")
+        has_contact = bool(known_username or "@" in request_text or re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", request_text) or re.search(r"\+?\d[\d ()-]{6,}", request_text))
+        if not has_contact:
+            await m.answer("Запрос понял. Не хватает только контакта для ответа — пришли username, почту или телефон.")
+            return True
+        source = str(u.get("pending_offer_request_format") or "offer_request")
+        lead_meta = lead_metadata(u, m.from_user, request_text, source)
+        u["last_offer_action"] = "offer_request_submitted"
+        set_legacy_stage(u, OFFER_MENU_STAGE)
+        await save_user(u, DB_PATH)
+        sent = await notify_offer_request(m, u, source, request_text)
+        await log_event(u["user_id"], "offer", "offer_request_submitted", {"format": source, "sent": sent, "text_len": len(request_text)}, DB_PATH, SHEETS_WEBHOOK_URL)
+        await log_event(u["user_id"], "offer", "lead_created", lead_meta, DB_PATH, SHEETS_WEBHOOK_URL)
+        await answer_with_inline_screen(m, u, offer_request_submitted_text(sent), offer_request_done_keyboard(), "offer")
+        return True
+
+    return False
+
+
+def intent_mode_keyboard():
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🧠 Понять, что происходит")],
+        [KeyboardButton(text="⚡ Сделать что-то сейчас")]], resize_keyboard=True)
+
+
+async def handle_conversation_intent(m, u, text):
+    intent = resolve_intent(text, str(u.get("stage") or ""), _skiller_session(u))
+    ctx = dialogue_context(u.get("dialogue_context"))
+    if intent == "STOP":
+        if u.get("stage") != "intent_paused":
+            ctx["intent_resume"] = {key: u.get(key) for key in OFFER_RETURN_FIELDS}
+            ctx["intent_resume"]["dialogue_context"] = u.get("dialogue_context")
+        set_legacy_stage(u, "intent_paused")
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await m.answer("На сегодня достаточно. Текущее место сохранено. Если захотите вернуться, нажмите «Продолжить».", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True))
+        return True
+    if intent == "CONTINUE" and u.get("stage") == "intent_paused":
+        snapshot = ctx.get("intent_resume") or {}
+        if snapshot:
+            for key, value in snapshot.items():
+                u[key] = value
+            await save_user(u, DB_PATH)
+            old = dialogue_context(u.get("dialogue_context"))
+            markup = old.get("markup")
+            keyboard = (InlineKeyboardMarkup if old.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
+            await m.answer(old.get("text") or "Продолжим с прежнего места.", reply_markup=keyboard)
+        else:
+            await resume_daily_flow(m, u, announce=True)
+        return True
+    if intent == "CONTINUE" and text != "Продолжить" and u.get("stage") in {"training", "training_main", "success_menu", "day_core_stop", "day_closed_menu", "intent_understand_result"}:
+        await open_closed_day_voluntary_step(m, u) if day_closed_today(u) else await handle_action_request(u["user_id"], m, u)
+        return True
+    if intent == "CHOOSE_MODE":
+        set_legacy_stage(u, "intent_choose")
+        await save_user(u, DB_PATH)
+        await m.answer("Что сейчас полезнее?", reply_markup=intent_mode_keyboard())
+        return True
+    stage = str(u.get("stage") or "")
+    if intent == "UNDERSTAND" or stage == "intent_understand_context":
+        # Domain safety and health requests retain their existing dedicated route.
+        kind = request_kind(text)
+        if kind in {"health_or_medication", "emotional_state", "relationship", "crisis"}:
+            await run_analysis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+            return True
+        from flows import safe_analysis_memory, normalize_analysis, build_analysis_result
+        memory = safe_analysis_memory(text)
+        if kind != "task_problem" or len(text.split()) < 6:
+            set_legacy_stage(u, "intent_understand_context")
+            await save_user(u, DB_PATH)
+            await m.answer("Какую повторяющуюся ситуацию хотите понять? Достаточно одного примера.", reply_markup=ReplyKeyboardRemove())
+            return True
+        comp = normalize_analysis(memory, text)
+        comp.update(request_kind=kind, requested_mode="understand")
+        comp["analysis_result"] = build_analysis_result(comp, text)
+        if day_closed_today(u) and not int(u.get("closed_day_additional_active") or 0):
+            begin_case(u, await get_user_profile(u["user_id"], DB_PATH))
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        set_legacy_stage(u, "intent_understand_result")
+        await save_user(u, DB_PATH)
+        result = comp["analysis_result"]
+        await m.answer("Моя рабочая версия сейчас:\n" + str(result.get("core_hypothesis") or comp["specific_pattern"])
+                       + "\n\nМожно пока остановиться на этом разборе или проверить один небольшой шаг.",
+                       reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мне достаточно")], [KeyboardButton(text="⚡ Давай попробуем")]], resize_keyboard=True))
+        return True
+    if intent == "ACT_NOW" or stage == "intent_act_context":
+        if text == "⚡ Давай попробуем" and stage == "intent_understand_result":
+            await open_closed_day_analysis_step(m, u) if day_closed_today(u) else await handle_action_request(u["user_id"], m, u)
+            return True
+        if request_kind(text) == "task_problem" and len(text.split()) >= 5:
+            if day_closed_today(u) and not int(u.get("closed_day_additional_active") or 0):
+                begin_case(u, await get_user_profile(u["user_id"], DB_PATH))
+            await run_analysis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
+        else:
+            set_legacy_stage(u, "intent_act_context")
+            await save_user(u, DB_PATH)
+            await m.answer("Какое одно дело нужно сейчас сдвинуть?", reply_markup=ReplyKeyboardRemove())
+        return True
+    return False
 
 
 async def handle_request_route(m, u, text):
@@ -12578,6 +12695,10 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    # Application text owns its input before help, details, or psychological routing.
+    if await handle_application_input(m, u, text):
+        return
+
     if text == "🎯 Разобрать ещё одну ситуацию" and day_closed_today(u):
         u["closed_day_additional_active"] = 0
         set_legacy_stage(u, "closed_day_new_situation")
@@ -12600,6 +12721,9 @@ async def main_flow(m: Message):
             await m.answer(render_analysis_details_by_trainer(comp, u.get("trainer_key") or "marsha"))
         else:
             await m.answer(render_last_explanation_context(u))
+        return
+
+    if await handle_conversation_intent(m, u, text):
         return
 
     if await handle_request_route(m, u, text):
@@ -15331,27 +15455,6 @@ async def main_flow(m: Message):
             kb_training_main,
             "training_main",
         )
-        return
-
-    if u.get("stage") == "offer_request_form":
-        request_text = (text or "").strip()
-        if len(request_text) < 5:
-            await m.answer("Напишите одной фразой, с чем нужна помощь. Если в Telegram нет имени пользователя, добавьте один контакт для ответа.")
-            return
-        known_username = getattr(m.from_user, "username", None) or u.get("username")
-        has_contact = bool(known_username or "@" in request_text or re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", request_text) or re.search(r"\+?\d[\d ()-]{6,}", request_text))
-        if not has_contact:
-            await m.answer("Запрос понял. Не хватает только контакта для ответа — пришли username, почту или телефон.")
-            return
-        source = str(u.get("pending_offer_request_format") or "offer_request")
-        lead_meta = lead_metadata(u, m.from_user, request_text, source)
-        u["last_offer_action"] = "offer_request_submitted"
-        set_legacy_stage(u, OFFER_MENU_STAGE)
-        await save_user(u, DB_PATH)
-        sent = await notify_offer_request(m, u, source, request_text)
-        await log_event(u["user_id"], "offer", "offer_request_submitted", {"format": source, "sent": sent, "text_len": len(request_text)}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await log_event(u["user_id"], "offer", "lead_created", lead_meta, DB_PATH, SHEETS_WEBHOOK_URL)
-        await answer_with_inline_screen(m, u, offer_request_submitted_text(sent), offer_request_done_keyboard(), "offer")
         return
 
     # Если пользователь отмечает выполнение после упрощённого шага, не показываем
