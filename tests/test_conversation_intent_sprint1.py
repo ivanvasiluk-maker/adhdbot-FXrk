@@ -62,7 +62,7 @@ class IntentJourneys(unittest.IsolatedAsyncioTestCase):
         u=await get_user(81819,self.path);u['stage']='minimal_feedback_help';await save_user(u,self.path)
         m,u=await self.send('всё хорошо')
         self.assertEqual(u['stage'],'minimal_feedback_help')
-        self.assertIn('Насколько это помогло',m.answers[-1][0])
+        self.assertIn('Что получилось после шага',m.answers[-1][0])
     async def test_pause_reload_resume_exact_pending_question(self):
         u=await get_user(81819,self.path);u['stage']='minimal_feedback_next'
         u['pending_feedback_json']=json.dumps({'completed':True,'helpfulness':'helped'})

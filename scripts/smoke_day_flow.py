@@ -122,7 +122,7 @@ async def main() -> None:
             assert "🧩 " in joined(voluntary_msg), joined(voluntary_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             user, done_msg = await send(uid, "✅ Сделал")
-            assert "Насколько это помогло?" in joined(done_msg)
+            assert "Что получилось после шага?" in joined(done_msg)
             user, benefit_msg = await send(uid, "Помогло")
             assert "Что произошло дальше?" in joined(benefit_msg)
             user, result_msg = await send(uid, "Продолжил задачу")

@@ -82,17 +82,14 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         self.assertIn(u['stage'],{'request_support','request_context'})
         self.assertNotEqual(u['stage'],'training')
 
-    async def test_partial_waits_for_description_and_retains_it(self):
+    async def test_partial_requires_only_one_result_choice(self):
         _,u = await self.send('🟡 Частично')
-        self.assertEqual(u['stage'],'feedback_partial_text')
-        _,u = await self.send('Открыл файл, но на первой строке остановился')
         self.assertEqual(u['stage'],'minimal_feedback_help')
-        await self.send('Не помогло')
-        await self.send('Остановился после шага')
+        await self.send('😐 Без изменений')
         p = await get_user_profile(self.uid,self.path)
         self.assertTrue(p['last_skill_feedback']['partial'])
         self.assertFalse(p['last_skill_feedback']['completed'])
-        self.assertIn('первой строке', p['last_skill_feedback']['user_feedback'])
+        self.assertIsNone(p['last_skill_feedback']['continued_after_skill'])
 
     async def test_offer_restores_exact_pending_question_after_reload(self):
         await self.send('✅ Сделал')
@@ -170,4 +167,4 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         u = await get_user(self.uid,self.path)
         self.assertEqual(u['stage'],before['stage'])
         self.assertEqual(u['pending_feedback_json'],before['pending_feedback_json'])
-        self.assertIn('Насколько это помогло?',c.message.answers[-1][0])
+        self.assertIn('Что получилось после шага?',c.message.answers[-1][0])

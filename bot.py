@@ -624,16 +624,12 @@ kb_feedback_offer = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-kb_active_skill = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="✅ Сделал")],
-        [KeyboardButton(text="🟡 Частично")],
-        [KeyboardButton(text="🟡 Попробовал, но не вышло")],
-        [KeyboardButton(text="↘️ Нужно проще")],
-        [KeyboardButton(text="🌙 Закрыть день")],
-    ],
-    resize_keyboard=True,
-)
+kb_active_skill = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="✅ Сделал")], [KeyboardButton(text="🟡 Частично")],
+    [KeyboardButton(text="❌ Не получилось")], [KeyboardButton(text="🎲 Другой вариант")],
+    [KeyboardButton(text="🌙 Закрыть день")],
+], resize_keyboard=True)
+
 
 kb_first_day_skill = ReplyKeyboardMarkup(
     keyboard=[
@@ -671,6 +667,18 @@ kb_minimal_feedback_help = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Помогло")], [KeyboardButton(text="Немного")], [KeyboardButton(text="Не помогло")], [KeyboardButton(text="Стало хуже")]],
     resize_keyboard=True,
 )
+
+kb_quick_feedback = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="🚀 Продолжил дело")], [KeyboardButton(text="🙂 Стало легче")],
+    [KeyboardButton(text="😐 Без изменений")], [KeyboardButton(text="😣 Стало хуже")],
+], resize_keyboard=True)
+kb_short_action = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="✅ Сделал")], [KeyboardButton(text="❌ Не получилось")],
+], resize_keyboard=True)
+kb_quick_success = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="⚡ Ещё один шаг")], [KeyboardButton(text="🏁 Хватит на сегодня")],
+    [KeyboardButton(text="🧰 Мои рабочие навыки")],
+], resize_keyboard=True)
 
 kb_minimal_feedback_next = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Продолжил задачу")], [KeyboardButton(text="Остановился после шага")], [KeyboardButton(text="Сделал что-то другое")], [KeyboardButton(text="Пока не знаю")]],
@@ -1164,7 +1172,8 @@ class DialogueMessage:
                 rows.append([button.model_copy(update={"text": BUTTON_LABELS.get(button.text, button.text)}) for button in row])
             labels = [b.text for row in rows for b in row]
             protected = str(self.user.get("stage") or "") in {"privacy_consent", "notification_consent", "restart_onboarding_confirm", "safety_mode", "ask_name", "ask_address", "await_trainer"}
-            if not protected and labels and not text.startswith(VOICE_FAILURE) and not any("друг" in x.casefold() or "своими словами" in x.casefold() for x in labels) and len(labels) < MAX_KEYBOARD_BUTTONS:
+            short_screen = any(markup is globals().get(key) for key in ("kb_short_action", "kb_quick_feedback", "kb_quick_success"))
+            if not protected and not short_screen and labels and not text.startswith(VOICE_FAILURE) and not any("друг" in x.casefold() or "своими словами" in x.casefold() for x in labels) and len(labels) < MAX_KEYBOARD_BUTTONS:
                 rows.append([KeyboardButton(text=OTHER)])
             markup = markup.model_copy(update={"keyboard": rows, "input_field_placeholder": "Можно написать или отправить голосовое"})
             kwargs["reply_markup"] = markup
@@ -4922,7 +4931,9 @@ SKILL_OBSTACLE_BY_BUTTON = {
     "Отвлёкся": "distracted",
     "📱 Унесло в телефон": "distracted",
     "Задача уже не актуальна": "task_irrelevant",
-    "Другая причина": "other_context",
+    "Другая причина": "other_context", "🥱 Скучно": "bored", "😵 Слишком сложно": "too_hard",
+    "📱 Отвлёкся": "distracted", "😰 Напряжение": "anxiety",
+    "❓ Не понял, что делать": "unclear_instruction", "🤷 Другое": "other_context",
 }
 
 
@@ -4943,8 +4954,39 @@ def not_done_reason_text(code: str, u: Dict[str, Any]) -> str:
         return "Понял. Закрываю этот эксперимент без пометки навыка как плохого. Можно выбрать новую задачу или закрыть день."
     return "Понял. Записываю это как контекст, а не как плохой навык. Давай выберем более подходящий следующий шаг."
 
+async def show_one_clear_action(m, u, *, reason="unclear_instruction"):
+    current = str(u.get("current_next_physical_step") or "")
+    step = simplified_step(current or truly_smaller_step(u))
+    if reason == "unclear_instruction":
+        step = "Открой то, что нужно для дела: файл, страницу или нужный предмет."
+    elif reason == "too_hard":
+        step = "Найди то, с чего начинается дело: файл, страницу или нужный предмет. Само дело пока не начинай."
+    elif reason == "distracted":
+        step = "Убери то, что отвлекает, из поля зрения на одну минуту."
+    elif reason == "anxiety":
+        step = "Сделай один спокойный выдох. Продолжать дело пока не нужно."
+    elif reason == "no_energy":
+        step = "Сядь удобнее и сделай паузу на одну минуту."
+    elif reason == "bored":
+        step = "Выбери самый простой кусочек дела и попробуй его одну минуту."
+    u["current_next_physical_step"] = step
+    if day_closed_today(u):
+        if not int(u.get("closed_day_additional_active") or 0):
+            begin_case(u, await get_user_profile(u["user_id"], DB_PATH))
+        u["current_action_id"] = "case_action_" + uuid.uuid4().hex
+        record_skill_attempt_start(u, current_skill_for_action(u), source="adapted_case")
+        set_legacy_stage(u, "closed_day_voluntary_tiny")
+        set_current_state(u, STATE_PAUSED, close_action=False)
+    else:
+        set_legacy_stage(u, "downscale_action")
+        mark_action_card_active(u)
+        sync_active_attempt(u, bump=True, attempt_status="not_tried", effect_status="unknown", is_closed=False)
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, f"Сейчас только одно:\n{step}\n\nБольше ничего.", kb_short_action, u["stage"])
+
+
 async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: str) -> bool:
-    if text == "Другая причина":
+    if text in {"Другая причина", "🤷 Другое"}:
         set_legacy_stage(u, "skill_obstacle_other")
         await save_user(u, DB_PATH)
         await m.answer("Напиши одной короткой фразой, что именно помешало.")
@@ -4983,28 +5025,29 @@ async def handle_not_done_context_reason(m: Message, u: Dict[str, Any], text: st
     await record_profile_signal(u["user_id"], "training", patch, source=f"not_done_context_{code}")
     feedback = get_minimal_feedback(u) or minimal_feedback_base(u, source="not_done")
     feedback.update({
-        "completed": False, "partial": False, "helpfulness": "not_helped",
-        "continued_after_skill": False, "difficulty": code, "barrier": custom_reason or code,
+        "completed": False, "partial": False, "helpfulness": "unknown",
+        "continued_after_skill": None, "difficulty": code, "barrier": custom_reason or code,
         "failure_reason_code": {
             "too_hard": "too_hard", "unclear_instruction": "unclear_instruction",
             "task_irrelevant": "wrong_timing", "no_energy": "external_blocker",
             "distracted": "external_blocker", "anxiety": "unknown", "other": "unknown",
         }.get(code, "unknown"),
     })
-    feedback["next_after_skill"] = "Остановился после шага"
+    feedback["next_after_skill"] = "Пока не знаю"
     set_minimal_feedback(u, feedback)
-    return await persist_minimal_skill_feedback(m, u)
+    await persist_minimal_skill_feedback(m, u, show_summary=False)
+    if code == "task_irrelevant":
+        await answer_with_keyboard(m, u, "Это дело уже не нужно делать. Можно остановиться или выбрать другое.", next_choice_keyboard(), "post_action_reflection")
+    else:
+        await show_one_clear_action(m, u, reason=code)
+    return True
 
 
 
 def post_action_reason_keyboard(u: Dict[str, Any]) -> ReplyKeyboardMarkup:
-    """At most four contextual hypotheses plus a free-form alternative."""
-    mechanism = str(active_attempt(u).get("current_mechanism") or "")
-    contextual = "Отвлёкся" if mechanism in {"phone", "attention_drift"} else "Стало тревожно"
-    labels = ("Слишком сложно", "Не было сил", contextual, "Не понял, что делать", "Другая причина")
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=label)] for label in labels], resize_keyboard=True,
-    )
+    """One button per common obstacle, with optional own words."""
+    labels = ("🥱 Скучно", "😵 Слишком сложно", "📱 Отвлёкся", "😰 Напряжение", "❓ Не понял, что делать", "🤷 Другое")
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=label)] for label in labels], resize_keyboard=True)
 
 
 def skill_result_feedback_text(source: str = "done") -> str:
@@ -5218,6 +5261,27 @@ async def finish_case_feedback(u: Dict[str, Any], feedback: Dict[str, Any]) -> N
 async def handle_next_choice(m: Message, u: Dict[str, Any], text: str) -> bool:
     if u.get("stage") != "post_action_reflection":
         return False
+    if text == "⚡ Ещё один шаг":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        previous = profile.get("last_skill_feedback") or {}
+        if previous.get("completed") is True and previous.get("continued_after_skill") is True and previous.get("helpfulness") != "worse":
+            if day_closed_today(u):
+                await open_closed_day_voluntary_step(m, u)
+            else:
+                await open_next_logical_step(m, u, source="quick_success_next")
+            return True
+    if text == "🧰 Мои рабочие навыки":
+        attempts = user_skill_attempts(u)
+        latest = {str(a.get("skill_id") or ""): a for a in attempts if a.get("completed") is not None}
+        working = [sid for sid, a in latest.items() if sid in SKILLS_DB
+            and a.get("completed") is True and a.get("continued_target_task") is True
+            and a.get("subjective_effect") != "worse"]
+        text = "Помогли продолжить дело:\n" + "\n".join("— " + str(SKILLS_DB[sid].get("name") or sid) for sid in working[-5:]) if working else "Пока нет способов с подтверждённым продолжением дела. Сохраняем результаты попыток."
+        await answer_with_keyboard(m, u, text, kb_quick_success, "post_action_reflection")
+        return True
+    if text == "Уточнить, что стало хуже" and (await get_user_profile(u["user_id"], DB_PATH)).get("last_skill_effect") == "worse":
+        text = "Проверить"
+    text = {"⚡ Ещё один шаг": "Проверить", "🏁 Хватит на сегодня": "Не сейчас"}.get(text, text)
     if text == "📚 Почему так?":
         profile = await get_user_profile(u["user_id"], DB_PATH)
         conclusion = daily_conclusion(u, profile)
@@ -5283,10 +5347,10 @@ async def ask_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, source: s
     set_current_state(u, STATE_PAUSED, close_action=True)
     sync_active_attempt(u, bump=True, attempt_status="completed", effect_status="unknown", is_closed=True)
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+    await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
     return True
 
-async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
+async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_summary: bool = True) -> bool:
     feedback = get_minimal_feedback(u)
     if not feedback:
         return False
@@ -5317,11 +5381,13 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     effect_status = effect_status_from_minimal_feedback(helpfulness, continued)
     sync_active_attempt(
         u, bump=True,
-        attempt_status="completed" if completed or partial else "failed",
+        attempt_status="completed" if completed else "tried" if partial else "failed",
         effect_status=effect_status,
         is_closed=True,
     )
     current_target_function = skill_target_function(sid)
+    if not user_skill_attempts(u) and sid:
+        record_skill_attempt_start(u, sid, source="result_recovered")
     update_latest_skill_attempt_result(
         u,
         result="completed" if completed else "partial" if partial else "not_completed",
@@ -5357,7 +5423,8 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
     )
     patch = {
         "last_skill_feedback": feedback,
-        "last_skill_completed": completed or partial,
+        "last_skill_completed": completed,
+        "last_skill_partial": partial,
         "last_skill_effect": helpfulness,
         "last_continued_after_skill": continued,
         "learning_model": learning_model,
@@ -5397,6 +5464,27 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any]) -> bool:
         u["user_id"], "post_action_reflection", "post_action_reflection_shown",
         {"completed": completed, "partial": partial, "skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL,
     )
+    if not show_summary:
+        return True
+    if feedback.get("quick_result"):
+        if completed and continued is True:
+            summary = "Дело продолжилось. Этот шаг сработал в этой попытке. Сохраню результат для похожих ситуаций."
+            markup = kb_quick_success
+        elif helpfulness == "worse":
+            summary = "Упражнение пока остановим. Не нужно продолжать через силу. Этот способ пока не повторяем."
+            markup = ReplyKeyboardMarkup(keyboard=[
+                [KeyboardButton(text="Уточнить, что стало хуже")], [KeyboardButton(text="Не сейчас")]], resize_keyboard=True)
+        elif helpfulness == "helped":
+            summary = "После шага стало легче. Сохраню это отдельно от продолжения дела. Можно на этом остановиться."
+            markup = next_choice_keyboard()
+        elif partial:
+            summary = "Получилась часть шага. Сохраню это как частичное выполнение. Можно остановиться или попробовать вариант проще."
+            markup = next_choice_keyboard()
+        else:
+            summary = "После шага изменений нет. Сохраню результат. Можно остановиться или выбрать другой способ."
+            markup = next_choice_keyboard()
+        await answer_with_keyboard(m, u, summary, markup, "post_action_reflection")
+        return True
     raw_target_function = str(active_attempt(u).get("target_function") or "START").upper()
     voice_target_function = {
         "START": "START", "CONTINUE": "STAY", "STAY": "STAY", "RETURN": "RETURN",
@@ -5446,7 +5534,7 @@ async def _process_normalized_feedback(u: Dict[str, Any], feedback: Dict[str, An
     experiment_result = str(feedback.get("experiment_result") or "UNKNOWN")
     action_started = "yes" if completed else "partial" if partial else "no"
     action_persisted = "yes" if continued is True else "no" if continued is False else "not_applicable"
-    emotional_change = "better" if helpfulness in {"helped", "some"} else "worse" if helpfulness == "worse" else "same"
+    emotional_change = "better" if helpfulness in {"helped", "some"} else "worse" if helpfulness == "worse" else "same" if helpfulness == "not_helped" else "unknown"
     failure_reason = None if completed else str(feedback.get("failure_reason_code") or "unknown")
     expected_flow_revision = None
     if emotional_change == "worse":
@@ -5563,7 +5651,7 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
         set_minimal_feedback(u, feedback)
         set_legacy_stage(u, "minimal_feedback_help")
         await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+        await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
         return True
     if stage == "minimal_feedback_done":
         if text not in {"Да", "Частично", "Нет"}:
@@ -5574,9 +5662,9 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
         feedback["partial"] = text == "Частично"
         set_minimal_feedback(u, feedback)
         if text == "Частично":
-            set_legacy_stage(u, "feedback_partial_text")
+            set_legacy_stage(u, "minimal_feedback_help")
             await save_user(u, DB_PATH)
-            await m.answer("Что получилось, а где пришлось остановиться?")
+            await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
             return True
         if text == "Нет":
             set_legacy_stage(u, "skill_obstacle")
@@ -5589,12 +5677,25 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
             return True
         set_legacy_stage(u, "minimal_feedback_help")
         await save_user(u, DB_PATH)
-        await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+        await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
         return True
     if stage == "minimal_feedback_help":
+        quick_map = {
+            "🚀 Продолжил дело": ("unknown", True), "🙂 Стало легче": ("helped", None),
+            "😐 Без изменений": ("not_helped", None), "😣 Стало хуже": ("worse", None),
+            "😣 Стало хуже / сильнее избегаю": ("worse", None),
+        }
+        if text in quick_map:
+            feedback = get_minimal_feedback(u)
+            helpfulness, continued = quick_map[text]
+            feedback.update(helpfulness=helpfulness, continued_after_skill=continued,
+                            next_after_skill="Продолжил задачу" if continued is True else "Пока не знаю",
+                            quick_result=True)
+            set_minimal_feedback(u, feedback)
+            return await persist_minimal_skill_feedback(m, u)
         help_map = {"Помогло": "helped", "Немного": "some", "Не помогло": "not_helped", "Стало хуже": "worse"}
         if text not in help_map:
-            await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+            await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
             return True
         feedback = get_minimal_feedback(u)
         feedback["helpfulness"] = help_map[text]
@@ -9808,7 +9909,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
             set_minimal_feedback(u, feedback)
             set_legacy_stage(u, "minimal_feedback_help")
             await save_user(u, DB_PATH)
-            await answer_with_keyboard(m, u, "Насколько это помогло?", kb_minimal_feedback_help, "minimal_feedback_help")
+            await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
             return True
         if text in {"🟡 Не получилось", "🟡 Попробовал, но не вышло", "🟡 Не вышло"}:
             feedback = minimal_feedback_base(u, source="additional_case")
@@ -12899,13 +13000,30 @@ async def main_flow(m: Message):
         await answer_with_keyboard(m, u, STUCK_REASON_PROMPT, kb_failed, "failed_options")
         return
 
+    if str(u.get("stage") or "") in {"training", "downscale_action", "closed_day_voluntary_step", "closed_day_voluntary_tiny"}:
+        if text.lower().strip(" .!?") in {"не понимаю", "я не понимаю", "что делать", "я запутался", "я запуталась"}:
+            await show_one_clear_action(m, u)
+            return
+        if text == "🎲 Другой вариант":
+            set_legacy_stage(u, "skill_other_entry")
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Что сейчас проще попробовать?", await other_entry_keyboard_for_user_async(u), "skill_other_entry")
+            return
+        if text == "❌ Не получилось":
+            feedback = minimal_feedback_base(u, source="additional_case" if day_closed_today(u) else "not_done")
+            feedback.update(completed=False, partial=False)
+            set_minimal_feedback(u, feedback)
+            set_legacy_stage(u, "skill_obstacle")
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, "Что сильнее всего помешало?", post_action_reason_keyboard(u), "skill_obstacle")
+            return
     if text == "🟡 Частично" and str(u.get("stage") or "") in {"training", "downscale_action", "closed_day_voluntary_step", "closed_day_voluntary_tiny"}:
         feedback = minimal_feedback_base(u, source="additional_case" if day_closed_today(u) else "partial")
         feedback.update(completed=False, partial=True)
         set_minimal_feedback(u, feedback)
-        set_legacy_stage(u, "feedback_partial_text")
+        set_legacy_stage(u, "minimal_feedback_help")
         await save_user(u, DB_PATH)
-        await m.answer("Что получилось, а где пришлось остановиться?")
+        await answer_with_keyboard(m, u, "Что получилось после шага?", kb_quick_feedback, "minimal_feedback_help")
         return
     if await handle_recovery_context(m, u, text) or await handle_next_choice(m, u, text):
         return

@@ -54,21 +54,33 @@ def build_post_action_reflection(context: ReflectionContext) -> PostActionReflec
     successful = context.completed or context.partial
 
     if successful:
-        reaction = f"Получилось выполнить действие: {action}."
+        reaction = f"Получилась часть действия: {action}." if context.partial else f"Получилось выполнить действие: {action}."
         if context.helpfulness == "worse":
             interpretation = "После шага стало хуже. Выполнение действия не означает, что способ помог."
             principle = f"проверяли «{skill}», состояние ухудшилось"
             anchor = "Этот способ пока не повторяем. Можно остановиться или выбрать другой вариант."
+        elif context.continued is True and context.helpfulness in {"unknown", "", None}:
+            interpretation = "После шага дело продолжилось. Изменение самочувствия отдельно не отмечено."
+            principle = f"после «{skill}» дело продолжилось в этой попытке"
+            anchor = f"В ситуации «{situation}» после действия «{action}» дело продолжилось."
         elif context.helpfulness in {"helped", "some"}:
             interpretation = f"По вашему ответу, способ «{skill}» помог в этой попытке."
             principle = f"{skill} — {action}"
             anchor = f"Когда снова возникнет «{situation}», начни с действия «{action}», а не со всей задачи."
+        elif context.helpfulness in {"unknown", "", None}:
+            interpretation = "Результат попытки сохранён. Польза пока не отмечена."
+            principle = f"проверяли «{skill}», польза неизвестна"
+            anchor = "Сохраним результат попытки без оценки пользы."
         else:
             interpretation = "Действие выполнено, но по вашему ответу заметного облегчения нет."
             principle = f"проверяли «{skill}», полезность пока не подтверждена"
             anchor = "Сохраним результат попытки. В следующий раз можно выбрать другой способ."
-        pattern = (f"В ситуации «{situation}» после шага стало хуже." if context.helpfulness == "worse" else
-                   _short(context.known_pattern, f"в ситуации «{situation}» движение появилось после одного проверяемого действия", 180))
+        observation = (f"В ситуации «{situation}» после шага стало хуже." if context.helpfulness == "worse" else
+                       f"В ситуации «{situation}» после шага дело продолжилось." if context.continued is True else
+                       f"В ситуации «{situation}» получилась часть шага." if context.partial else
+                       f"В ситуации «{situation}» действие выполнено; продолжение дела отдельно не подтверждено.")
+        pattern = _short(context.known_pattern, observation, 180)
+
     else:
         reaction = f"Действие «{action}» пока не получилось. Можно остановиться или выбрать другой способ."
         interpretation = f"По вашему ответу: {barrier}. Важно не повторить то же самое, а подобрать другой способ."

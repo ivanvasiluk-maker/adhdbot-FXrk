@@ -27,7 +27,7 @@ class NeverDeadEndAcceptanceTests(unittest.TestCase):
         self.assertIn("не повторить то же самое", text)
 
     def test_03_partial_is_not_full_failure(self):
-        self.assertTrue(reflection(partial=True).reaction.startswith("Получилось"))
+        self.assertTrue(reflection(partial=True).reaction.startswith("Получилась часть"))
 
     def test_04_substantive_message_beats_closed_day(self):
         self.assertTrue(bot.closed_day_substantive_message("Снова не могу начать отчёт"))

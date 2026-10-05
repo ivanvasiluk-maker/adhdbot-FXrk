@@ -45,11 +45,11 @@ class PostActionFeedbackTests(unittest.TestCase):
         self.assertIn("не повторить то же самое", result.interpretation)
         self.assertIn("Можно остановиться или выбрать другой способ", result.reaction)
 
-    def test_failure_keyboard_has_four_hypotheses_and_other(self):
+    def test_failure_keyboard_has_five_obstacles_and_other(self):
         user = bot.default_user(1)
         labels = [button.text for row in bot.post_action_reason_keyboard(user).keyboard for button in row]
-        self.assertEqual(len(labels), 5)
-        self.assertEqual(labels[-1], "Другая причина")
+        self.assertEqual(len(labels), 6)
+        self.assertEqual(labels[-1], "🤷 Другое")
 
     def test_substantive_message_beats_completed_day_but_buttons_do_not(self):
         self.assertTrue(bot.closed_day_substantive_message("Снова не могу позвонить клиенту"))

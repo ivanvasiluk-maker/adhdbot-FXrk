@@ -721,11 +721,11 @@ async def test_stuck_flow_asks_effect_before_aftercare():
         done_msg = FakeMessage(uid, "✅ Сделал")
         await bot.main_flow(done_msg)
         assert any(marker in "\n".join(done_msg.answers) for marker in (
-            "Насколько это помогло?",
+            "Что получилось после шага?",
         ))
 
         effect_text = "\n".join(done_msg.answers)
-        assert "Насколько это помогло?" in effect_text
+        assert "Что получилось после шага?" in effect_text
 
         help_msg = FakeMessage(uid, "Помогло")
         await bot.main_flow(help_msg)
@@ -1065,7 +1065,10 @@ async def test_not_done_context_reason_does_not_mark_worst_skill():
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh.get("stage") == "post_action_reflection"
+        assert fresh.get("stage") == "downscale_action"
+        assert "Сейчас только одно:" in "\n".join(m.answers)
+        assert profile["last_skill_feedback"]["completed"] is False
+        assert profile["last_skill_feedback"]["helpfulness"] == "unknown"
         assert profile.get("last_not_completed_reason") == "too_hard"
         assert profile.get("last_not_completed_is_context") is True
         assert not profile.get("worst_skill")
@@ -1402,7 +1405,7 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
         fresh = await get_user(uid, bot.DB_PATH)
         first_response = "\n".join(done_msg.answers)
         assert any(marker in first_response for marker in (
-            "Насколько это помогло?",
+            "Что получилось после шага?",
         ))
         assert "потерял место" not in first_response.lower()
         assert "старый экран" not in first_response.lower()

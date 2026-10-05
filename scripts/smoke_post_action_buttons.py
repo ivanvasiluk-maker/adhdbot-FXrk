@@ -256,7 +256,7 @@ async def run() -> None:
         assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Частично", "🟡 Не получилось", "🌙 Точно закрыть день"}} | {OTHER}
         assert "Если трудно, достаточно этого:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
         voluntary_done_msg = await send(uid, "✅ Сделал")
-        assert "Насколько это помогло?" in last_text(voluntary_done_msg), last_text(voluntary_done_msg)
+        assert "Что получилось после шага?" in last_text(voluntary_done_msg), last_text(voluntary_done_msg)
         saved = await get_user(uid, db_path)
         assert bot.day_closed_today(saved), saved
 
@@ -317,11 +317,11 @@ async def run() -> None:
         assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}} | {OTHER}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
-        assert "Насколько это помогло?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
+        assert "Что получилось после шага?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
         assert "Получилось сделать?" not in last_text(done_feedback_prompt)
         help_prompt = done_feedback_prompt
-        assert "Насколько это помогло?" in last_text(help_prompt), last_text(help_prompt)
-        assert keyboard_texts(help_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"Помогло", "Немного", "Не помогло", "Стало хуже"}} | {OTHER}
+        assert "Что получилось после шага?" in last_text(help_prompt), last_text(help_prompt)
+        assert keyboard_texts(help_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"🚀 Продолжил дело", "🙂 Стало легче", "😐 Без изменений", "😣 Стало хуже"}}
         next_prompt = await send(uid, "Не помогло")
         assert "Что произошло дальше?" in last_text(next_prompt), last_text(next_prompt)
         no_relief_msg = await send(uid, "Пока не знаю")
@@ -383,8 +383,8 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         success_msg = await send(uid, "✅ Сделал")
-        assert "Насколько это помогло?" in last_text(success_msg), last_text(success_msg)
-        assert "Насколько это помогло?" in last_text(success_msg), last_text(success_msg)
+        assert "Что получилось после шага?" in last_text(success_msg), last_text(success_msg)
+        assert "Что получилось после шага?" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "Помогло")
         assert "Что произошло дальше?" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "Продолжил задачу")
