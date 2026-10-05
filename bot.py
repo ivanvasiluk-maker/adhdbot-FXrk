@@ -83,7 +83,7 @@ from db import (
 )
 from flows import (
     start_day, start_day1, start_day_simple, advance_day, handle_crisis,
-    send_trainer_photo_if_any, run_analysis,
+    send_trainer_photo_if_any, run_analysis as _run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
     live_analysis_profile_patch, render_analysis_details_by_trainer, build_analysis_result
@@ -1240,6 +1240,44 @@ def intent_mode_keyboard():
         [KeyboardButton(text="⚡ Сделать что-то сейчас")]], resize_keyboard=True)
 
 
+async def start_intent_action(m, u):
+    """Start the selected case without replacing an existing day plan."""
+    comp = parse_case_data(u.get("analysis_json"), {})
+    comp["requested_mode"] = "act_now"
+    u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+    if day_closed_today(u):
+        await open_closed_day_analysis_step(m, u)
+        return
+    result = comp.get("analysis_result") or {}
+    sid = comp.get("selected_skill") or result.get("recommended_variant")
+    if sid not in SKILLS_DB:
+        await m.answer("Какое одно дело нужно сейчас сдвинуть?")
+        set_legacy_stage(u, "intent_act_context")
+        await save_user(u, DB_PATH)
+        return
+    skill = dict(SKILLS_DB[sid]); skill.setdefault("skill_id", sid)
+    u.update(current_skill=sid, current_skill_variant=sid, pending_skill_id=sid,
+             daily_skill_id=sid, daily_skill_name=skill.get("name") or sid,
+             has_started_training=1, today_started=1)
+    if not u.get("day_core_skill_id"):
+        replace_day_core_skill(u, sid)
+    await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=sid, skill_name=skill.get("name") or sid)
+    set_legacy_stage(u, "training")
+    mark_action_card_active(u)
+    sync_active_attempt(u, bump=True, attempt_status="not_tried", effect_status="unknown", is_closed=False, day_closed=False)
+    await save_user(u, DB_PATH)
+    await answer_with_keyboard(m, u, build_current_skill_text(skill, u=u), action_keyboard(), "training")
+
+
+async def run_analysis(m, u, user_text, db_path, sheets_webhook="", client=None, model="gpt-4o-mini"):
+    comp = parse_case_data(u.get("analysis_json"), {})
+    fast = u.get("stage") == "intent_act_context" or (
+        u.get("stage") in {"request_device", "awaiting_barrier_choice", "awaiting_target_task"}
+        and comp.get("requested_mode") == "act_now")
+    await _run_analysis(m, u, user_text, db_path, sheets_webhook, client, model,
+                        on_action=start_intent_action if fast else None)
+
+
 async def handle_conversation_intent(m, u, text):
     intent = resolve_intent(text, str(u.get("stage") or ""), _skiller_session(u))
     ctx = dialogue_context(u.get("dialogue_context"))
@@ -1297,16 +1335,18 @@ async def handle_conversation_intent(m, u, text):
         await save_user(u, DB_PATH)
         result = comp["analysis_result"]
         await m.answer("Моя рабочая версия сейчас:\n" + str(result.get("core_hypothesis") or comp["specific_pattern"])
-                       + "\n\nМожно пока остановиться на этом разборе или проверить один небольшой шаг.",
+                       + "\n\nЧто можно изменить\n" + str(result.get("first_check") or "Уменьшить первый шаг.")
+                       + "\n\nЭто предложение для проверки. Можно закончить разбор или попробовать шаг.",
                        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Мне достаточно")], [KeyboardButton(text="⚡ Давай попробуем")]], resize_keyboard=True))
         return True
     if intent == "ACT_NOW" or stage == "intent_act_context":
         if text == "⚡ Давай попробуем" and stage == "intent_understand_result":
-            await open_closed_day_analysis_step(m, u) if day_closed_today(u) else await handle_action_request(u["user_id"], m, u)
+            await start_intent_action(m, u)
             return True
         if request_kind(text) == "task_problem" and len(text.split()) >= 5:
             if day_closed_today(u) and not int(u.get("closed_day_additional_active") or 0):
                 begin_case(u, await get_user_profile(u["user_id"], DB_PATH))
+            set_legacy_stage(u, "intent_act_context")
             await run_analysis(m, u, text, DB_PATH, SHEETS_WEBHOOK_URL, client, OPENAI_CHAT_MODEL)
         else:
             set_legacy_stage(u, "intent_act_context")
@@ -9256,6 +9296,8 @@ async def _start_normalized_experiment_for_day(u: Dict[str, Any], skill: Dict[st
 def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optional[Dict[str, Any]] = None) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
     trainer_line = prefix.strip() or trainer_general_line_for_user(u)
+    if u and parse_case_data(u.get("analysis_json"), {}).get("requested_mode") == "act_now":
+        return f"Один шаг сейчас\n{minimum}\n\n{why_short}\n\nПосле попытки отметь, что получилось."
     return (
         f"{trainer_line}\n\n"
         f"🧩 Навык: {skill_name}\n\n"
@@ -11916,6 +11958,11 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
     comp["short_conclusion"] = conclusion
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket") or u.get("bucket") or "mixed"
+    if comp.get("requested_mode") == "act_now":
+        u["current_screen_id"] = ""
+        u["last_barrier_screen_consumed"] = text
+        await start_intent_action(m, u)
+        return
     plan = build_28_day_plan(u["bucket"])
     if plan and not int(u.get("closed_day_additional_active") or 0):
         plan[0] = skill_id
@@ -14256,13 +14303,10 @@ async def main_flow(m: Message):
             await show_context_fallback(m, u, "await_trainer_invalid_button")
             return
         u["trainer_key"] = chosen
-        set_legacy_stage(u, "notification_consent")
+        set_legacy_stage(u, "privacy_consent")
         await save_user(u, DB_PATH)
         await log_event(u["user_id"], "onboarding", "trainer_selected", {"trainer_key": chosen}, DB_PATH, SHEETS_WEBHOOK_URL)
-        # Описание и фото тренера
-        await send_trainer_photo_if_any(m.chat.id, chosen, BOT_TOKEN)
-        await send_text_trainer_introduction(m, u)
-        await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
+        await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
         return
 
     if u.get("stage") == "notification_consent":
@@ -14302,12 +14346,12 @@ async def main_flow(m: Message):
                 "privacy_notice_version": "2026-09-02",
             }, DB_PATH)
             u["profile_json"] = updated_profile
-            set_legacy_stage(u, "trainer_intro")
+            set_legacy_stage(u, "await_input_mode")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
                 "notice_version": "2026-09-02",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Спасибо. Начнём с одного дела, которое сейчас трудно сделать?", reply_markup=kb_yes_no)
+            await m.answer("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", reply_markup=kb_input_mode)
             return
         if text == "❌ Не согласен(на)":
             u["notifications_enabled"] = 0

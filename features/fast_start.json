@@ -1,0 +1,1 @@
+{"name":"fast_start","behavioral_goal":"start","success_metric":"Trainer selection reaches privacy consent in one screen; consent reaches input choice directly; an explicit action request with enough context reaches a single action card without analysis confirmation and preserves the existing day plan."}

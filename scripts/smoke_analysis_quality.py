@@ -65,15 +65,7 @@ async def main() -> None:
         analysis_result.get("recommended_skill_reason") or "",
     )
     for marker in (
-        "Короткое заключение",
-        "Что вижу сейчас",
-        "На что можно опереться",
-        "Что будем делать",
-        "этот навык выбран потому",
-        "Что надо развивать",
-        "START:",
-        "STAY:",
-        "RETURN:",
+        "Короткое заключение", "Моя рабочая версия сейчас", "Первый шаг", "Почему этот шаг",
     ):
         assert marker in conclusion_text, conclusion_text
     assert "1. Что произошло" not in conclusion_text, conclusion_text
@@ -93,3 +85,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

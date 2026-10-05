@@ -68,7 +68,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
             bot, "log_event", AsyncMock()
         ):
             await bot.main_flow(message)
-        self.assertEqual(user["stage"], "trainer_intro")
+        self.assertEqual(user["stage"], "await_input_mode")
         self.assertTrue(saved_profile["privacy_consent"])
         self.assertTrue(saved_profile["privacy_consent_at"])
 
