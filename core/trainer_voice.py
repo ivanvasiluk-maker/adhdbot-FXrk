@@ -146,9 +146,9 @@ def _render_non_result(trainer: Trainer, content: VoiceContent,
     elif content.message_type == "skill_instruction":
         instruction = str(content.facts.get("instruction") or content.core_message)
         options = {
-            "skinny": (f"{content.skill_name}.\n{instruction}\nНе усложняй. Готово — отмечай.",),
+            "skinny": (f"{instruction}\nОдин шаг. Затем отметь результат.\nСпособ: {content.skill_name}.",),
             "marsha": (f"Сейчас не нужно делать всё хорошо.\n{instruction}\nНа этом уже можно остановиться.",),
-            "beck": (f"Проверим рабочую гипотезу небольшим действием.\n{instruction}\nПосле него отдельно оценим выполнение и эффект.",),
+            "beck": (f"Проверим, помогает ли небольшое действие.\n{instruction}\nПосле него отдельно оценим выполнение и эффект.",),
         }[trainer]
     elif content.message_type == "stuck":
         options = {

@@ -138,7 +138,7 @@ from core.conclusion_engine import (
     render_short_conclusion, update_next_untested_prediction,
 )
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
-from core.session_continuity import render_return_continuity, render_session_closure
+from core.session_continuity import render_pause, render_return_continuity, render_session_closure
 from core.ranking_engine import PersonalSkillState, RankingInput, choose_skill
 import core.product_config as product_config
 import sheets_sync as sheets_sync_module
@@ -1389,7 +1389,12 @@ async def start_intent_action(m, u):
     await save_user(u, DB_PATH)
     text = build_current_skill_text(skill, u=u)
     if known:
-        text = "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.\n\n" + text
+        familiar_line = {
+            "skinny": "Этот способ уже помог в похожей ситуации. Можно повторить или сменить его.",
+            "marsha": "В похожей ситуации этот способ уже помог. Можно опереться на него снова или выбрать другой.",
+            "beck": "В похожей ситуации вы отметили пользу этого способа. Проверим, поможет ли он сейчас; прошлый результат этого не гарантирует.",
+        }.get(u.get("trainer_key") or "marsha", "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.")
+        text = familiar_line + "\n\n" + text
     await answer_with_keyboard(m, u, text, action_keyboard(), "training")
 
 
@@ -1439,14 +1444,15 @@ async def handle_conversation_intent(m, u, text):
         if u.get("stage") != "intent_paused":
             ctx["intent_resume"] = {key: u.get(key) for key in OFFER_RETURN_FIELDS}
             ctx["intent_resume"]["dialogue_context"] = u.get("dialogue_context")
+            ctx["intent_resume_date"] = local_date_for_user(u)
         set_legacy_stage(u, "intent_paused")
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         await save_user(u, DB_PATH)
-        await m.answer("На сегодня достаточно. Текущее место сохранено. Если захотите вернуться, нажмите «Продолжить».", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True))
+        await m.answer(render_pause(u.get("trainer_key") or "marsha"), reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True))
         return True
     if intent == "CONTINUE" and u.get("stage") == "intent_paused":
         snapshot = ctx.get("intent_resume") or {}
-        if snapshot:
+        if snapshot and ctx.get("intent_resume_date") == local_date_for_user(u):
             for key, value in snapshot.items():
                 u[key] = value
             await save_user(u, DB_PATH)
@@ -1455,6 +1461,11 @@ async def handle_conversation_intent(m, u, text):
             keyboard = (InlineKeyboardMarkup if old.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
             await m.answer(old.get("text") or "Продолжим с прежнего места.", reply_markup=keyboard)
         else:
+            ctx.pop("intent_resume", None)
+            ctx.pop("intent_resume_date", None)
+            u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+            set_legacy_stage(u, "day_core_stop" if day_closed_today(u) else "training_main")
+            await save_user(u, DB_PATH)
             await resume_daily_flow(m, u, announce=True)
         return True
     if intent == "CONTINUE" and text != "Продолжить" and u.get("stage") in {"training", "training_main", "success_menu", "day_core_stop", "day_closed_menu", "intent_understand_result"}:
@@ -3158,11 +3169,11 @@ def trainer_style_line(trainer_key: str, scenario: str = "general") -> str:
     style = {
         "marsha": {
             "general": "Мягко: это не про оценку, а про следующий маленький шаг.",
-            "stuck": "Мягко снизим стыд: застревание — данные, не провал.",
-            "change": "Бережно сменим вход: усилие уже было, теперь подберём размер точнее.",
+            "stuck": "Посмотрим, где стало трудно. Можно уменьшить шаг.",
+            "change": "Попробуем другой способ, без дополнительного давления.",
             "map": "Карта — без самокритики: смотрим, что помогает возвращаться.",
             "continue": "Можно продолжить маленько, без долга и без героизма.",
-            "close": "Закрываем день спокойно: маленькое усилие уже считается.",
+            "close": "Можно спокойно завершить разговор здесь.",
             "offer": "Если нужна живая поддержка — можно выбрать группу или личную работу.",
             "curator": "С куратором можно идти мягче: меньше одиночества, больше опоры.",
         },
@@ -3177,12 +3188,12 @@ def trainer_style_line(trainer_key: str, scenario: str = "general") -> str:
             "curator": "Куратор — внешний контроль и короткий план.",
         },
         "beck": {
-            "general": "Гипотеза: мысль → эмоция → избегание → последствия. Проверяем следующий маленький эксперимент.",
-            "stuck": "Разберём механизм: какая мысль усилила эмоцию и какое избегание включилось.",
-            "change": "Гипотеза обновлена: прежний вход не совпал с механизмом стопора.",
-            "map": "Карта — это рабочая модель: паттерн, гипотеза, проверка, результат.",
-            "continue": "Проверяем добровольный эксперимент: даст ли следующий шаг больше контроля.",
-            "close": "Закрытие дня — фиксация данных: что сработало, где было избегание, что проверим дальше.",
+            "general": "Посмотрим, что мешает, и проверим один небольшой шаг.",
+            "stuck": "Уточним, в какой момент стало трудно и что тогда произошло.",
+            "change": "Предыдущий способ не подошёл. Проверим другой вариант.",
+            "map": "Посмотрим на ответы: что уже известно, а что ещё нужно проверить.",
+            "continue": "Если хотите продолжить, проверим один следующий шаг.",
+            "close": "Сохраним то, что вы сообщили. Остальное пока оставим открытым.",
             "offer": "Для более глубокой работы можно выбрать группу или личные встречи.",
             "curator": "Куратор помогает проверять гипотезы регулярнее и точнее.",
         },
@@ -3192,9 +3203,9 @@ def trainer_style_line(trainer_key: str, scenario: str = "general") -> str:
 
 MARSHA_GENERAL_FIRST_LINE = "Мягко: это не про оценку, а про следующий маленький шаг."
 MARSHA_GENERAL_FOLLOWUP_LINES = [
-    "Берём следующий маленький эксперимент.",
-    "Сейчас проверим другой вход.",
-    "Не усиливаем давление. Меняем механизм.",
+    "Можно двигаться маленькими шагами.",
+    "Посмотрим на один доступный шаг.",
+    "Не будем добавлять давления.",
     "Задача не сделать идеально, а остаться рядом.",
     "Ок, двигаемся маленько.",
 ]
@@ -3216,20 +3227,25 @@ def trainer_general_line_for_user(u: Optional[Dict[str, Any]]) -> str:
     if not u:
         return MARSHA_GENERAL_FIRST_LINE
     trainer_key = (u or {}).get("trainer_key") or "marsha"
-    if trainer_key != "marsha":
-        return trainer_style_line(trainer_key, "general")
+    if trainer_key not in TRAINERS:
+        trainer_key = "marsha"
     today = local_date_for_user(u) if callable(globals().get("local_date_for_user")) else dt.date.today().isoformat()
     context = _json_dict(u.get("last_explanation_context"))
-    line_state = _json_dict(context.get("marsha_general_line"))
+    line_state = _json_dict(context.get(f"{trainer_key}_general_line"))
     if line_state.get("date") != today:
         line_state = {"date": today, "count": 0}
     count = int(line_state.get("count") or 0)
     if count <= 0:
-        line = MARSHA_GENERAL_FIRST_LINE
+        line = trainer_style_line(trainer_key, "general")
     else:
-        line = MARSHA_GENERAL_FOLLOWUP_LINES[(count - 1) % len(MARSHA_GENERAL_FOLLOWUP_LINES)]
+        variants = {
+            "marsha": MARSHA_GENERAL_FOLLOWUP_LINES,
+            "skinny": ["Берём один конкретный шаг.", "Начнём с самого короткого действия.", "Один подход. Потом посмотрим на результат."],
+            "beck": ["Проверим, помогает ли этот шаг.", "Сначала действие, затем посмотрим на его эффект.", "Сейчас важен наблюдаемый результат."],
+        }[trainer_key]
+        line = variants[(count - 1) % len(variants)]
     line_state["count"] = count + 1
-    context["marsha_general_line"] = line_state
+    context[f"{trainer_key}_general_line"] = line_state
     u["last_explanation_context"] = json.dumps(context, ensure_ascii=False)
     return line
 
@@ -9267,7 +9283,7 @@ def new_day_skill_card_text(
     mechanism = _current_mechanism_label(u, profile)
     card = (
         f"{trainer_line}\n\n"
-        f"🧩 Навык дня — для твоей ситуации: {skill_name}\n\n"
+        f"{why_short}\n\n"
         "Что вижу\n"
         f"— задача: {task}\n"
         f"— сейчас проверяем: {mechanism}\n\n"
@@ -9279,6 +9295,7 @@ def new_day_skill_card_text(
         "— затем STAY и RETURN — удержание и возврат после срыва\n\n"
         f"Сделай:\n{step_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
+        f"🧩 Навык дня — для твоей ситуации: {skill_name}\n\n"
         "После ответа я обновлю карту: что сработало, что не подошло и какой шаг проверять дальше."
     )
     day = int((u or {}).get("day") or 0)
@@ -9649,10 +9666,10 @@ def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optiona
         return f"Один шаг сейчас\n{minimum}\n\n{why_short}\n\nПосле попытки отметь, что получилось."
     return (
         f"{trainer_line}\n\n"
-        f"🧩 Навык: {skill_name}\n\n"
         f"{why_short}\n\n"
         f"Сделай:\n{step_text}\n\n"
-        f"Минимум:\n{minimum}"
+        f"Минимум:\n{minimum}\n\n"
+        f"🧩 Навык: {skill_name}"
     )
 
 
@@ -13115,6 +13132,15 @@ async def main_flow(m: Message):
 
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
+        return
+    if resolve_intent(text, str(u.get("stage") or ""), _skiller_session(u)) == "ACKNOWLEDGE":
+        reply = {
+            "skinny": "Хорошо.",
+            "marsha": "Рада быть рядом.",
+            "beck": "Хорошо. Можно вернуться к этому позже.",
+        }.get(u.get("trainer_key") or "marsha", "Рада быть рядом.")
+        original = m.original if isinstance(m, DialogueMessage) else m
+        await original.answer(reply)
         return
     if is_misunderstood_button(text) and u.get("stage") not in {"misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await"}:
         await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
