@@ -269,9 +269,9 @@ def check_launch_week_invariants() -> list[str]:
         "данных пока мало",
         "эта модель будет уточняться",
         "Срыв = информация. Не наказание.",
-        "Пауза = информация, не наказание",
+        "Пропущенные дни отрабатывать не нужно",
     )
-    combined_safety_text = "\n".join((bot_text, db_text, texts_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8")))
+    combined_safety_text = "\n".join((bot_text, db_text, texts_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8"), (REPO_ROOT / "core/autonomy.py").read_text(encoding="utf-8")))
     for marker in safe_tone_required:
         if marker not in combined_safety_text:
             errors.append(f"safety tone invariant: missing marker: {marker!r}")

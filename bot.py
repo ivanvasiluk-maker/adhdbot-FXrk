@@ -24,7 +24,7 @@ import uuid
 from core.attempt_evidence import PREDICT_BUTTON, ACTUAL_BUTTON, find_attempt, rating, comparison
 from core.personal_skill_collection import load as load_skill_collection, familiar as familiar_skill, describe as describe_collected_skill, CONTEXTS as SKILL_CONTEXTS
 from core.training_track import begin_moment, restore_training, context as training_context, record_reply, next_format, render_format, action_instruction
-from core.conversation_intent import resolve_intent, STOP_WORDS
+from core.conversation_intent import resolve_intent, STOP_WORDS, FEEDBACK_STAGES
 from core.case_sessions import begin_case, parsed as parse_case_data
 from core.request_routing import DEVICE_LABELS, observed_changes, support_text, request_kind
 import datetime as dt
@@ -138,6 +138,7 @@ from core.conclusion_engine import (
     render_short_conclusion, update_next_untested_prediction,
 )
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
+from core.autonomy import return_recap, ability_progress, small_challenge
 from core.session_continuity import render_pause, render_return_continuity, render_session_closure
 from core.ranking_engine import PersonalSkillState, RankingInput, choose_skill
 import core.product_config as product_config
@@ -463,7 +464,7 @@ kb_day_review_barrier = ReplyKeyboardMarkup(
         [KeyboardButton(text="Страх ошибки или оценки")],
         [KeyboardButton(text="Телефон / YouTube")],
         [KeyboardButton(text="Усталость или сильные эмоции")],
-        [KeyboardButton(text="Другое")],
+        [KeyboardButton(text="Другое / не знаю")],
         [KeyboardButton(text="🌙 Закрыть без разбора")],
     ],
     resize_keyboard=True,
@@ -471,13 +472,10 @@ kb_day_review_barrier = ReplyKeyboardMarkup(
 
 kb_day_review_state = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Спокойно / устойчиво")],
-        [KeyboardButton(text="Напряжённо")],
-        [KeyboardButton(text="Почти не было сил")],
-        [KeyboardButton(text="Состояние менялось")],
+        [KeyboardButton(text="🙂 Нормально"), KeyboardButton(text="😐 Устал")],
+        [KeyboardButton(text="😣 Напряжён")],
         [KeyboardButton(text="🌙 Закрыть без разбора")],
-    ],
-    resize_keyboard=True,
+    ], resize_keyboard=True,
 )
 
 kb_closed_day_continue = ReplyKeyboardMarkup(
@@ -9765,15 +9763,12 @@ async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: st
     if include_context:
         u["day_intro_sent"] = 1
         await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, build_new_day_intro(u, skill, profile, include_context=include_context), kb_first_day_skill, "new_day_skill")
-    prediction = str(profile.get("day1_prediction") or "")
-    prediction_id = str(profile.get("day1_prediction_id") or "")
-    if day > 1 and prediction and prediction_id and profile.get("day1_prediction_status") == "UNTESTED":
-        await log_event(u["user_id"], "day2", "day2_return", {"prediction_id": prediction_id}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(
-            f"Вчера мы предположили:\n{prediction}\n\nЭто повторилось?",
-            reply_markup=prediction_check_keyboard(prediction_id),
-        )
+    intro = build_new_day_intro(u, skill, profile, include_context=include_context)
+    if day > 1:
+        name, purpose, _, _ = _skill_card_parts(skill, u)
+        recap = return_recap(await autonomy_rows(u), local_date_for_user(u), _skill_label)
+        intro = recap + f"\n\nСегодня: {purpose}\nСпособ: {name}.\nНажмите «Начать тренировку», когда будете готовы."
+    await answer_with_keyboard(m, u, intro, kb_first_day_skill, "new_day_skill")
 
 
 async def start_new_day(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None, source: str = "force_next_day"):
@@ -10577,16 +10572,16 @@ def day_review_insight_text(review: Dict[str, Any]) -> str:
             "Сегодня мы не собирали подробный разбор. Это тоже граница: день можно закрыть без отчёта, "
             "а завтра проверить один короткий вход без долга."
         )
-    focus_label = DAY_REVIEW_FUNCTION_LABELS.get(focus, "место сбоя ещё уточняется")
+    focus_label = DAY_REVIEW_FUNCTION_LABELS.get(focus, "не уточнено")
     next_test = DAY_REVIEW_NEXT_TESTS.get(focus, "сделать первый шаг конкретным и видимым")
     details = []
     if barrier:
         details.append(f"рабочая гипотеза — мешал фактор «{barrier}»")
     if state:
-        details.append(f"фон дня — {state}")
+        details.append(f"сейчас — {state}")
     evidence = "; ".join(details) if details else "для уточнения нужна ещё одна реальная попытка"
     return (
-        f"Сегодня слабое место — {focus_label}. {evidence}. "
+        (f"Сегодня слабое место — {focus_label}. " if focus else "") + f"{evidence}. "
         f"Завтра не начинаем заново: проверим, помогает ли {next_test}."
     )
 
@@ -10595,9 +10590,11 @@ async def day_close_metrics_text(u: Dict[str, Any], review_override: Optional[Di
     counts = await get_honest_day_counts(u)
     profile = await get_user_profile(u["user_id"], DB_PATH)
     conclusion = daily_conclusion(u, profile, review_override)
+    progress = ability_progress(await autonomy_rows(u), local_date_for_user(u), _skill_label)
     return ("На сегодня можно закончить.\n\n" + render_daily_conclusion(conclusion)
             + f"\n\nЗавершённых попыток сегодня: {counts['attempts_today']}."
             + f"\nПродолжить дело получилось: {counts['continued_actions_today']} раз."
+            + ("\n\n" + progress if progress else "")
             + "\nРезультаты сохранены. Можно вернуться, когда понадобится помощь.")
 
 
@@ -10683,6 +10680,12 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
         return
     skill = dict(SKILLS_DB[sid])
     skill.setdefault("skill_id", sid)
+    pending = find_attempt(user, user.get("current_action_id"))
+    if (pending and pending.get("calendar_date") == local_date_for_user(user)
+            and _canonical_daily_skill_id(pending.get("skill_id")) == _canonical_daily_skill_id(sid)
+            and pending.get("result") == "started" and not active_attempt(user).get("is_closed")):
+        await answer_with_keyboard(message, user, build_current_skill_text(skill, "Продолжим прежний шаг.", user), action_keyboard(), "new_day_skill")
+        return
     set_legacy_stage(user, "training")
     user["has_started_training"] = 1
     user["today_started"] = 1
@@ -12531,6 +12534,7 @@ DAY_REVIEW_BARRIER_BY_BUTTON = {
 }
 
 DAY_REVIEW_STATE_BY_BUTTON = {
+    "🙂 Нормально": "нормально", "😐 Устал": "устал", "😣 Напряжён": "напряжённо",
     "Спокойно / устойчиво": "спокойно или устойчиво",
     "Напряжённо": "напряжённо",
     "Почти не было сил": "почти не было сил",
@@ -12556,14 +12560,14 @@ async def start_day_review(m: Message, u: Dict[str, Any], source: str) -> None:
         await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, "На сегодня всё. День уже закрыт.", kb_day_core_stop, "day_core_stop")
         return
-    u["pending_feedback_json"] = {"kind": "day_review", "source": source}
-    set_legacy_stage(u, "day_review_function")
+    u["pending_feedback_json"] = {"kind": "day_review", "source": source, "calendar_date": local_date_for_user(u)}
+    set_legacy_stage(u, "day_review_barrier")
     set_current_state(u, STATE_PAUSED, close_action=True)
     await save_user(u, DB_PATH)
     await answer_with_keyboard(
         m, u,
-        "Коротко закроем день по фактам. Где сегодня чаще ломалась цепочка?",
-        kb_day_review_function, "day_review_function",
+        "Что сегодня мешало сильнее всего? Можно выбрать вариант или написать коротко.",
+        kb_day_review_barrier, "day_review_barrier",
     )
 
 
@@ -12581,7 +12585,9 @@ async def finalize_day_review(m: Message, u: Dict[str, Any], review: Dict[str, A
         {"last_day_review": review, "last_memory_anchor": day_review_insight_text(review)},
         source="day_review",
     )
+    u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
     await mark_day_closed(u, source)
+    u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
     set_legacy_stage(u, "day_core_stop")
     await save_user(u, DB_PATH)
     await log_event(
@@ -12614,6 +12620,12 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
     if stage not in {"day_review_function", "day_review_barrier", "day_review_barrier_other", "day_review_state"}:
         return False
     review = _day_review_data(u)
+    if review.get("calendar_date") and review["calendar_date"] != local_date_for_user(u):
+        u["pending_feedback_json"] = None
+        set_legacy_stage(u, "waiting_next_day")
+        await save_user(u, DB_PATH)
+        await m.answer("Этот вопрос остался со вчерашнего дня. Сегодня можно начать с одного нового шага.", reply_markup=kb_existing_user_start)
+        return True
     if text == "🌙 Закрыть без разбора":
         review["skipped"] = True
         await finalize_day_review(m, u, review, "day_review_skipped")
@@ -12638,13 +12650,7 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
         await answer_with_keyboard(m, u, "Что сильнее всего мешало именно в этот момент?", kb_day_review_barrier, "day_review_barrier")
         return True
     if stage == "day_review_barrier":
-        if text == "Другое":
-            u["pending_feedback_json"] = review
-            set_legacy_stage(u, "day_review_barrier_other")
-            await save_user(u, DB_PATH)
-            await m.answer("Напиши одной короткой фразой, что мешало.")
-            return True
-        barrier = DAY_REVIEW_BARRIER_BY_BUTTON.get(text) or (text[:180] if len(text.strip()) >= 3 and not is_known_reply_button(text) else "")
+        barrier = "не уточнено" if text in {"Другое", "Другое / не знаю"} else DAY_REVIEW_BARRIER_BY_BUTTON.get(text) or (text[:180] if len(text.strip()) >= 3 and not is_known_reply_button(text) else "")
         if not barrier:
             await answer_with_keyboard(m, u, "Что сильнее всего мешало?", kb_day_review_barrier, "day_review_barrier")
             return True
@@ -12658,7 +12664,7 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
     elif stage == "day_review_state":
         state = DAY_REVIEW_STATE_BY_BUTTON.get(text) or (text[:180] if len(text.strip()) >= 3 and not is_known_reply_button(text) else "")
         if not state:
-            await answer_with_keyboard(m, u, "В каком состоянии ты чаще был сегодня?", kb_day_review_state, "day_review_state")
+            await answer_with_keyboard(m, u, "Как вы сейчас?", kb_day_review_state, "day_review_state")
             return True
         review["state"] = state
         await finalize_day_review(m, u, review, "day_review_completed")
@@ -12666,7 +12672,7 @@ async def handle_day_review(m: Message, u: Dict[str, Any], text: str) -> bool:
     u["pending_feedback_json"] = review
     set_legacy_stage(u, "day_review_state")
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, "Последний пункт: в каком состоянии ты чаще был сегодня?", kb_day_review_state, "day_review_state")
+    await answer_with_keyboard(m, u, "Как вы сейчас?", kb_day_review_state, "day_review_state")
     return True
 
 
@@ -12958,13 +12964,23 @@ def is_registered_user(u: Dict[str, Any]) -> bool:
     )
 
 async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
+    saved = dialogue_context(u.get("dialogue_context"))
+    owned = str(u.get("stage") or "") in FEEDBACK_STAGES | {
+        "day_review_function", "day_review_barrier", "day_review_barrier_other", "day_review_state",
+        "intent_paused", "offer_request_form",
+    }
+    if owned and u.get("day_date") == local_date_for_user(u) and saved.get("text"):
+        markup = saved.get("markup")
+        keyboard = (InlineKeyboardMarkup if saved.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
+        await m.answer(saved["text"], reply_markup=keyboard)
+        return
     set_legacy_stage(u, "existing_user_start_menu")
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "start_repeat", {"stage": u.get("stage"), "analytics_event": False}, db_path=DB_PATH)
     profile = await get_user_profile(u["user_id"], DB_PATH)
     anchor = str(profile.get("last_memory_anchor") or "")
     await m.answer(
-        "Вы уже начали работу со Skiller. Что хотите сделать?\n\n" + render_return_continuity(anchor),
+        "Вы уже начали работу со Skiller.\n\n" + return_recap(await autonomy_rows(u), local_date_for_user(u), _skill_label) + "\n\n" + render_return_continuity(anchor),
         reply_markup=kb_existing_user_start,
     )
 
@@ -16839,6 +16855,13 @@ def collection_screen_allowed(u):
         "new_day_skill", "current_skill", "closed_day_voluntary_step", "closed_day_voluntary_tiny"}
 
 
+async def autonomy_rows(u):
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await load_review_rows(db, u["user_id"], aliases=DAILY_SKILL_ALIASES)
+        await db.commit()
+    return rows
+
+
 async def refresh_skill_collection(u):
     async with aiosqlite.connect(DB_PATH) as db:
         items = await load_skill_collection(db, u["user_id"], aliases=DAILY_SKILL_ALIASES)
@@ -16864,6 +16887,9 @@ async def show_skill_collection(m, u, *, offset=0):
     shown = items[offset:offset + 3]
     text = "Мои рабочие навыки\n\n" + ("\n\n".join(describe_collected_skill(i, _skill_label(i["skill_id"])) for i in shown)
         if shown else "Пока нет записанных применений. После первого шага здесь появится его результат.")
+    progress = ability_progress(await autonomy_rows(u), local_date_for_user(u), _skill_label)
+    if progress:
+        text += "\n\n" + progress
     text += "\n\nОсвоение требует повторения, самостоятельного применения и проверки в разных ситуациях."
     buttons = [(_skill_label(i["skill_id"]), "skill", str(offset + n)) for n, i in enumerate(shown)]
     if offset + 3 < len(items):
@@ -16918,12 +16944,24 @@ async def on_collection_callback(c):
             ("К коллекции", "page", "0")]
         if not disabled and not item["latest_worse"] and not day_closed_today(u):
             buttons.insert(0, ("Использовать снова", "reuse", "start"))
+        challenge = small_challenge(await autonomy_rows(u), local_date_for_user(u), sid, _skill_label,
+                                    _profile_list(profile.get("collection_disabled_skills")))
+        if challenge:
+            buttons.insert(1, ("Небольшая проверка без бота", "challenge", "show"))
         await c.message.answer(describe_collected_skill(item, _skill_label(sid)), reply_markup=collection_markup(token, buttons))
         await c.answer()
         return
     sid = panel.get("selected")
     if sid not in SKILLS_DB:
         await c.answer("Сначала выберите навык.")
+        return
+    if action == "challenge" and value == "show":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        text = small_challenge(await autonomy_rows(u), local_date_for_user(u), sid, _skill_label,
+                               _profile_list(profile.get("collection_disabled_skills")))
+        if text:
+            await c.message.answer(text)
+        await c.answer("" if text else "Сейчас эту проверку не предлагаем.")
         return
     if action == "history":
         ids = [sid] + [old for old, current in DAILY_SKILL_ALIASES.items() if current == sid]

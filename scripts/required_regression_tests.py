@@ -639,7 +639,7 @@ async def test_completed_profile_start_resumes_without_onboarding():
         assert "Готов начать разбор и перейти к первому дню?" not in joined
         assert any(marker in joined for marker in (
             "Продолжаем с того места, где остановились.",
-            "Вы уже начали работу со Skiller. Что хотите сделать?",
+            "Пропущенные дни отрабатывать не нужно.",
         ))
 
 

@@ -228,24 +228,8 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
     )
     await m.answer(question, reply_markup=skip_kb)
 
-    # 2️⃣ +1 балл прогресса
-    u["points"] = int(u.get("points") or 0) + 1
-    u["streak"] = int(u.get("streak") or 0) + 1
-    # Уровень растет каждые 7 дней
-    u["level"] = int(u.get("level") or 1)
-    if u["streak"] % 7 == 0:
-        u["level"] += 1
-
-    # Кризисный режим: если не заходил 2 дня
-    last_active = float(u.get("last_active") or 0)
+    # Opening a day is navigation, not a demonstrated ability or return to work.
     now = time.time()
-    if last_active and now - last_active > 2*24*3600:
-        await m.answer(
-            "Пауза = информация, не наказание. "
-            "Сейчас видно, что нужен мягкий возврат: начнём с 3 минут и уточним модель."
-        )
-        u["return_count"] = int(u.get("return_count") or 0) + 1
-
     u["last_active"] = now
     await save_user(u, db_path)
 

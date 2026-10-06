@@ -169,15 +169,13 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
             bot, "can_show_offer", return_value=False,
         ), patch.object(bot, "day_close_metrics_text", new=AsyncMock(return_value="Предварительное заключение за день")):
             await bot.start_day_review(message, user, "test")
-            self.assertEqual(user["stage"], "day_review_function")
-            await bot.handle_day_review(message, user, "STAY — начал и остановился")
             self.assertEqual(user["stage"], "day_review_barrier")
             await bot.handle_day_review(message, user, "Телефон / YouTube")
             self.assertEqual(user["stage"], "day_review_state")
             await bot.handle_day_review(message, user, "Напряжённо")
 
         review = record_signal.await_args.args[2]["last_day_review"]
-        self.assertEqual(review["function"], "stay")
+        self.assertEqual(review["function"], "")
         self.assertIn("телефон", review["barrier"])
         self.assertEqual(review["state"], "напряжённо")
         self.assertEqual(user["stage"], "day_core_stop")
