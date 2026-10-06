@@ -22,6 +22,7 @@ import logging
 import threading
 import uuid
 from core.attempt_evidence import PREDICT_BUTTON, ACTUAL_BUTTON, find_attempt, rating, comparison
+from core.personal_skill_collection import load as load_skill_collection, familiar as familiar_skill, describe as describe_collected_skill, CONTEXTS as SKILL_CONTEXTS
 from core.training_track import begin_moment, restore_training, context as training_context, record_reply, next_format, render_format, action_instruction
 from core.conversation_intent import resolve_intent, STOP_WORDS
 from core.case_sessions import begin_case, parsed as parse_case_data
@@ -1326,6 +1327,16 @@ async def start_intent_action(m, u):
         set_legacy_stage(u, "intent_act_context")
         await save_user(u, DB_PATH)
         return
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    mechanism = legacy_mechanism_code(str(comp.get("selected_barrier") or result.get("pattern") or ""))
+    disabled = set(_profile_list(profile.get("collection_disabled_skills")) + not_fit_today_skills(u, profile))
+    learning = profile.get("learning_model") or {}
+    available = {key for key in SKILLS_DB if key not in disabled and not skill_blocked_in_model(learning, key)}
+    known = familiar_skill(profile.get("personal_skill_collection") or [], mechanism, skill_target_function(sid), available) if mechanism and not comp.get("request_device") else None
+    if known:
+        sid = known
+        comp.update(selected_skill=sid, recommended_skill=sid)
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     skill = dict(SKILLS_DB[sid]); skill.setdefault("skill_id", sid)
     u.update(current_skill=sid, current_skill_variant=sid, pending_skill_id=sid,
              daily_skill_id=sid, daily_skill_name=skill.get("name") or sid,
@@ -1335,9 +1346,15 @@ async def start_intent_action(m, u):
     await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=sid, skill_name=skill.get("name") or sid)
     set_legacy_stage(u, "training")
     mark_action_card_active(u)
+    entry = find_attempt(u, active_attempt(u).get("attempt_id"))
+    if entry is not None and mechanism:
+        entry["mechanism"] = mechanism
     sync_active_attempt(u, bump=True, attempt_status="not_tried", effect_status="unknown", is_closed=False, day_closed=False)
     await save_user(u, DB_PATH)
-    await answer_with_keyboard(m, u, build_current_skill_text(skill, u=u), action_keyboard(), "training")
+    text = build_current_skill_text(skill, u=u)
+    if known:
+        text = "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.\n\n" + text
+    await answer_with_keyboard(m, u, text, action_keyboard(), "training")
 
 
 async def run_analysis(m, u, user_text, db_path, sheets_webhook="", client=None, model="gpt-4o-mini"):
@@ -2267,7 +2284,7 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
     records: Dict[str, Dict[str, Any]] = {}
 
     def rec(skill_id: Any) -> Dict[str, Any]:
-        sid = str(skill_id or "").strip() or "open_only"
+        sid = _canonical_daily_skill_id(str(skill_id or "").strip() or "open_only")
         item = records.setdefault(sid, {
             "skill_id": sid,
             "status": "proposed",
@@ -2351,7 +2368,20 @@ async def build_skill_map_data(u: Dict[str, Any], profile: Dict[str, Any]) -> Di
             item["stuck_count"] = max(int(item["stuck_count"]), 1)
             item["last_result"] = "not_helpful_signal"
 
+    async with aiosqlite.connect(DB_PATH) as db:
+        canonical = await load_skill_collection(db, user_id, aliases=DAILY_SKILL_ALIASES)
+        await db.commit()
+    for fact in canonical:
+        item = rec(fact["skill_id"])
+        item.update(attempt_count=fact["applications"], completed_count=fact["completed"],
+            helpful_count=fact["relief"], started_count=fact["continued"],
+            stuck_count=max(0, fact["applications"] - fact["completed"] - fact["partial"]),
+            effect_rating=0, status="promising" if fact["successful"] else "tested_once" if fact["applications"] else "proposed",
+            status_text=fact["status"], _canonical_evidence=True)
     for item in records.values():
+        if item.get("_canonical_evidence"):
+            item["title"] = _skill_label(item["skill_id"], item["skill_id"])
+            continue
         item["attempt_count"] = max(int(item["attempt_count"]), int(item["completed_count"]), int(item["stuck_count"]))
         effect_status = str(item.get("effect_status") or "")
         attempt_status = str(item.get("attempt_status") or "")
@@ -2380,17 +2410,17 @@ def skill_map_lines(skill_map: Dict[str, Any], limit: int = 4) -> str:
     if not skills:
         return "— пока нет проверенных навыков: первый вход только выбираем"
     return "\n".join(
-        f"— {_skill_label(item.get('skill_id'), item.get('skill_id'))}: {skill_status_wording(item.get('status'))}"
+        f"— {_skill_label(item.get('skill_id'), item.get('skill_id'))}: {item.get('status_text') or skill_status_wording(item.get('status'))}"
         for item in skills[:limit]
     )
 
 
 def current_skill_status_note(u: Dict[str, Any], skill_map: Dict[str, Any]) -> str:
     sid = current_skill_id(u) or u.get("daily_skill_id") or u.get("current_skill_variant_id")
-    item = ((skill_map or {}).get("by_id") or {}).get(str(sid or ""))
+    item = ((skill_map or {}).get("by_id") or {}).get(_canonical_daily_skill_id(sid))
     if not item:
         return skill_status_wording("proposed")
-    return skill_status_wording(item.get("status"))
+    return item.get("status_text") or skill_status_wording(item.get("status"))
 
 def _profile_pick(profile: Dict[str, Any], keys: List[str], fallback: str) -> str:
     for key in keys:
@@ -4017,6 +4047,12 @@ def _select_downscale_skill(u: Dict[str, Any]) -> str:
 async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
     """Send a keyboard only if it respects the reply-keyboard button limit and log it."""
     m = dialogue_message(m, u)
+    if (keyboard_name in {"training_main", "day_core_stop", "post_action_reflection"}
+            and isinstance(reply_markup, ReplyKeyboardMarkup)
+            and sum(len(row) for row in reply_markup.keyboard) < MAX_KEYBOARD_BUTTONS
+            and not any(b.text == "🧰 Мои рабочие навыки" for row in reply_markup.keyboard for b in row)):
+        reply_markup = reply_markup.model_copy(update={"keyboard": reply_markup.keyboard +
+            [[KeyboardButton(text="🧰 Мои рабочие навыки")]]})
     entry = find_attempt(u, active_attempt(u).get("attempt_id"))
     if (keyboard_name in {"skill_card", "new_day_skill", "next_logical_step"}
             and isinstance(reply_markup, ReplyKeyboardMarkup) and entry
@@ -4417,6 +4453,10 @@ def record_skill_attempt_start(u: Dict[str, Any], skill_id: str, *, source: str 
         "continued_target_task": None,
         "expected_difficulty": None,
         "actual_difficulty": None,
+        "independent": False,
+        "context_domain": u.get("current_task_context") if u.get("current_task_context") in SKILL_CONTEXTS else None,
+        "mechanism": legacy_mechanism_code(str(active_attempt(u).get("current_mechanism") or u.get("current_mechanism") or "")),
+        "target_function": skill_target_function(sid),
         "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     })
     u["skill_attempts"] = attempts[-50:]
@@ -5369,13 +5409,7 @@ async def handle_next_choice(m: Message, u: Dict[str, Any], text: str) -> bool:
                 await open_next_logical_step(m, u, source="quick_success_next")
             return True
     if text == "🧰 Мои рабочие навыки":
-        attempts = user_skill_attempts(u)
-        latest = {str(a.get("skill_id") or ""): a for a in attempts if a.get("completed") is not None}
-        working = [sid for sid, a in latest.items() if sid in SKILLS_DB
-            and a.get("completed") is True and a.get("continued_target_task") is True
-            and a.get("subjective_effect") != "worse"]
-        text = "Помогли продолжить дело:\n" + "\n".join("— " + str(SKILLS_DB[sid].get("name") or sid) for sid in working[-5:]) if working else "Пока нет способов с подтверждённым продолжением дела. Сохраняем результаты попыток."
-        await answer_with_keyboard(m, u, text, kb_quick_success, "post_action_reflection")
+        await show_skill_collection(m, u)
         return True
     if text == "Уточнить, что стало хуже" and (await get_user_profile(u["user_id"], DB_PATH)).get("last_skill_effect") == "worse":
         text = "Проверить"
@@ -5563,6 +5597,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
         u["user_id"], "post_action_reflection", "post_action_reflection_shown",
         {"completed": completed, "partial": partial, "skill_id": sid}, DB_PATH, SHEETS_WEBHOOK_URL,
     )
+    await refresh_skill_collection(u)
     if not show_summary:
         return True
     if feedback.get("quick_result"):
@@ -9307,12 +9342,19 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
     learning_model = profile.get("learning_model") if isinstance(profile.get("learning_model"), dict) else {}
     blocked_today = list(dict.fromkeys([
         *not_fit_today_skills(u, profile),
+        *_profile_list(profile.get("collection_disabled_skills")),
         *(sid for sid in SKILLS_DB if skill_blocked_in_model(learning_model, sid)),
     ]))
     raw_mechanism = str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or "")
     mechanism = legacy_mechanism_code(raw_mechanism) or "unclear_next_action"
     functional = learning_model.get("functional_state") if isinstance(learning_model.get("functional_state"), dict) else {}
     preferred_target = str(functional.get("primary_problem") or "START").upper()
+    collection = profile.get("personal_skill_collection") or []
+    known_sid = familiar_skill(collection, mechanism, preferred_target, set(SKILLS_DB) - set(blocked_today)) if raw_mechanism else None
+    if known_sid:
+        skill = dict(SKILLS_DB[known_sid])
+        skill.update(skill_id=known_sid, id=known_sid, familiar_skill=True)
+        return skill
     if product_config.RANKING_ENGINE_ENABLED and product_config.use_new_architecture(
         int(u.get("user_id") or 0), is_test_user=bool(u.get("test_access")),
     ):
@@ -9415,9 +9457,10 @@ def build_new_day_intro(
     *,
     include_context: bool = True,
 ) -> str:
-    if include_context:
-        return new_day_skill_text(skill, profile or {}, u)
-    return new_day_skill_card_text(skill, u, profile or {})
+    text = new_day_skill_text(skill, profile or {}, u) if include_context else new_day_skill_card_text(skill, u, profile or {})
+    if skill.get("familiar_skill"):
+        text = "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.\n\n" + text
+    return text
 
 
 def should_send_day_intro(u: Dict[str, Any]) -> bool:
@@ -12975,6 +13018,9 @@ async def main_flow(m: Message):
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
         return
+    if text == "🧰 Мои рабочие навыки" and collection_screen_allowed(u):
+        await show_skill_collection(m, u)
+        return
     if await handle_difficulty_request(m, u, text):
         return
 
@@ -16497,6 +16543,204 @@ async def on_skiller_action_callback(c: CallbackQuery) -> None:
         await log_event(c.from_user.id, "callback_router", "callback_routed", telemetry, DB_PATH, SHEETS_WEBHOOK_URL)
     await dialogue_message(c.message, u).answer(result["text"], reply_markup=_skiller_markup(result.get("buttons") or []))
     await c.answer()
+
+def collection_screen_allowed(u):
+    return safety_mode(u) == "none" and u.get("stage") in {
+        "training", "training_main", "day_core_stop", "success_menu", "post_action_reflection",
+        "new_day_skill", "current_skill", "closed_day_voluntary_step", "closed_day_voluntary_tiny"}
+
+
+async def refresh_skill_collection(u):
+    async with aiosqlite.connect(DB_PATH) as db:
+        items = await load_skill_collection(db, u["user_id"], aliases=DAILY_SKILL_ALIASES)
+        await db.commit()
+    u["profile_json"] = await update_user_profile(u["user_id"], {"personal_skill_collection": items}, DB_PATH, source="personal_skill_collection")
+    return items
+
+
+def collection_markup(token, buttons):
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label,
+        callback_data=f"collection:{token}:{action}:{value}")] for label, action, value in buttons])
+
+
+async def show_skill_collection(m, u, *, offset=0):
+    items = [item for item in await refresh_skill_collection(u) if item["skill_id"] in SKILLS_DB]
+    ctx = training_context(u)
+    token = uuid.uuid4().hex[:8]
+    ctx["collection_ui"] = {"token": token, "stage": u.get("stage"),
+        "attempt_id": active_attempt(u).get("attempt_id"), "date": local_date_for_user(u),
+        "skills": [item["skill_id"] for item in items]}
+    u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    shown = items[offset:offset + 3]
+    text = "Мои рабочие навыки\n\n" + ("\n\n".join(describe_collected_skill(i, _skill_label(i["skill_id"])) for i in shown)
+        if shown else "Пока нет записанных применений. После первого шага здесь появится его результат.")
+    text += "\n\nОсвоение требует повторения, самостоятельного применения и проверки в разных ситуациях."
+    buttons = [(_skill_label(i["skill_id"]), "skill", str(offset + n)) for n, i in enumerate(shown)]
+    if offset + 3 < len(items):
+        buttons.append(("Ещё навыки", "page", str(offset + 3)))
+    if offset:
+        buttons.append(("В начало", "page", "0"))
+    await m.answer(text, reply_markup=collection_markup(token, buttons) if buttons else None)
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("collection:"))
+async def on_collection_callback(c):
+    u = await get_user(c.from_user.id, DB_PATH)
+    if await handle_safety_callback(c, u, c.data or ""):
+        return
+    try:
+        _, token, action, value = (c.data or "").split(":", 3)
+    except ValueError:
+        await c.answer("Этот экран уже не актуален.")
+        return
+    ctx = training_context(u)
+    panel = ctx.get("collection_ui") or {}
+    if (not collection_screen_allowed(u) or token != panel.get("token")
+            or panel.get("stage") != u.get("stage") or panel.get("date") != local_date_for_user(u)
+            or panel.get("attempt_id") != active_attempt(u).get("attempt_id")):
+        await c.answer("Этот экран уже не актуален. Откройте коллекцию снова.")
+        return
+    if action == "page":
+        offset = int(value) if value.isdigit() else -1
+        if 0 <= offset < max(1, len(panel.get("skills") or [])):
+            await show_skill_collection(c.message, u, offset=offset)
+        await c.answer()
+        return
+    if action == "skill":
+        index = int(value) if value.isdigit() else -1
+        skills = panel.get("skills") or []
+        if not 0 <= index < len(skills):
+            await c.answer("Навык недоступен.")
+            return
+        sid = skills[index]
+        token = uuid.uuid4().hex[:8]
+        panel["token"] = token
+        panel.update(selected=sid, report_token=None)
+        ctx["collection_ui"] = panel
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        item = next(i for i in profile["personal_skill_collection"] if i["skill_id"] == sid)
+        disabled = sid in _profile_list(profile.get("collection_disabled_skills"))
+        buttons = [("Применил самостоятельно", "independent", "start"),
+            ("История применений", "history", "show"),
+            ("Снова предлагать" if disabled else "Не предлагать этот навык", "toggle", "on" if disabled else "off"),
+            ("К коллекции", "page", "0")]
+        if not disabled and not item["latest_worse"] and not day_closed_today(u):
+            buttons.insert(0, ("Использовать снова", "reuse", "start"))
+        await c.message.answer(describe_collected_skill(item, _skill_label(sid)), reply_markup=collection_markup(token, buttons))
+        await c.answer()
+        return
+    sid = panel.get("selected")
+    if sid not in SKILLS_DB:
+        await c.answer("Сначала выберите навык.")
+        return
+    if action == "history":
+        ids = [sid] + [old for old, current in DAILY_SKILL_ALIASES.items() if current == sid]
+        async with aiosqlite.connect(DB_PATH) as db:
+            rows = await (await db.execute(f"""SELECT calendar_date,completed,partial,helpfulness,continued,independent,context_domain
+                FROM attempt_evidence WHERE user_id=? AND skill_id IN ({','.join('?' for _ in ids)}) ORDER BY shown_at DESC,action_id DESC LIMIT 5""",
+                (u["user_id"], *ids))).fetchall()
+        lines = ["Последние применения: " + _skill_label(sid)]
+        for date, completed, partial, helpfulness, continued, independent, domain in rows:
+            result = "сделал" if completed == 1 else "частично" if partial == 1 else "не получилось" if completed == 0 else "выполнение не отмечено"
+            effect = "дело продолжилось" if continued == 1 else "стало легче" if helpfulness in {"helped", "some"} else "стало хуже" if helpfulness == "worse" else "без изменений" if helpfulness == "not_helped" else "польза не отмечена"
+            lines.append(f"{date or 'дата не записана'}: {result}; {effect}. " +
+                ("Самостоятельно. " if independent == 1 else "") + SKILL_CONTEXTS.get(domain, "Ситуация не уточнена"))
+        await c.message.answer("\n\n".join(lines))
+        await c.answer()
+        return
+    if action == "toggle":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        disabled = set(_profile_list(profile.get("collection_disabled_skills")))
+        if value == "off":
+            disabled.add(sid)
+        elif value == "on":
+            disabled.discard(sid)
+        else:
+            await c.answer("Действие недоступно.")
+            return
+        await update_user_profile(u["user_id"], {"collection_disabled_skills": sorted(disabled)}, DB_PATH, source="collection_preference")
+        await c.answer("Выбор сохранён. История применений остаётся.")
+        return
+    if action == "reuse":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        item = next((i for i in profile.get("personal_skill_collection", []) if i["skill_id"] == sid), {})
+        if day_closed_today(u) or sid in _profile_list(profile.get("collection_disabled_skills")) or item.get("latest_worse"):
+            await c.answer("Сейчас этот способ не повторяем.")
+            return
+        current = active_attempt(u)
+        if str(current.get("current_skill_id")) == sid and u.get("current_action_id") and not current.get("is_closed"):
+            await c.message.answer(build_current_skill_text(dict(SKILLS_DB[sid]), "Продолжим прежний шаг.", u), reply_markup=action_keyboard())
+        else:
+            if sid != _canonical_daily_skill_id(u.get("day_core_skill_id")):
+                begin_moment(u, local_date_for_user(u))
+            u.update(current_skill=sid, daily_skill_id=sid, pending_skill_id=sid)
+            set_legacy_stage(u, "training")
+            mark_action_card_active(u)
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(c.message, u, build_current_skill_text(dict(SKILLS_DB[sid]), "Вы выбрали знакомый способ.", u), action_keyboard(), "skill_card")
+        await c.answer()
+        return
+    if action == "independent" and value == "start":
+        token = uuid.uuid4().hex[:8]
+        panel["token"] = token
+        panel.update(report_token=uuid.uuid4().hex, report_context=None)
+        ctx["collection_ui"] = panel
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await c.message.answer("Где вы сегодня применили навык без подсказки бота?", reply_markup=collection_markup(token,
+            [(label, "context", code) for code, label in SKILL_CONTEXTS.items()] + [("Отмена", "cancel", "report")]))
+        await c.answer()
+        return
+    if action == "context" and panel.get("report_token") and value in SKILL_CONTEXTS:
+        panel["report_context"] = value
+        ctx["collection_ui"] = panel
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await c.message.answer("Что получилось?", reply_markup=collection_markup(token, [
+            ("Сделал, дело продолжилось", "result", "continued"), ("Сделал, стало легче", "result", "relief"),
+            ("Сделал, без изменений", "result", "same"), ("Получилось частично", "result", "partial"),
+            ("Не получилось", "result", "failed"), ("Стало хуже", "result", "worse"), ("Отмена", "cancel", "report")]))
+        await c.answer()
+        return
+    if action == "result" and panel.get("report_token") and panel.get("report_context") in SKILL_CONTEXTS:
+        if value not in {"continued", "relief", "same", "partial", "failed", "worse"}:
+            await c.answer("Результат недоступен.")
+            return
+        # Reporting use outside the bot never closes or replaces the active guided attempt.
+        entry = {"action_id": "self_" + panel["report_token"], "skill_id": sid,
+            "day_id": str(u.get("current_day_id") or ""), "calendar_date": local_date_for_user(u),
+            "source": "independent_report", "independent": True,
+            "context_domain": panel["report_context"], "target_function": skill_target_function(sid),
+            "result": "partial" if value == "partial" else "reported" if value == "worse" else "not_completed" if value == "failed" else "completed",
+            "completed": None if value == "worse" else value in {"continued", "relief", "same"},
+            "partial": None if value == "worse" else value == "partial",
+            "effect": "helped" if value == "relief" else "worse" if value == "worse" else "not_helped" if value == "same" else "unknown",
+            "continued_target_task": True if value == "continued" else None,
+            "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "completed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+        u["skill_attempts"] = (user_skill_attempts(u) + [entry])[-50:]
+        panel.update(token=uuid.uuid4().hex[:8], report_token=None, report_context=None)
+        ctx["collection_ui"] = panel
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await refresh_skill_collection(u)
+        await c.message.answer("Самостоятельное применение записано. Текущая тренировка остаётся прежней." +
+            ("\nЭтот способ пока не повторяйте." if value == "worse" else ""))
+        await c.answer()
+        return
+    if action == "cancel":
+        panel.update(token=uuid.uuid4().hex[:8], report_token=None, report_context=None)
+        ctx["collection_ui"] = panel
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await c.message.answer("Запись остановлена. Текущая тренировка остаётся прежней.")
+        await c.answer()
+        return
+    await c.answer("Этот шаг уже завершён. Откройте коллекцию снова.")
+
 
 def difficulty_keyboard(action_id: str, phase: str) -> InlineKeyboardMarkup:
     buttons = [InlineKeyboardButton(text=str(n), callback_data=f"difficulty:{phase}:{action_id}:{n}") for n in range(11)]

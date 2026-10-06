@@ -32,6 +32,11 @@ async def ensure_schema(db):
         expected_difficulty INTEGER CHECK(expected_difficulty BETWEEN 0 AND 10),
         actual_difficulty INTEGER CHECK(actual_difficulty BETWEEN 0 AND 10),
         reported_at TEXT, PRIMARY KEY(user_id, action_id))""")
+    columns = {row[1] for row in await (await db.execute("PRAGMA table_info(attempt_evidence)")).fetchall()}
+    for name, kind in (("independent", "INTEGER"), ("context_domain", "TEXT"),
+                       ("mechanism", "TEXT"), ("target_function", "TEXT")):
+        if name not in columns:
+            await db.execute(f"ALTER TABLE attempt_evidence ADD COLUMN {name} {kind}")
 
 
 async def persist(db, user):
@@ -58,12 +63,18 @@ async def persist(db, user):
             partial = result == "partial"
         continued = entry.get("continued_target_task")
         effect = entry.get("effect")
-        await db.execute("""INSERT INTO attempt_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        await db.execute("""INSERT INTO attempt_evidence
+            (user_id,action_id,skill_id,day_id,calendar_date,source,shown_at,result,completed,
+             partial,helpfulness,continued,expected_difficulty,actual_difficulty,reported_at,
+             independent,context_domain,mechanism,target_function)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(user_id,action_id) DO UPDATE SET
             result=excluded.result, completed=excluded.completed, partial=excluded.partial,
             helpfulness=excluded.helpfulness, continued=excluded.continued,
             expected_difficulty=excluded.expected_difficulty,
-            actual_difficulty=excluded.actual_difficulty, reported_at=excluded.reported_at""",
+            actual_difficulty=excluded.actual_difficulty, reported_at=excluded.reported_at,
+            independent=excluded.independent,context_domain=excluded.context_domain,
+            mechanism=excluded.mechanism,target_function=excluded.target_function""",
             (user["user_id"], action_id, str(entry.get("skill_id") or ""),
              entry.get("day_id"), entry.get("calendar_date"), entry.get("source"),
              entry.get("started_at"), result,
@@ -72,7 +83,9 @@ async def persist(db, user):
              effect if effect in {"helped", "some", "not_helped", "worse"} else None,
              int(continued) if type(continued) is bool else None,
              rating(entry.get("expected_difficulty")), rating(entry.get("actual_difficulty")),
-             entry.get("completed_at")))
+             entry.get("completed_at"),
+             int(entry["independent"]) if type(entry.get("independent")) is bool else None,
+             entry.get("context_domain"), entry.get("mechanism"), entry.get("target_function")))
 
 
 async def metrics(db, user_id, *, day_id=""):
