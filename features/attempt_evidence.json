@@ -1,0 +1,9 @@
+{
+  "patch": "PATCH-54",
+  "name": "attempt_evidence",
+  "behavioral_goal": "start",
+  "success_metric": "One action produces one durable record; optional expected and actual difficulty remain separate from execution, relief and task continuation.",
+  "description": "Durable action identity and separate reported execution, relief, continuation and optional difficulty comparison.",
+  "acceptance": "tests/test_attempt_evidence_sprint5.py",
+  "production_deployed": false
+}

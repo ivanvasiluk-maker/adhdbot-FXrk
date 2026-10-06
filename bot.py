@@ -21,6 +21,7 @@ import asyncio
 import logging
 import threading
 import uuid
+from core.attempt_evidence import PREDICT_BUTTON, ACTUAL_BUTTON, find_attempt, rating, comparison
 from core.training_track import begin_moment, restore_training, context as training_context, record_reply, next_format, render_format, action_instruction
 from core.conversation_intent import resolve_intent, STOP_WORDS
 from core.case_sessions import begin_case, parsed as parse_case_data
@@ -4016,6 +4017,14 @@ def _select_downscale_skill(u: Dict[str, Any]) -> str:
 async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
     """Send a keyboard only if it respects the reply-keyboard button limit and log it."""
     m = dialogue_message(m, u)
+    entry = find_attempt(u, active_attempt(u).get("attempt_id"))
+    if (keyboard_name in {"skill_card", "new_day_skill", "next_logical_step"}
+            and isinstance(reply_markup, ReplyKeyboardMarkup) and entry
+            and entry.get("result") == "started" and int(u.get("day") or 1) % 3 == 1
+            and sum(a.get("calendar_date") == local_date_for_user(u) for a in user_skill_attempts(u)) == 1
+            and rating(entry.get("expected_difficulty")) is None):
+        reply_markup = reply_markup.model_copy(update={"keyboard": reply_markup.keyboard +
+            [[KeyboardButton(text=PREDICT_BUTTON)]]})
     if any(keyword in (keyboard_name or "") for keyword in ATTEMPT_ROUTE_KEYWORDS):
         updates: Dict[str, Any] = {}
         if "close" in (keyboard_name or "") or "stop" in (keyboard_name or "") or "success" in (keyboard_name or ""):
@@ -4401,6 +4410,13 @@ def record_skill_attempt_start(u: Dict[str, Any], skill_id: str, *, source: str 
         "effect": "unknown",
         "action_id": action_id,
         "source": source,
+        "day_id": str(u.get("current_day_id") or ""),
+        "calendar_date": local_date_for_user(u),
+        "completed": None,
+        "partial": None,
+        "continued_target_task": None,
+        "expected_difficulty": None,
+        "actual_difficulty": None,
         "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     })
     u["skill_attempts"] = attempts[-50:]
@@ -4411,20 +4427,23 @@ def update_latest_skill_attempt_result(
     experiment_result: str = "", after_action: str = "", target_function: str = "",
 ) -> None:
     attempts = user_skill_attempts(u)
-    if not attempts:
+    action_id = str(active_attempt(u).get("attempt_id") or u.get("current_action_id") or "")
+    entry = find_attempt(u, action_id)
+    if entry is None:
         sid = current_skill_for_action(u) or current_skill_id(u) or u.get("daily_skill_id") or ""
         record_skill_attempt_start(u, sid, source="result_without_start")
         attempts = user_skill_attempts(u)
-    if attempts:
-        attempts[-1]["result"] = result
-        attempts[-1]["effect"] = effect
+        entry = find_attempt(u, action_id)
+    if entry is not None:
+        entry["result"] = result
+        entry["effect"] = effect
         if experiment_result:
-            attempts[-1]["experiment_result"] = experiment_result
+            entry["experiment_result"] = experiment_result
         if after_action:
-            attempts[-1]["after_action"] = after_action
+            entry["after_action"] = after_action
         if target_function:
-            attempts[-1]["target_function"] = target_function
-        attempts[-1]["completed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            entry["target_function"] = target_function
+        entry["completed_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         u["skill_attempts"] = attempts[-50:]
 
 
@@ -5172,7 +5191,8 @@ def minimal_feedback_base(u: Dict[str, Any], *, source: str) -> Dict[str, Any]:
         "helpfulness": None,
         "continued_after_skill": None,
         "difficulty": None,
-        "attempt_id": str(case_id or attempt.get("attempt_id") or u.get("current_action_id") or ""),
+        "attempt_id": str(attempt.get("attempt_id") or u.get("current_action_id") or ""),
+        "case_id": case_id,
         "skill_id": str((u.get("daily_skill_id") if additional else snapshot.get("skill_id")) or current_skill_for_action(u) or current_skill_id(u) or ""),
         "mechanism": str(comp.get("selected_barrier") or (comp.get("analysis_result") or {}).get("pattern") or "" if additional else attempt.get("current_mechanism") or u.get("current_mechanism") or ""),
         "barrier": str(u.get("pending_stuck_reason") or u.get("last_not_completed_reason") or ""),
@@ -5192,6 +5212,12 @@ def get_minimal_feedback(u: Dict[str, Any]) -> Dict[str, Any]:
 
 def set_minimal_feedback(u: Dict[str, Any], feedback: Dict[str, Any]) -> None:
     u["pending_feedback_json"] = dict(feedback or {})
+    entry = find_attempt(u, feedback.get("attempt_id"))
+    if entry is not None and type(feedback.get("completed")) is bool:
+        completed, partial = feedback["completed"], bool(feedback.get("partial"))
+        entry.update(completed=completed, partial=partial,
+                     result="completed" if completed else "partial" if partial else "not_completed")
+        entry.setdefault("completed_at", dt.datetime.now(dt.timezone.utc).isoformat())
 
 
 def effect_status_from_minimal_feedback(helpfulness: str, continued: Any) -> str:
@@ -5469,8 +5495,9 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
         target_function=current_target_function,
     )
     attempts = user_skill_attempts(u)
-    if attempts:
-        attempts[-1].update({
+    result_entry = find_attempt(u, feedback.get("attempt_id"))
+    if result_entry is not None:
+        result_entry.update({
             "completed": completed, "partial": partial, "subjective_effect": subjective_effect,
             "continued_target_task": continued,
             "returned_after_distraction": continued if feedback.get("source") == "return" else None,
@@ -5561,6 +5588,11 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
             if helpfulness == "worse":
                 rows.insert(0, [KeyboardButton(text="Уточнить, что стало хуже")])
             markup = ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+        entry = find_attempt(u, feedback.get("attempt_id"))
+        if (entry and (completed or partial) and rating(entry.get("expected_difficulty")) is not None
+                and rating(entry.get("actual_difficulty")) is None and helpfulness != "worse"):
+            markup = markup.model_copy(update={"keyboard": markup.keyboard +
+                [[KeyboardButton(text=ACTUAL_BUTTON)]]})
         await answer_with_keyboard(m, u, summary, markup, "post_action_reflection")
         return True
     raw_target_function = str(active_attempt(u).get("target_function") or "START").upper()
@@ -6986,8 +7018,11 @@ def choose_replacement_skill(u: Dict[str, Any], seen_today: List[str]) -> str:
 
 async def bot_record_action_event(u: Dict[str, Any], event_type: str, *, attempt_id: Optional[int] = None, skill_id: str = "", metadata: Optional[Dict[str, Any]] = None):
     metadata = dict(metadata or {})
-    if event_type in {"attempt_started", "attempt_completed_self_reported", "day_closed"}:
-        metadata.setdefault("dedupe_key", f"product_once:{u.get('user_id')}:{event_type}")
+    action_ref = str(active_attempt(u).get("attempt_id") or u.get("current_action_id") or "")
+    if event_type in {"attempt_started", "attempt_completed_self_reported", "skill_result_reported"} and action_ref:
+        metadata.setdefault("dedupe_key", f"action:{u.get('user_id')}:{action_ref}:{event_type}")
+    elif event_type == "day_closed":
+        metadata.setdefault("dedupe_key", f"day:{u.get('user_id')}:{u.get('current_day_id')}:{event_type}")
     metadata.setdefault("day_id", str(u.get("current_day_id") or ""))
     metadata.setdefault("attempt_id", str(attempt_id or active_attempt(u).get("attempt_id") or ""))
     metadata.setdefault("state_version", int(u.get("state_version") or 0))
@@ -12940,6 +12975,8 @@ async def main_flow(m: Message):
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
         return
+    if await handle_difficulty_request(m, u, text):
+        return
 
     if text == "🎯 Разобрать ещё одну ситуацию" and day_closed_today(u):
         u["closed_day_additional_active"] = 0
@@ -16461,6 +16498,73 @@ async def on_skiller_action_callback(c: CallbackQuery) -> None:
     await dialogue_message(c.message, u).answer(result["text"], reply_markup=_skiller_markup(result.get("buttons") or []))
     await c.answer()
 
+def difficulty_keyboard(action_id: str, phase: str) -> InlineKeyboardMarkup:
+    buttons = [InlineKeyboardButton(text=str(n), callback_data=f"difficulty:{phase}:{action_id}:{n}") for n in range(11)]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[:6], buttons[6:],
+        [InlineKeyboardButton(text="Пропустить", callback_data=f"difficulty:{phase}:{action_id}:skip")]])
+
+
+async def handle_difficulty_request(m: Message, u: Dict[str, Any], text: str) -> bool:
+    if text not in {PREDICT_BUTTON, ACTUAL_BUTTON}:
+        return False
+    attempt = active_attempt(u)
+    entry = find_attempt(u, attempt.get("attempt_id"))
+    expected = text == PREDICT_BUTTON
+    eligible = (entry and entry.get("calendar_date") == local_date_for_user(u)
+        and ((expected and u.get("current_action_id") == entry["action_id"]
+              and entry.get("result") == "started" and not attempt.get("is_closed"))
+             or (not expected and u.get("stage") == "post_action_reflection"
+                 and entry.get("result") in {"completed", "partial"}
+                 and rating(entry.get("expected_difficulty")) is not None)))
+    if not eligible:
+        await m.answer("Оценка сейчас не нужна. Продолжайте с текущего экрана.")
+        return True
+    phase = "expected" if expected else "actual"
+    question = "Как думаете, насколько трудно будет сделать этот шаг?" if expected else "Насколько трудно было сделать этот шаг?"
+    await m.answer(question + "\n0 — совсем легко, 10 — очень трудно. Можно пропустить.",
+                   reply_markup=difficulty_keyboard(entry["action_id"], phase))
+    return True
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("difficulty:"))
+async def on_difficulty_callback(c: CallbackQuery):
+    u = await get_user(c.from_user.id, DB_PATH)
+    if await handle_safety_callback(c, u, c.data or ""):
+        return
+    try:
+        _, phase, action_id, raw = (c.data or "").split(":")
+    except ValueError:
+        await c.answer("Оценка недоступна.")
+        return
+    entry = find_attempt(u, action_id)
+    if (not entry or phase not in {"expected", "actual"}
+            or entry.get("calendar_date") != local_date_for_user(u)
+            or str(active_attempt(u).get("attempt_id")) != action_id
+            or safety_mode(u) != "none" or u.get("stage") == "offer_request_form"):
+        await c.answer("Этот экран уже не актуален.")
+        return
+    if ((phase == "expected" and (entry.get("result") != "started" or u.get("current_action_id") != action_id))
+            or (phase == "actual" and (entry.get("result") not in {"completed", "partial"}
+                or u.get("stage") != "post_action_reflection"
+                or rating(entry.get("expected_difficulty")) is None or entry.get("effect") == "worse"))):
+        await c.answer("Этот экран уже не актуален.")
+        return
+    key = f"{phase}_difficulty"
+    if raw == "skip":
+        await c.answer("Пропущено. Можно продолжать.")
+        return
+    value = rating(int(raw)) if raw.isdigit() else None
+    if value is None or rating(entry.get(key)) is not None:
+        await c.answer("Оценка уже сохранена или недоступна.")
+        return
+    entry[key] = value
+    await save_user(u, DB_PATH)
+    await c.answer("Оценка сохранена.")
+    message = comparison(entry.get("expected_difficulty"), entry.get("actual_difficulty"))
+    if message:
+        await c.message.answer(message + "\nЭто наблюдение об этой попытке.")
+
+
 @router.callback_query(lambda c: (c.data or "").startswith("prediction:"))
 async def on_prediction_callback(c: CallbackQuery):
     u = await get_user(c.from_user.id, DB_PATH)
@@ -17356,4 +17460,3 @@ async def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
-

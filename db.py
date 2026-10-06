@@ -2407,6 +2407,8 @@ async def save_user(u: Dict[str, Any], db_path: str):
                 f"INSERT INTO users ({cols_sql}) VALUES ({placeholders})",
                 tuple(vals),
             )
+        from core.attempt_evidence import persist as persist_attempt_evidence
+        await persist_attempt_evidence(db, state)
         await db.commit()
     u.update({column: state.get(column) for column in USER_FIELDS})
     u["_loaded_row_revision"] = int(state["row_revision"])
@@ -3974,18 +3976,34 @@ async def get_action_metrics(user_id: int, db_path: str, *, day_id: str = "") ->
     metrics = {"today": empty(), "period": empty()}
     async with aiosqlite.connect(db_path) as db:
         cur = await db.execute(
-            "SELECT day_id, event_type, COUNT(*) FROM action_events WHERE user_id=? GROUP BY day_id, event_type",
+            "SELECT day_id, event_type, metadata FROM action_events WHERE user_id=? ORDER BY id",
             (user_id,),
         )
         rows = await cur.fetchall()
-    for row_day_id, event_type, count in rows:
+    seen = set()
+    for row_day_id, event_type, raw_metadata in rows:
+        metadata = _safe_json_dict(raw_metadata)
+        key = str(metadata.get("dedupe_key") or "")
+        if key.startswith(("action:", "day:")):
+            if (event_type, key) in seen:
+                continue
+            seen.add((event_type, key))
         key = mapping.get(event_type)
         if not key:
             continue
-        metrics["period"][key] += int(count)
+        metrics["period"][key] += 1
         if day_id and row_day_id == day_id:
-            metrics["today"][key] += int(count)
+            metrics["today"][key] += 1
     return metrics
+
+
+async def get_attempt_evidence_metrics(user_id: int, db_path: str, *, day_id: str = "") -> Dict[str, int]:
+    """Canonical action counts, independent of repeated screens and event delivery."""
+    from core.attempt_evidence import metrics
+    async with aiosqlite.connect(db_path) as db:
+        result = await metrics(db, user_id, day_id=day_id)
+        await db.commit()
+        return result
 
 
 async def record_user_feedback(
@@ -4510,4 +4528,3 @@ def should_ping(u: dict, hours: int) -> bool:
     except (TypeError, ValueError):
         last = 0.0
     return time.time() - last > hours * 3600
-
