@@ -138,6 +138,7 @@ from core.conclusion_engine import (
     render_short_conclusion, update_next_untested_prediction,
 )
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
+from core.proactive import protected as proactive_protected, intention as parse_intention, due as intention_due, contextual_text
 from core.autonomy import return_recap, ability_progress, small_challenge
 from core.session_continuity import render_pause, render_return_continuity, render_session_closure
 from core.ranking_engine import PersonalSkillState, RankingInput, choose_skill
@@ -11144,6 +11145,8 @@ async def handle_reactivation_reply(m: Message, u: Dict[str, Any], text: str, lo
         await m.answer("Хорошо. Я не буду писать первым. Ты сможешь вернуться в любой момент.")
         return True
     if text in {"💤 Не сейчас", "Напомнить позже"}:
+        u["no_reminders_today"] = 1
+        u["no_reminders_date"] = local_date_for_user(u)
         u["last_bot_reactivation_at"] = utc_iso()
         await save_user(u, DB_PATH)
         await log_event(u["user_id"], "reactivation", "reactivation_snoozed", base_meta, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -13148,6 +13151,18 @@ async def main_flow(m: Message):
 
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
+        return
+    if not proactive_protected(u) and parse_intention(text, u):
+        plan = parse_intention(text, u)
+        plan.update(token=uuid.uuid4().hex[:10], stage=u.get("stage"), date=local_date_for_user(u))
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        profile["planned_intention"] = plan
+        u["profile_json"] = profile
+        await save_user(u, DB_PATH)
+        original = m.original if isinstance(m, DialogueMessage) else m
+        await original.answer(f"Напомнить о «{plan['planned_action']}» {plan['due_at'][:10]} в {plan['approx_time']}?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да, один раз", callback_data=f"proactive:plan:{plan['token']}:yes"),
+             InlineKeyboardButton(text="Без напоминания", callback_data=f"proactive:plan:{plan['token']}:no")]]))
         return
     if resolve_intent(text, str(u.get("stage") or ""), _skiller_session(u)) == "ACKNOWLEDGE":
         reply = {
@@ -17752,8 +17767,10 @@ def reminder_mode(u: Dict[str, Any]) -> str:
 
 def reminder_mode_allows(u: Dict[str, Any], notification_type: str, today: str) -> bool:
     mode = reminder_mode(u)
-    if mode == "paused":
+    if mode in {"paused", "intent_only"}:
         return False
+    if mode == "custom":
+        return notification_type == "custom" and _proactive_count_today(u, today) < 1
     if mode == "morning_only" and notification_type != "morning":
         return False
     if mode == "evening_only" and notification_type != "evening":
@@ -17763,16 +17780,30 @@ def reminder_mode_allows(u: Dict[str, Any], notification_type: str, today: str) 
     return True
 
 def should_ask_reminder_overload(u: Dict[str, Any]) -> bool:
-    return int(u.get("unanswered_proactive_count") or 0) >= 2 and reminder_mode(u) == "normal"
+    profile = _json_dict(u.get("profile_json"))
+    return int(u.get("unanswered_proactive_count") or 0) >= 2 and reminder_mode(u) not in {"paused", "intent_only"} and not (profile.get("proactive_adaptation") or {}).get("pending")
 
 async def ask_reminder_overload(bot: Bot, u: Dict[str, Any]) -> None:
-    set_legacy_stage(u, "reminder_overload_settings")
-    u["unanswered_proactive_count"] = 0
+    token = uuid.uuid4().hex[:10]
+    profile = _json_dict(u.get("profile_json"))
+    profile["proactive_adaptation"] = {"token": token, "pending": True, "date": local_date_for_user(u)}
+    # Persist before delivery so a failed send cannot loop on every scheduler tick.
+    u["profile_json"] = profile
+    _increment_proactive_count(u, local_date_for_user(u))
+    mark_bot_auto_message(u)
     await save_user(u, DB_PATH)
-    await bot.send_message(u["chat_id"], "Похоже, напоминания сейчас не помогают. Как поступить?", reply_markup=kb_reminder_overload)
-    await log_event(u.get("user_id"), "notifications", "reminder_overload_prompt_sent", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await bot.send_message(u["chat_id"], "На последние два напоминания не было ответа. Что лучше изменить?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=label, callback_data=f"proactive:adapt:{token}:{code}")]
+        for label, code in [("Не вовремя пишешь", "time"), ("Мне скучно", "format"), ("Слишком сложно", "tiny"), ("Просто забываю", "once"), ("Не напоминать", "pause")]]))
+
 
 async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
+    preference = (_json_dict(u.get("profile_json"))).get("reminder_entry")
+    if preference == "format":
+        text = "Можно сменить формат: выбрать одно понятное действие вместо длинного разбора. Если сейчас не хочется, можно пропустить."
+    elif preference == "tiny":
+        text = "Можно начать с самого короткого действия: посмотреть на задачу 10 секунд. Продолжать необязательно."
+        reply_markup = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Дать действие попроще")], [KeyboardButton(text="💤 Не сейчас")]], resize_keyboard=True)
     notification_context = remember_notification_context(u, keyboard_name)
     u["unanswered_proactive_count"] = int(u.get("unanswered_proactive_count") or 0) + 1
     await save_user(u, DB_PATH)
@@ -17839,6 +17870,65 @@ def _user_last_activity_ts(u: Dict[str, Any]) -> float:
     return float(u.get("last_active") or 0)
 
 
+
+@router.callback_query(lambda c: (c.data or "").startswith("proactive:"))
+async def on_proactive_callback(c):
+    u = await get_user(c.from_user.id, DB_PATH)
+    if await handle_safety_callback(c, u, c.data or ""):
+        return
+    try:
+        _, kind, token, value = c.data.split(":", 3)
+    except ValueError:
+        await c.answer("Этот экран уже не актуален."); return
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    plan = profile.get("planned_intention") or {}
+    adaptation = profile.get("proactive_adaptation") or {}
+    if kind == "plan" and token == plan.get("token") and plan.get("status") == "draft" and plan.get("date") == local_date_for_user(u) and plan.get("stage") == u.get("stage") and not proactive_protected(u):
+        if value not in {"yes", "no"}:
+            await c.answer("Выберите вариант на экране."); return
+        plan["status"] = "confirmed" if value == "yes" else "cancelled"
+        if value == "yes":
+            u["unanswered_proactive_count"] = 0
+            profile["proactive_adaptation"] = {"pending": False, "reason": "explicit_intention"}
+        if value == "yes" and (not u.get("notifications_enabled") or reminder_mode(u) == "paused"):
+            u["notifications_enabled"] = 1
+            u["reminder_mode"] = "intent_only"
+        profile["planned_intention"] = plan
+        reply = "Напомню один раз в указанное время. Можно отменить кнопкой «Не напоминать»." if value == "yes" else "Без напоминания. Текущий шаг сохранён."
+    elif kind == "cancel" and token == plan.get("token") and plan.get("status") in {"confirmed", "sent"}:
+        plan["status"] = "cancelled"
+        profile["planned_intention"] = plan
+        reply = "Это напоминание отменено. Текущий шаг сохранён."
+    elif kind == "result" and token == plan.get("token") and plan.get("status") == "sent" and str(plan.get("due_at") or "")[:10] == local_date_for_user(u) and value in {"yes", "no", "later", "pause"}:
+        plan.update(status="answered", answer=value)
+        profile["planned_intention"] = plan
+        u["unanswered_proactive_count"] = 0
+        if value == "pause":
+            u["reminder_mode"] = "paused"
+        reply = {"yes": "Отметил, что вы начали. Эффект навыка пока не оцениваем.", "no": "Отметил. Можно уменьшить шаг или вернуться позже.", "later": "Перенос записан. Нового напоминания не назначаю.", "pause": "Напоминания на паузе."}[value]
+    elif kind == "adapt" and token == adaptation.get("token") and adaptation.get("pending") and value in {"time", "format", "tiny", "once", "pause", "10", "14", "19"}:
+        if value == "time":
+            await c.message.answer("В какое время удобнее?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{hour}:00", callback_data=f"proactive:adapt:{token}:{hour}")] for hour in (10,14,19)]))
+            await c.answer(); return
+        adaptation.update(pending=False, reason=value)
+        profile["proactive_adaptation"] = adaptation
+        u["unanswered_proactive_count"] = 0
+        if value in {"10", "14", "19"}:
+            profile["reminder_hour"] = int(value)
+            u["reminder_mode"] = "custom"
+        else:
+            u["reminder_mode"] = "paused" if value == "pause" else "one_per_day"
+            profile["reminder_entry"] = value
+        reply = "Настройка сохранена. Напоминания на паузе." if value == "pause" else "Настройка сохранена. Не больше одного напоминания в день."
+    else:
+        await c.answer("Этот ответ уже не актуален."); return
+    u["profile_json"] = profile
+    await save_user(u, DB_PATH)
+    markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отменить напоминание", callback_data=f"proactive:cancel:{token}:no")]]) if kind == "plan" and value == "yes" else None
+    await c.message.answer(reply, reply_markup=markup)
+    await c.answer()
+
+
 async def background_checkins(bot: Bot):
     """Background reminders plus soft reactivation layer; runs every 15 minutes."""
     while True:
@@ -17853,6 +17943,9 @@ async def background_checkins(bot: Bot):
                     continue
                 if not u.get("chat_id"):
                     continue
+                u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
+                if proactive_protected(u) or u.get("reminder_mode") == "paused":
+                    continue
                 now_local = local_now_for_user(u)
                 today = now_local.date().isoformat()
                 if _user_no_reminders_today(u, today):
@@ -17866,6 +17959,42 @@ async def background_checkins(bot: Bot):
                 is_closed = closed_day_status(u)
                 closed_today = is_closed and closed_on_local_date(u, today)
 
+                if closed_today:
+                    continue
+                profile = u["profile_json"]
+                adaptation = profile.get("proactive_adaptation") or {}
+                if adaptation.get("pending"):
+                    continue
+                if should_ask_reminder_overload(u) and 9 <= now_local.hour < 21:
+                    await ask_reminder_overload(bot, u)
+                    continue
+                plan = profile.get("planned_intention") or {}
+                if intention_due(plan, dt.datetime.now(dt.timezone.utc)):
+                    token = plan["token"]
+                    plan["status"] = "dispatching"
+                    profile["planned_intention"] = plan
+                    u["profile_json"] = profile
+                    await save_user(u, DB_PATH)
+                    await bot.send_message(u["chat_id"], contextual_text(plan), reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=label, callback_data=f"proactive:result:{token}:{code}")]
+                        for label, code in [("✅ Да", "yes"), ("❌ Нет", "no"), ("Перенёс", "later"), ("Не напоминать", "pause")]]))
+                    plan["status"] = "sent"
+                    profile["planned_intention"] = plan
+                    u["profile_json"] = profile
+                    _increment_proactive_count(u, today)
+                    mark_bot_auto_message(u)
+                    u["unanswered_proactive_count"] = int(u.get("unanswered_proactive_count") or 0) + 1
+                    await save_user(u, DB_PATH)
+                    continue
+                if reminder_mode(u) == "custom":
+                    hour = int(profile.get("reminder_hour", 19))
+                    if now_local.hour == hour and now_local.minute < 15 and u.get("last_evening_checkin_date") != today:
+                        u["last_evening_checkin_date"] = today
+                        _increment_proactive_count(u, today)
+                        mark_bot_auto_message(u)
+                        await save_user(u, DB_PATH)
+                        await send_background_keyboard(bot, u, "Если ваше дело ещё актуально, можно выбрать один короткий шаг. Можно и не сейчас.", kb_morning_checkin, "custom_checkin")
+                    continue
                 if in_time_window(now_local, *MORNING_REMINDER_WINDOW) and u.get("last_morning_checkin_date") != today:
                     if not reminder_mode_allows(u, "morning", today):
                         continue
