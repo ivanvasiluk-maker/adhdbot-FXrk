@@ -139,6 +139,7 @@ from core.conclusion_engine import (
 )
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
 from core.proactive import protected as proactive_protected, intention as parse_intention, due as intention_due, contextual_text
+from core.commercial import commercial_blocked, offer_evidence, support_ceiling
 from core.autonomy import return_recap, ability_progress, small_challenge
 from core.session_continuity import render_pause, render_return_continuity, render_session_closure
 from core.ranking_engine import PersonalSkillState, RankingInput, choose_skill
@@ -895,6 +896,8 @@ def _parse_aware_datetime(value: Any) -> Optional[dt.datetime]:
 def offer_recently_limited(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None, *, now: Optional[dt.datetime] = None) -> bool:
     profile = profile or {}
     now = now or dt.datetime.now(dt.timezone.utc)
+    if commercial_blocked(u, profile, now=now):
+        return True
     for raw in (profile.get("offer_suppressed_until"), u.get("offer_suppressed_until")):
         until = _parse_aware_datetime(raw)
         if until and until > now:
@@ -909,7 +912,7 @@ def scheduled_offer_due(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = N
         return False
     profile = profile or {}
     now = now or dt.datetime.now(dt.timezone.utc)
-    safety_active = int(u.get("crisis_mode") or 0) == 1 or str(u.get("stage") or "").startswith("safety")
+    safety_active = commercial_blocked(u, profile, now=now)
     if (
         int(u.get("full_mode") or 0) == 1
         or int(u.get("free_mode") or 0) == 1
@@ -1028,6 +1031,8 @@ def daily_conclusion(u: Dict[str, Any], profile: Dict[str, Any], review_override
         next_sid = None
     next_test = ("Сначала уточним, что стало хуже. Этот способ пока не повторяем." if worse else
                  f"Проверим способ «{_skill_label(next_sid)}» на конкретном деле." if next_sid else
+                 "Этот результат можно сохранить. На сегодня достаточно; в следующий раз проверим знакомый способ на другом деле."
+                 if feedback.get("continued_after_skill") is True and (feedback.get("completed") or feedback.get("partial")) else
                  "Уточним, в какой момент дело остановилось, и выберем другой способ.")
     noticed = ("После упражнения стало хуже." if worse else
                "После шага дело продолжилось. Это результат одной попытки." if feedback.get("continued_after_skill") is True else
@@ -7748,13 +7753,13 @@ def _offer_skill_fact(summary: Dict[str, Any], *, helpful: bool) -> str:
         ranked = sorted(
             (
                 item for item in skill_rows
-                if int(item.get("helpful_count") or 0) > 0 or int(item.get("completed_count") or 0) > 0
+                if int(item.get("helpful_count") or 0) > 0
             ),
             key=lambda item: (-int(item.get("helpful_count") or 0), -int(item.get("completed_count") or 0), item.get("title") or ""),
         )
         if ranked:
             top = ranked[0]
-            count = max(int(top.get("helpful_count") or 0), int(top.get("completed_count") or 0), 1)
+            count = int(top.get("helpful_count") or 0)
             return f"{top.get('title') or _skill_label(top.get('skill_id'))} ({count} раз)"
         return "пока явного лидера нет"
     ranked = sorted(
@@ -7772,15 +7777,10 @@ def _offer_skill_fact(summary: Dict[str, Any], *, helpful: bool) -> str:
 
 
 def _offer_main_obstacle(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
-    if summary.get("attention_pattern") == "scroll_autopilot" or int(summary.get("attention_escape_count") or 0) > 0:
-        return "напряжение перед задачей и уход в быстрый стимул"
-    if profile.get("main_pattern") in {"anxiety_avoidance", "shame_self_attack", "perfectionism_start_block"} or profile.get("avoidance_reason") == "fear_of_bad_result":
-        return "страх ошибки, оценки или самокритика на старте"
-    if int(summary.get("downscale_count") or profile.get("downscale_count") or 0) > 0:
-        return "слишком большой первый шаг"
-    if summary.get("preferred_activation") == "body_doubling":
-        return "старт без внешней опоры"
-    return "пока проверяем, что именно делает вход дорогим"
+    barriers = profile.get("barriers") or []
+    if isinstance(barriers, list) and barriers and isinstance(barriers[0], str):
+        return barriers[0][:180]
+    return "помеха пока не уточнена"
 
 
 def _offer_next_experiment(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
@@ -7799,6 +7799,7 @@ def _offer_next_experiment(summary: Dict[str, Any], profile: Dict[str, Any]) -> 
 def day3_personal_offer_text(summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
     return (render_daily_conclusion(daily_conclusion({}, profile))
             + f"\n\nОтмеченных попыток: {day3_attempt_count(summary, profile)}."
+            + ("\n\n" + profile["_support_ceiling"] if profile.get("_support_ceiling") else "")
             + "\nМожно продолжать самостоятельно или узнать о группе и личной работе. Заявка без оплаты; условия обсудим заранее.")
 
 
@@ -7914,34 +7915,61 @@ async def restore_offer_return(m: Message, u: Dict[str, Any]) -> bool:
     return True
 
 
+async def remember_offer_decision(u, *, declined=False):
+    now = utc_iso()
+    patch = ({"offer_declined_at": now,
+              "offer_suppressed_until": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=7)).isoformat()}
+             if declined else {"offer_seen_at": now})
+    if not declined:
+        u["last_offer_shown_at"] = now
+    u["profile_json"] = await update_user_profile(u["user_id"], patch, DB_PATH, source="commercial_decision")
+    await save_user(u, DB_PATH)
+
+
+async def automatic_support_allowed(u, profile, *, first=False):
+    if commercial_blocked(u, profile) or has_unfinished_exercise_for_offer(u):
+        return False
+    facts = offer_evidence(await autonomy_rows(u), local_date_for_user(u))
+    return facts["useful_applications"] >= (1 if first else 2) and not facts["latest_worse"] and not facts["latest_failed"]
+
+
 async def maybe_show_help_offer(m: Message, u: Dict[str, Any], *, final=False, substantive=False) -> bool:
-    if not (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER) or int(u.get("crisis_mode") or 0):
+    if not (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER):
         return False
     profile = await get_user_profile(u["user_id"], DB_PATH)
-    feedback = profile.get("last_skill_feedback") or {}
-    if not isinstance(feedback, dict) or feedback.get("helpfulness") == "worse":
-        return False
     day = int(u.get("day") or 1)
     key = "final_help_offer_seen" if final else "day1_help_offer_seen"
-    if profile.get(key) or (not final and (day != 1 or (not substantive and feedback.get("helpfulness") not in {"helped", "some"}))) :
+    if profile.get(key) or not await automatic_support_allowed(u, profile, first=not final):
         return False
     rows = []
     if ENABLE_GROUP_OFFER:
-        rows.append([InlineKeyboardButton(text=f"Группа — €{GROUP_PROGRAM_PRICE_LABEL}", callback_data=OFFER_CALLBACKS["group"])])
+        rows.append([InlineKeyboardButton(text="👥 Группа", callback_data=OFFER_CALLBACKS["group"])])
     if ENABLE_HUMAN_OFFER:
-        rows.append([InlineKeyboardButton(text=f"Личная работа — от €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
-    rows.append([InlineKeyboardButton(text="Продолжу самостоятельно", callback_data=OFFER_CALLBACKS["continue_training"])])
+        rows.append([InlineKeyboardButton(text="👤 Иван", callback_data=OFFER_CALLBACKS["live"])])
+    rows.append([InlineKeyboardButton(text="Не сейчас", callback_data=OFFER_CALLBACKS["choose_later"])])
+    await remember_offer_decision(u)
     previous_context = u.get("dialogue_context")
-    # Invitation is an overlay: the pending dialogue remains active until a click.
-    await m.answer("Если такой формат помогает, можно продолжать самостоятельно, пройти программу в группе или работать лично с Иваном. Условия можно посмотреть без записи и оплаты.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    # A soft invitation leaves the current question and action untouched.
+    await m.answer("Вы отметили полезный результат. Можно продолжать самостоятельно. Если захотите больше поддержки, доступны группа и личная работа с Иваном. Условия — по вашему выбору.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     u["dialogue_context"] = previous_context
     await save_user(u, DB_PATH)
-    await update_user_profile(u["user_id"], {key:utc_iso()}, DB_PATH, source="help_offer_after_value")
+    u["profile_json"] = await update_user_profile(u["user_id"], {key:utc_iso()}, DB_PATH, source="help_offer_after_value")
     return True
+
+
+async def show_weekly_with_support(m, u):
+    await send_weekly_summary(m, u, DB_PATH)
+    if ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER:
+        await show_day3_offer(m, u, "weekly_insight", mode="auto")
 
 
 async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: str = "auto"):
     """Show the adaptive day-3 map and paid continuation offer."""
+    if mode == "auto":
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        if not await automatic_support_allowed(u, profile):
+            return False
+        u["profile_json"] = profile
     remember_offer_return(u)
     previous_flow = current_active_flow(u)
     if previous_flow and previous_flow.get("type") != "offer":
@@ -7973,6 +8001,10 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
 
     profile = await get_user_profile(u["user_id"], DB_PATH)
     profile["_skill_map"] = await build_skill_map_data(u, profile)
+    chains = (profile.get("behavioral_chains") or {}).values()
+    rejected = profile.get("rejected_hypotheses") or {}
+    profile["_support_ceiling"] = support_ceiling(await autonomy_rows(u), local_date_for_user(u),
+        [chain for chain in chains if isinstance(chain, dict) and chain.get("mechanism") not in rejected])
     summary = build_profile_map_summary(u, profile)
     profile_patch = {}
 
@@ -12609,7 +12641,8 @@ async def finalize_day_review(m: Message, u: Dict[str, Any], review: Dict[str, A
     feedback = profile.get("last_skill_feedback") or {}
     if (current_day == 3 and not profile.get("day3_help_offer_seen") and isinstance(feedback, dict)
             and feedback and feedback.get("helpfulness") != "worse" and not int(u.get("crisis_mode") or 0)
-            and (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER)):
+            and (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER)
+            and await automatic_support_allowed(u, profile)):
         await show_day3_offer(m, u, "day3_after_summary")
         await update_user_profile(u["user_id"], {"day3_help_offer_seen":utc_iso()}, DB_PATH, source="day3_help_offer")
         return
@@ -13177,7 +13210,7 @@ async def main_flow(m: Message):
         await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
         return
     if text == "📅 Итоги недели" and collection_screen_allowed(u):
-        await send_weekly_summary(m, u, DB_PATH)
+        await show_weekly_with_support(m, u)
         return
     if text == "🔎 Повторяющийся сценарий" and collection_screen_allowed(u):
         await open_chain_review(m, u)
@@ -15891,6 +15924,7 @@ async def main_flow(m: Message):
             await answer_with_keyboard(m, u, "Закрыть день или просто сделать паузу?", kb_day_pause_confirm, "day_pause_confirm")
             return
         if text in {"🤔 Остаться в коротком режиме", "🤔 Подумаю"} or "коротком режиме" in low or "подумаю" in low:
+            await remember_offer_decision(u, declined=True)
             await log_event(u["user_id"], "offer", "payment_declined_soft", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             await log_event(u["user_id"], "offer", "free_mode_started", {}, DB_PATH, SHEETS_WEBHOOK_URL)
             u["free_mode"] = 1
@@ -16789,7 +16823,7 @@ async def handle_chain_edit(m,u,text):
     if text in {'📅 Итоги недели','🧰 Мои рабочие навыки','🔎 Повторяющийся сценарий'}:
         await close_chain_panel(m,u,panel)
         if text == '📅 Итоги недели':
-            await send_weekly_summary(m,u,DB_PATH)
+            await show_weekly_with_support(m,u)
         elif text == '🧰 Мои рабочие навыки':
             await show_skill_collection(m,u)
         else:
@@ -17251,6 +17285,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         await save_user(u, DB_PATH)
 
     if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
+        await remember_offer_decision(u, declined=True)
         await log_event(uid, "offer", "offer_menu_left", {"source": data}, DB_PATH, SHEETS_WEBHOOK_URL)
         await leave_offer_menu(c.message, u, data)
         await c.answer()
@@ -17396,6 +17431,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {OFFER_CALLBACKS["stay_free"], "stay_free"}:
+        await remember_offer_decision(u, declined=True)
         await log_event(uid, "offer", "payment_declined_soft", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
         await log_event(uid, "offer", "free_mode_started", {"source": "inline"}, DB_PATH, SHEETS_WEBHOOK_URL)
         if not FREE_BETA_ACCESS:

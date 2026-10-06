@@ -388,7 +388,8 @@ async def run() -> None:
         success_msg = await send(uid, "Помогло")
         assert "Что произошло дальше?" in last_text(success_msg), last_text(success_msg)
         success_msg = await send(uid, "Продолжил задачу")
-        assert "сигнал" in all_text(success_msg).lower() or "помог" in all_text(success_msg).lower(), all_text(success_msg)
+        assert "продолжить дело" in all_text(success_msg).lower() or "дело продолжилось" in all_text(success_msg).lower(), all_text(success_msg)
+        assert "в какой момент дело остановилось" not in all_text(success_msg).lower(), all_text(success_msg)
         success_buttons = all_keyboard_texts(success_msg)
         assert {"Проверить", "Не сейчас", "Выбрать другой вариант"}.issubset(success_buttons), success_buttons
 

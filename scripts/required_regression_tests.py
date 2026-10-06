@@ -363,6 +363,15 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
             source="test_offer_auto",
         )
 
+        # Completed days alone are not evidence of benefit.
+        import aiosqlite
+        from core.attempt_evidence import ensure_schema
+        async with aiosqlite.connect(bot.DB_PATH) as db:
+            await ensure_schema(db)
+            for action in ('offer-proof-1', 'offer-proof-2'):
+                await db.execute("INSERT INTO attempt_evidence (user_id,action_id,skill_id,calendar_date,completed,helpfulness,continued) VALUES (?,?,?,?,1,'helped',1)",
+                                 (uid, action, 'open_only', bot.local_date_for_user(u)))
+            await db.commit()
         auto_msg = FakeMessage(uid, "")
         await bot.show_day3_offer(auto_msg, u, "test_auto", mode="auto")
         user_after_auto = await get_user(uid, bot.DB_PATH)
