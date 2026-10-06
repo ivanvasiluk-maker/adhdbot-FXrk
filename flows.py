@@ -1541,34 +1541,21 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 # ============================================================
 
 async def send_weekly_summary(m: Message, u: dict, db_path: str):
-    """Отправить еженедельный отчет"""
-    uid = u["user_id"]
-    since = time.time() - 7 * 24 * 3600
-
+    """Summarize distinct applications over seven local calendar days."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from core.behavior_review import load_rows, render_week
+    from core.behavior_review import DAILY_SKILL_ALIASES
+    try:
+        today = datetime.now(ZoneInfo(str(u.get("timezone") or "Europe/Vilnius"))).date().isoformat()
+    except (ValueError, KeyError):
+        from datetime import timezone
+        today = datetime.now(timezone.utc).date().isoformat()
     async with aiosqlite.connect(db_path) as db:
-        cur = await db.execute(
-            "SELECT event, COUNT(*) FROM events WHERE user_id=? AND ts>=? GROUP BY event",
-            (uid, since)
-        )
-        rows = await cur.fetchall()
-
-    stats = {e: c for e, c in rows}
-
-    profile = await get_user_profile(uid, db_path)
-    msg = (
-        f"📊 {u.get('name') or 'друг'}, итоги недели:\n\n"
-        f"✅ попытки: {stats.get('done',0)}\n"
-        f"↩️ возвраты: {stats.get('return',0)}\n"
-        f"🆘 кризисы: {stats.get('crisis_message',0)}\n\n"
-        "🏆 Достижения развития:\n"
-        f"{progress_achievements_text(u, profile, stats)}\n\n"
-        f"{growth_history_text(u, profile, stats)}\n\n"
-        "Главное:\n"
-        "ты видишь, как меняешься.\n"
-        "Это не игра — это история роста."
-    )
-
-    await m.answer(msg)
+        rows = await load_rows(db, u["user_id"], aliases=DAILY_SKILL_ALIASES)
+    profile = await get_user_profile(u["user_id"], db_path)
+    await m.answer(render_week(rows, today, {sid:skill['name'] for sid,skill in SKILLS_DB.items()},
+        chains=list((profile.get("behavioral_chains") or {}).values()), rejected=profile.get("rejected_hypotheses") or {}))
 
 async def send_progress_report(m: Message, u: dict, db_path: str):
     """Отправить отчет о прогрессе"""

@@ -132,6 +132,7 @@ from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
 from core.personal_working_model import render_working_model, update_working_model
 from core.contextual_memory import load_similar, veto as veto_hypothesis
+from core.behavior_review import load_rows as load_review_rows, recurrence, render_chain, CHAIN_FIELDS, CHAIN_LABELS, POINTS, DAILY_SKILL_ALIASES
 from core.conclusion_engine import (
     model_from_analysis, model_from_dict, render_evidence, render_full_working_model,
     render_short_conclusion, update_next_untested_prediction,
@@ -1060,7 +1061,16 @@ def short_daily_map_text(
     profile: Dict[str, Any], skill_map: Optional[Dict[str, Any]] = None,
     u: Optional[Dict[str, Any]] = None,
 ) -> str:
-    return render_daily_conclusion(daily_conclusion(u or {}, profile))
+    conclusion = daily_conclusion(u or {}, profile)
+    chains = [chain for chain in (profile.get("behavioral_chains") or {}).values()
+              if chain.get("confirmed") and chain.get("mechanism") not in (profile.get("rejected_hypotheses") or {})]
+    chain = chains[-1] if chains else None
+    if chain and chain.get("break_at") in POINTS and not conclusion.get("worse"):
+        conclusion["next_test"] = "Проверим точку изменения: " + POINTS[chain["break_at"]][1]
+    text = render_daily_conclusion(conclusion)
+    if chain:
+        text += "\n\nВы подтвердили этот сценарий: " + (chain.get("behavior") or "подробности ещё уточняем")
+    return text
 
 
 async def send_user_map(m: Message, u: Dict[str, Any], source: str):
@@ -1098,7 +1108,7 @@ async def send_user_map(m: Message, u: Dict[str, Any], source: str):
     await answer_with_keyboard(m, u, txt, markup, u.get("stage") or "training_main")
 
 VOICE_FREE_TEXT_STAGES = {
-    "intent_understand_context", "intent_act_context", "offer_request_form",
+    "intent_understand_context", "intent_act_context", "chain_edit", "offer_request_form",
     "ask_name",
     "await_trainer",
     "notification_consent",
@@ -4108,6 +4118,16 @@ async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_m
             and not any(b.text == "🧰 Мои рабочие навыки" for row in reply_markup.keyboard for b in row)):
         reply_markup = reply_markup.model_copy(update={"keyboard": reply_markup.keyboard +
             [[KeyboardButton(text="🧰 Мои рабочие навыки")]]})
+    if (keyboard_name in {"post_action_reflection", "day_core_stop", "training_main"}
+            and isinstance(reply_markup, ReplyKeyboardMarkup)
+            and sum(len(row) for row in reply_markup.keyboard) < MAX_KEYBOARD_BUTTONS):
+        proposal = await chain_proposal(u)
+        if proposal:
+            reply_markup = reply_markup.model_copy(update={"keyboard": reply_markup.keyboard + [[KeyboardButton(text="🔎 Повторяющийся сценарий")]]})
+    if (keyboard_name in {"day_core_stop", "training_main"}
+            and isinstance(reply_markup, ReplyKeyboardMarkup)
+            and sum(len(row) for row in reply_markup.keyboard) < MAX_KEYBOARD_BUTTONS):
+        reply_markup = reply_markup.model_copy(update={"keyboard": reply_markup.keyboard + [[KeyboardButton(text="📅 Итоги недели")]]})
     entry = find_attempt(u, active_attempt(u).get("attempt_id"))
     if (keyboard_name in {"skill_card", "new_day_skill", "next_logical_step"}
             and isinstance(reply_markup, ReplyKeyboardMarkup) and entry
@@ -9277,18 +9297,6 @@ def new_day_skill_text(skill: Dict[str, Any], profile: Dict[str, Any], u: Option
     return new_day_skill_card_text(skill, u, profile)
 
 
-DAILY_SKILL_ALIASES = {
-    "task_naming": "name_task_one_word",
-    "open_only": "open_without_timer",
-    "phone_far_3min": "phone_away_3_min",
-    "bad_first_step": "bad_draft",
-    "body_before_task": "body_first",
-    "one_breath": "body_first",
-    "minimum_contact": "body_first",
-    "visible_next_step": "one_visible_step",
-    "choose_one": "one_visible_step",
-    "task_cut": "one_visible_step",
-}
 
 
 def _canonical_daily_skill_id(skill_id: Any) -> str:
@@ -13111,6 +13119,14 @@ async def main_flow(m: Message):
     if is_misunderstood_button(text) and u.get("stage") not in {"misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await"}:
         await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
         return
+    if text == "📅 Итоги недели" and collection_screen_allowed(u):
+        await send_weekly_summary(m, u, DB_PATH)
+        return
+    if text == "🔎 Повторяющийся сценарий" and collection_screen_allowed(u):
+        await open_chain_review(m, u)
+        return
+    if await handle_chain_edit(m, u, text):
+        return
     if await handle_memory_confirmation(m, u, text):
         return
     if text == "🧰 Мои рабочие навыки" and collection_screen_allowed(u):
@@ -16609,6 +16625,187 @@ async def on_skiller_action_callback(c: CallbackQuery) -> None:
         await log_event(c.from_user.id, "callback_router", "callback_routed", telemetry, DB_PATH, SHEETS_WEBHOOK_URL)
     await dialogue_message(c.message, u).answer(result["text"], reply_markup=_skiller_markup(result.get("buttons") or []))
     await c.answer()
+
+async def chain_proposal(u, *, include_dismissed=False):
+    if not u.get("user_id") or not u.get("skill_attempts") or safety_mode(u) != "none":
+        return None
+    entry = find_attempt(u, active_attempt(u).get("attempt_id"))
+    if entry and entry.get("effect") == "worse":
+        return None
+    profile = u.get("profile_json")
+    profile = profile if isinstance(profile, dict) else parse_case_data(profile, {})
+    async with aiosqlite.connect(DB_PATH) as db:
+        rows = await load_review_rows(db, u["user_id"], aliases=DAILY_SKILL_ALIASES)
+    proposal = recurrence(rows, today=local_date_for_user(u), rejected=profile.get("rejected_hypotheses") or {})
+    if proposal and (include_dismissed or proposal['signature'] not in (profile.get('dismissed_chain_signatures') or [])) and not any(
+            chain.get('signature') == proposal['signature'] for chain in (profile.get('behavioral_chains') or {}).values()):
+        return proposal
+    return None
+
+
+def chain_panel_valid(u, panel):
+    return (safety_mode(u) == "none" and panel.get("date") == local_date_for_user(u)
+            and panel.get("attempt_id") == active_attempt(u).get("attempt_id")
+            and (u.get("stage") == "chain_edit" or (collection_screen_allowed(u) and panel.get("origin_stage") == u.get("stage"))))
+
+
+def chain_markup(panel, mode='review'):
+    token=panel['token']
+    def button(label, action, value='0'):
+        return InlineKeyboardButton(text=label, callback_data=f"chain:{token}:{action}:{value}")
+    if mode == 'edit':
+        rows=[[button(label,'field',key)] for key,label in zip(CHAIN_FIELDS,CHAIN_LABELS)]
+        rows.append([button('Назад','back')])
+    elif mode == 'points':
+        rows=[[button(label,'point',key)] for key,(label,_) in POINTS.items()]
+        rows.append([button('Назад','back')])
+    elif panel['draft'].get('confirmed'):
+        rows=[[button('Выбрать точку изменения','points')], [button('Исправить пункт','edit')], [button('Вернуться','close')]]
+    else:
+        rows=[[button('Да, похоже','confirm')], [button('Исправить пункт','edit')], [button('Нет, это не мой сценарий','decline')]]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_chain_panel(m, u, panel, mode='review'):
+    panel['token']=uuid.uuid4().hex[:8]
+    ctx=training_context(u); ctx['chain_ui']=panel
+    u['dialogue_context']=json.dumps(ctx,ensure_ascii=False)
+    await save_user(u,DB_PATH)
+    text='Выберите один пункт для уточнения.' if mode == 'edit' else 'Где попробуем изменить сценарий? Выберем одну точку.' if mode == 'points' else render_chain(panel['draft'])
+    await m.answer(text,reply_markup=chain_markup(panel,mode))
+
+
+async def open_chain_review(m,u):
+    draft=await chain_proposal(u, include_dismissed=True)
+    if not draft:
+        profile=await get_user_profile(u['user_id'],DB_PATH)
+        saved=[dict(chain) for chain in (profile.get('behavioral_chains') or {}).values()
+               if chain.get('confirmed') and chain.get('mechanism') not in (profile.get('rejected_hypotheses') or {})]
+        draft=saved[-1] if saved else None
+    if not draft:
+        await m.answer('Пока нет подтверждённого повторения в разных днях. Не буду достраивать цепочку по догадке.')
+        return
+    ctx=training_context(u)
+    draft.setdefault('chain_id','chain_'+uuid.uuid4().hex[:12])
+    panel=dict(date=local_date_for_user(u), attempt_id=active_attempt(u).get('attempt_id'),
+               origin_stage=u.get('stage'), draft=draft,
+               screen={key:ctx.get(key) for key in ('text','markup','inline')})
+    await show_chain_panel(m,u,panel)
+
+
+async def persist_chain(u,panel):
+    profile=await get_user_profile(u['user_id'],DB_PATH)
+    chains=dict(profile.get('behavioral_chains') or {})
+    chains[panel['draft']['chain_id']]=dict(panel['draft'])
+    profile['behavioral_chains']=dict(list(chains.items())[-20:])
+    u['profile_json']=profile
+
+
+async def close_chain_panel(m,u,panel):
+    ctx=training_context(u);ctx.pop('chain_ui',None)
+    u['dialogue_context']=json.dumps(ctx,ensure_ascii=False)
+    if u.get('stage') == 'chain_edit':
+        set_legacy_stage(u,str(panel.get('origin_stage') or 'training_main'))
+    await save_user(u,DB_PATH)
+    screen=panel.get('screen') or {}; markup=screen.get('markup')
+    keyboard=(InlineKeyboardMarkup if screen.get('inline') else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
+    await m.answer(screen.get('text') or 'Вернулись к прежнему шагу. План и результаты сохранены.',reply_markup=keyboard)
+
+
+async def handle_chain_edit(m,u,text):
+    if u.get('stage') != 'chain_edit':
+        return False
+    panel=training_context(u).get('chain_ui') or {}
+    if not chain_panel_valid(u,panel):
+        ctx=training_context(u);ctx.pop('chain_ui',None);u['dialogue_context']=json.dumps(ctx,ensure_ascii=False)
+        set_legacy_stage(u,'day_core_stop' if day_closed_today(u) else 'training_main')
+        await save_user(u,DB_PATH)
+        await m.answer('Этот разбор уже не актуален. Откройте сценарий снова с текущего дня.')
+        return True
+    if text in {'Не сейчас','Отмена'}:
+        await close_chain_panel(m,u,panel)
+        return True
+    if resolve_intent(text,u.get('stage')) == 'STOP':
+        await close_chain_panel(m,u,panel)
+        await handle_conversation_intent(m,u,text)
+        return True
+    if text in {'📅 Итоги недели','🧰 Мои рабочие навыки','🔎 Повторяющийся сценарий'}:
+        await close_chain_panel(m,u,panel)
+        if text == '📅 Итоги недели':
+            await send_weekly_summary(m,u,DB_PATH)
+        elif text == '🧰 Мои рабочие навыки':
+            await show_skill_collection(m,u)
+        else:
+            await open_chain_review(m,u)
+        return True
+    if is_known_reply_button(text) and global_button_kind(text,text.lower()) in {'map','trainer_switch'}:
+        await close_chain_panel(m,u,panel)
+        await handle_global_button(m,u,text)
+        return True
+    if text.startswith('/') or text in CLOSE_DAY_BUTTON_ALIASES or request_kind(text) == 'health_or_medication':
+        return False
+    value=' '.join(text.split())[:240]
+    if not value or is_known_reply_button(text):
+        await m.answer('Уточните выбранный пункт одной фразой или голосом. Можно написать «Не сейчас».')
+        return True
+    field=panel.get('editing')
+    if field not in CHAIN_FIELDS:
+        await close_chain_panel(m,u,panel)
+        return True
+    panel['draft'].update({field:value,'confirmed':False})
+    panel['draft'].setdefault('user_fields',[])
+    if field not in panel['draft']['user_fields']:
+        panel['draft']['user_fields'].append(field)
+    panel.pop('editing',None)
+    set_legacy_stage(u,panel['origin_stage'])
+    await show_chain_panel(m,u,panel)
+    return True
+
+
+@router.callback_query(F.data.startswith('chain:'))
+async def on_chain_callback(c):
+    u=await get_user(c.from_user.id,DB_PATH)
+    if await handle_safety_callback(c,u,c.data or ''):
+        return
+    try:
+        _,token,action,value=(c.data or '').split(':',3)
+    except ValueError:
+        await c.answer('Этот экран уже не актуален.');return
+    panel=training_context(u).get('chain_ui') or {}
+    if token != panel.get('token') or not chain_panel_valid(u,panel):
+        await c.answer('Этот экран уже не актуален. Откройте сценарий снова.');return
+    if action in {'edit','points','back'}:
+        if action == 'points' and not panel['draft'].get('confirmed'):
+            await c.answer('Сначала подтвердите или исправьте схему.');return
+        await show_chain_panel(c.message,u,panel, {'edit':'edit','points':'points','back':'review'}[action])
+    elif action == 'field' and value in CHAIN_FIELDS:
+        panel.update(editing=value,token=uuid.uuid4().hex[:8])
+        if panel['draft'].get('confirmed'):
+            panel['draft']['confirmed']=False
+            await persist_chain(u,panel)
+        ctx=training_context(u);ctx['chain_ui']=panel;u['dialogue_context']=json.dumps(ctx,ensure_ascii=False)
+        set_legacy_stage(u,'chain_edit');await save_user(u,DB_PATH)
+        await c.message.answer(f"{CHAIN_LABELS[CHAIN_FIELDS.index(value)]}: как это было у вас? Одна фраза или голосовое. Можно написать «Не сейчас».")
+    elif action == 'confirm':
+        panel['draft']['confirmed']=True
+        await persist_chain(u,panel)
+        await show_chain_panel(c.message,u,panel)
+    elif action == 'point' and value in POINTS and panel['draft'].get('confirmed'):
+        panel['draft']['break_at']=value
+        await persist_chain(u,panel)
+        await show_chain_panel(c.message,u,panel)
+    elif action in {'decline','close'}:
+        if action == 'decline':
+            panel['draft']['confirmed']=False
+            profile=await get_user_profile(u['user_id'],DB_PATH)
+            profile['dismissed_chain_signatures']=list(dict.fromkeys([*(profile.get('dismissed_chain_signatures') or []),panel['draft']['signature']]))[-30:]
+            chains=dict(profile.get('behavioral_chains') or {})
+            if panel['draft']['chain_id'] in chains:
+                chains[panel['draft']['chain_id']]={**chains[panel['draft']['chain_id']], 'confirmed':False}
+            profile['behavioral_chains']=chains;u['profile_json']=profile
+        await close_chain_panel(c.message,u,panel)
+    await c.answer()
+
 
 def collection_screen_allowed(u):
     return safety_mode(u) == "none" and u.get("stage") in {
