@@ -1884,7 +1884,7 @@ _ANALYSIS_CLARIFY_SETS = {
 kb_misunderstood_reasons = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
-        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Неправильный вывод")],
         [KeyboardButton(text="5. Хочу объяснить иначе")],
     ],
     resize_keyboard=True
@@ -1922,7 +1922,7 @@ kb_trainer_switch = ReplyKeyboardMarkup(
 kb_misunderstood_reasons = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
-        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Неправильный вывод")],
         [KeyboardButton(text="5. Хочу объяснить иначе")],
     ],
     resize_keyboard=True

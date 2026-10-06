@@ -1,0 +1,5 @@
+{
+  "name": "contextual_memory",
+  "behavioral_goal": "return",
+  "success_metric": "Similar situations use distinct confirmed applications with matching mechanism, function and known context; explicit confirmation precedes case reuse. Rejected hypotheses lose priority immediately and stay rejected across feedback and restarts; corrections preserve observed results."
+}

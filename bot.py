@@ -131,6 +131,7 @@ from core.trainer_voice import experiment_result_content, render_message
 from core.personalization_service import process_experiment_outcome
 from core.post_action_feedback import ReflectionContext, build_post_action_reflection
 from core.personal_working_model import render_working_model, update_working_model
+from core.contextual_memory import load_similar, veto as veto_hypothesis
 from core.conclusion_engine import (
     model_from_analysis, model_from_dict, render_evidence, render_full_working_model,
     render_short_conclusion, update_next_untested_prediction,
@@ -1019,6 +1020,8 @@ def daily_conclusion(u: Dict[str, Any], profile: Dict[str, Any], review_override
     best = next((sid for sid in reversed(supported) if sid not in negative), None)
     hypothesis = public_enum_text(str(review.get("barrier") or feedback.get("barrier") or
                                      model.get("primary_hypothesis") or profile.get("main_hypothesis") or "Причину ещё уточняем"))
+    if profile.get("hypothesis_rejected"):
+        hypothesis = "Предыдущий вывод отвергнут; причину ещё уточняем"
     difficulty = {"START":"начать дело", "STAY":"продолжить после первого шага", "RETURN":"вернуться после отвлечения", "unclear":"Пока не выбираем одну главную трудность"}[bottleneck]
     next_sid = {"START":"visible_next_step", "STAY":"one_tab_focus", "RETURN":"restart_after_slip"}.get(bottleneck)
     if next_sid in negative:
@@ -1082,6 +1085,10 @@ async def send_user_map(m: Message, u: Dict[str, Any], source: str):
         txt = trainer_wrap(u, txt, "map")
         txt += f"\n\nТекущий тренер: {trainer.get('emoji', '')} {trainer.get('display_name') or trainer.get('name')}"
         markup = kb_map_with_trainer
+    if profile.get("hypothesis_rejected"):
+        txt = ("Предыдущий вывод вы отвергли. Не используем его как объяснение этой ситуации.\n\n"
+               + render_working_model(profile.get("personal_working_model") or {})
+               + "\n\nНавыки и результаты сохранены\n" + skill_map_lines(skill_map))
     prev_date = u.get("profile_map_shown_date")
     txt = public_enum_text(txt)
     u["profile_map_shown_date"] = today
@@ -1332,7 +1339,26 @@ async def start_intent_action(m, u):
     disabled = set(_profile_list(profile.get("collection_disabled_skills")) + not_fit_today_skills(u, profile))
     learning = profile.get("learning_model") or {}
     available = {key for key in SKILLS_DB if key not in disabled and not skill_blocked_in_model(learning, key)}
-    known = familiar_skill(profile.get("personal_skill_collection") or [], mechanism, skill_target_function(sid), available) if mechanism and not comp.get("request_device") else None
+    ctx = training_context(u)
+    accepted = ctx.pop("accepted_memory", None)
+    if mechanism in (profile.get("rejected_hypotheses") or {}):
+        mechanism = ""
+    memory = None
+    if mechanism and not comp.get("request_device") and not accepted:
+        async with aiosqlite.connect(DB_PATH) as db:
+            memory = await load_similar(db, u["user_id"], mechanism=mechanism, target=skill_target_function(sid),
+                domain=u.get("current_task_context") or "other", available=available, aliases=DAILY_SKILL_ALIASES)
+    if memory:
+        ctx["pending_memory"] = {**memory, "date": local_date_for_user(u), "attempt_id": active_attempt(u).get("attempt_id"), "source_stage": u.get("stage")}
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        set_legacy_stage(u, "intent_memory_confirm")
+        await save_user(u, DB_PATH)
+        await m.answer(f"В похожей ситуации «{SKILLS_DB[memory['skill_id']]['name']}» помог в {memory['count']} отдельных попытках. Это ещё не означает, что причина сейчас та же.\n\nПохоже на прошлый случай?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Да, похоже на прошлый случай")], [KeyboardButton(text="Это сейчас не подходит")]], resize_keyboard=True))
+        return
+    u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+    known = accepted.get("skill_id") if isinstance(accepted, dict) and accepted.get("skill_id") in available else None
+    if not known:
+        known = familiar_skill(profile.get("personal_skill_collection") or [], mechanism, skill_target_function(sid), available) if mechanism and not comp.get("request_device") else None
     if known:
         sid = known
         comp.update(selected_skill=sid, recommended_skill=sid)
@@ -1355,6 +1381,35 @@ async def start_intent_action(m, u):
     if known:
         text = "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.\n\n" + text
     await answer_with_keyboard(m, u, text, action_keyboard(), "training")
+
+
+async def handle_memory_confirmation(m, u, text):
+    if u.get("stage") != "intent_memory_confirm":
+        return False
+    ctx = training_context(u)
+    pending = ctx.get("pending_memory") or {}
+    valid = pending.get("date") == local_date_for_user(u) and pending.get("attempt_id") == active_attempt(u).get("attempt_id")
+    if not valid or text == "Это сейчас не подходит":
+        ctx.pop("pending_memory", None)
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        set_legacy_stage(u, "intent_act_context")
+        # Rejection is contextual: it does not erase useful past results.
+        comp = parse_case_data(u.get("analysis_json"), {})
+        comp["analysis_result"] = {}; comp.pop("selected_barrier", None)
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await m.answer("Хорошо, разберём эту ситуацию заново. Что сейчас мешает одному шагу?")
+        return True
+    if text != "Да, похоже на прошлый случай":
+        if text.startswith("/") or text in CLOSE_DAY_BUTTON_ALIASES or resolve_intent(text, u.get("stage")) == "STOP":
+            return False
+        await m.answer("Выберите, похоже ли это на прошлый случай. Можно отказаться и разобрать ситуацию заново.")
+        return True
+    ctx.pop("pending_memory", None); ctx["accepted_memory"] = pending
+    u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+    set_legacy_stage(u, str(pending.get("source_stage") or "intent_act_context"))
+    await start_intent_action(m, u)
+    return True
 
 
 async def run_analysis(m, u, user_text, db_path, sheets_webhook="", client=None, model="gpt-4o-mini"):
@@ -5345,7 +5400,7 @@ async def persist_personal_working_model(
         )),
         skill_title=public_enum_text(skill.get("name") or sid or "короткий вход"),
         context=str(attempt.get("context_domain") or "general"),
-        successful=result in {"STRONG_SUCCESS", "WEAK_SUCCESS"},
+        successful=True if result in {"STRONG_SUCCESS", "WEAK_SUCCESS"} else False if result == "FAILED" else None,
         evidence_ref=evidence_ref,
         step_size=str(
             snapshot.get("minimum") or snapshot.get("instruction")
@@ -5355,7 +5410,7 @@ async def persist_personal_working_model(
     )
     patch: Dict[str, Any] = {"personal_working_model": model.as_dict()}
     conclusion_data = profile.get("conclusion_model")
-    if isinstance(conclusion_data, dict):
+    if isinstance(conclusion_data, dict) and not profile.get("hypothesis_rejected"):
         try:
             conclusion = model_from_dict(conclusion_data)
             experiment_name = public_enum_text(skill.get("name") or sid or "короткий вход")
@@ -6786,7 +6841,7 @@ async def send_stuck_reason_skill(m: Message, u: Dict[str, Any], code: str, *, u
 
 def is_misunderstood_button(text: str) -> bool:
     low = (text or "").lower().strip()
-    return text == "😑 Ты меня не понял" or "ты меня не понял" in low
+    return text == "😑 Ты меня не понял" or any(value in low for value in ("ты меня не понял", "вы меня не поняли", "не согласен с картой", "не согласна с картой"))
 
 
 def misunderstood_prompt_text() -> str:
@@ -6796,34 +6851,13 @@ def misunderstood_prompt_text() -> str:
         "1. Не та проблема\n"
         "2. Слишком общий ответ\n"
         "3. Не тот навык\n"
-        "4. Это не про лень\n"
+        "4. Неправильный вывод\n"
         "5. Хочу объяснить иначе"
     )
 
 
 def misunderstood_single_question(reason: str) -> str:
-    if reason == "wrong_problem":
-        return (
-            "Понял. Я слишком быстро выбрал гипотезу.\n\n"
-            "Что сейчас тяжелее: постоянная тревога, страх выбрать неправильно "
-            "или ощущение, что всё нужно решить срочно?"
-        )
-    if reason == "too_generic":
-        return (
-            "Понял. Ответ был слишком общий — данных не хватило для точной карты.\n\n"
-            "Назови один конкретный эпизод: что было перед стопором, чего ты боялся(ась) "
-            "и куда ушло внимание?"
-        )
-    if reason == "wrong_skill":
-        return (
-            "Понял. Не буду защищать навык.\n\n"
-            "Что важнее подобрать сейчас: снизить тревогу, убрать страх ошибки, "
-            "разрезать перегруз или остановить уход в быстрые награды?"
-        )
-    return (
-        "Понял. Я не буду додумывать за тебя.\n\n"
-        "Объясни одним сообщением: что было мимо и какой механизм важнее учесть?"
-    )
+    return "Хорошо. Тогда эту версию убираю. Что я понял неверно? Опишите одной фразой или голосом." if reason in {"wrong_problem", "wrong_conclusion", "not_laziness"} else "Что именно не подошло? Опишите один конкретный момент одной фразой или голосом."
 
 
 def misunderstood_context(u: Dict[str, Any]) -> Dict[str, Any]:
@@ -6832,6 +6866,35 @@ def misunderstood_context(u: Dict[str, Any]) -> Dict[str, Any]:
         return data if isinstance(data, dict) and data.get("type") == "misunderstood" else {}
     except Exception:
         return {}
+
+
+async def reject_current_hypothesis(u, reason):
+    comp = parse_case_data(u.get("analysis_json"), {})
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    raw = str(comp.get("selected_barrier") or (comp.get("analysis_result") or {}).get("pattern") or active_attempt(u).get("current_mechanism") or "")
+    mechanism = legacy_mechanism_code(raw)
+    score_key = {"evaluation_avoidance": "fear_of_failure", "perfectionism_error_fear": "fear_of_failure",
+                 "overwhelm": "overload", "attention_drift": "distraction", "low_activation": "low_energy",
+                 "unclear_next_action": "unclear_next_step", "low_reward": "fast_reward_avoidance"}.get(mechanism, "")
+    prior_key = str((profile.get("learning_model") or {}).get("primary_hypothesis") or profile.get("primary_hypothesis") or "")
+    prior_mechanism = {"fear_of_failure": "perfectionism_error_fear", "unclear_next_step": "unclear_next_action", "fast_reward_avoidance": "low_reward", "distraction": "attention_drift"}.get(prior_key) or legacy_mechanism_code(prior_key)
+    keys = [mechanism, score_key, prior_mechanism, prior_key, str(profile.get("primary_hypothesis") or "")]
+    updated = veto_hypothesis(profile, keys, reason=reason)
+    from db import build_profile_prompt
+    updated["profile_prompt"] = build_profile_prompt(updated)
+    # Full snapshot permits explicit clearing; generic profile patches retain empty fields.
+    u["profile_json"] = updated
+    comp.update(hypothesis_rejected=True, hypothesis_status="needs_recheck", conclusion_confirmed=False)
+    for key in ("specific_pattern", "main_pattern", "short_conclusion", "selected_barrier", "hypothesis", "live_pattern", "avoidance_behavior", "useful_signal"):
+        comp.pop(key, None)
+    comp["analysis_result"] = {}
+    comp["input_signal_summary"] = {}
+    u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+    attempt = active_attempt(u)
+    attempt.update(current_mechanism="", last_user_mechanism="")
+    u["active_attempt"] = attempt
+    u["current_mechanism"] = ""
+    await log_event(u["user_id"], "analysis", "hypothesis_rejected", {"reason": reason, "mechanism": mechanism}, DB_PATH, SHEETS_WEBHOOK_URL)
 
 
 async def open_misunderstood_flow(m: Message, u: Dict[str, Any], source: str):
@@ -6865,20 +6928,31 @@ def stored_analysis_user_text(u: Dict[str, Any]) -> str:
 
 
 async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text: str, reason: str, *, replace_skill: bool = False):
-    previous_text = stored_analysis_user_text(u)
+    previous_text = "" if parse_case_data(u.get("analysis_json"), {}).get("hypothesis_rejected") else stored_analysis_user_text(u)
     combined_text = clamp_str(f"{previous_text}\n\nУточнение: {extra_text}" if previous_text else extra_text, 1500)
     comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, combined_text)
     comp.pop("user_text", None)
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    rejected = profile.get("rejected_hypotheses") or {}
+    rebuilt_mechanism = legacy_mechanism_code(str(comp.get("selected_barrier") or (comp.get("analysis_result") or {}).get("pattern") or ""))
+    if rebuilt_mechanism and rebuilt_mechanism in rejected:
+        comp.update(hypothesis_rejected=True, hypothesis_status="needs_recheck", specific_pattern="Причину ещё уточняем", analysis_result={})
+        comp.pop("selected_barrier", None)
     comp.update(safe_analysis_memory(combined_text, comp))
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket") or u.get("bucket") or "mixed"
 
     new_sid = comp.get("selected_skill") if comp.get("selected_skill") in SKILLS_DB else None
+    if replace_skill and new_sid in not_fit_today_skills(u, profile):
+        new_sid = None
     if replace_skill and not new_sid:
         new_sid = rebuild_current_skill(u)
     elif replace_skill and new_sid:
         apply_skill_rebuild(u, new_sid)
+    if replace_skill and new_sid:
+        comp.update(selected_skill=new_sid, recommended_skill=new_sid)
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
 
     source = misunderstood_context(u).get("source") or "analysis"
     u["pending_plan_change"] = None
@@ -6891,9 +6965,9 @@ async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text
         "useful_signal": comp.get("useful_signal"),
         "last_misunderstood_reason": reason,
     }
-    await update_user_profile(u["user_id"], patch, DB_PATH)
+    u["profile_json"] = await update_user_profile(u["user_id"], patch, DB_PATH)
     await log_event(u["user_id"], "analysis", "analysis_rebuilt", {"reason": reason, "bucket": u.get("bucket")}, DB_PATH, SHEETS_WEBHOOK_URL)
-    await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "misunderstood", **patch}, DB_PATH, SHEETS_WEBHOOK_URL)
+    await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "misunderstood", "reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
     if replace_skill and new_sid:
         await log_event(u["user_id"], "training", "skill_rebuilt", {"skill_id": new_sid, "reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
 
@@ -9347,6 +9421,8 @@ def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = No
     ]))
     raw_mechanism = str(attempt.get("current_mechanism") or attempt.get("last_user_mechanism") or "")
     mechanism = legacy_mechanism_code(raw_mechanism) or "unclear_next_action"
+    if mechanism in (profile.get("rejected_hypotheses") or {}):
+        mechanism, raw_mechanism = "unclear_next_action", ""
     functional = learning_model.get("functional_state") if isinstance(learning_model.get("functional_state"), dict) else {}
     preferred_target = str(functional.get("primary_problem") or "START").upper()
     collection = profile.get("personal_skill_collection") or []
@@ -10045,14 +10121,13 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
             )
             return True
         correction = " ".join(text.split())[:240]
-        profile = await get_user_profile(u["user_id"], DB_PATH)
+        await reject_current_hypothesis(u, "map_correction")
+        profile = u.get("profile_json") if isinstance(u.get("profile_json"), dict) else parse_case_data(u.get("profile_json"), {})
         model = dict(profile.get("personal_working_model") or {})
         model["explicit_user_correction"] = correction
         model["confidence"] = "user_corrected"
-        await update_user_profile(
-            u["user_id"], {"personal_working_model": model, "last_memory_anchor": correction},
-            DB_PATH, source="explicit_user_correction",
-        )
+        profile.update(personal_working_model=model, last_memory_anchor=correction)
+        u["profile_json"] = profile
         set_legacy_stage(u, "day_core_stop")
         await save_user(u, DB_PATH)
         await answer_with_keyboard(
@@ -10321,6 +10396,8 @@ def render_prelaunch_full_map(u: Dict[str, Any], profile: Dict[str, Any], skill_
         or profile.get("last_successful_skill") or current_skill_for_action(u) or "open_only"
     ))
     confidence = model_confidence_text(skill_map, attempts)
+    if profile.get("hypothesis_rejected"):
+        barrier, confidence = "Предыдущий вывод отвергнут; причину ещё уточняем", "низкая"
     return (
         "🧭 Твоя рабочая карта\n\n"
         f"Что сейчас чаще ломается\n{barrier}\n\n"
@@ -12271,6 +12348,7 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
                                    kb_analysis_confirm, "confirm_analysis")
         return
     if intent == "reject":
+        await reject_current_hypothesis(u, "wrong_conclusion")
         set_legacy_stage(u, "awaiting_conclusion_correction")
         await save_user(u, DB_PATH)
         await m.answer("Что именно стоит изменить? Одной короткой фразой.")
@@ -12313,6 +12391,18 @@ async def apply_conclusion_correction(m: Message, u: Dict[str, Any], correction:
         profile = dict(raw_profile) if isinstance(raw_profile, dict) else {}
         learning_model = dict(profile.get("learning_model") or {})
         scores = update_hypothesis_scores(learning_model.get("hypothesis_scores") or {}, [correction])
+        if "а не" in correction.lower() or "дело не" in correction.lower():
+            previous_key = learning_model.get("primary_hypothesis") or profile.get("primary_hypothesis")
+            previous_mechanism = legacy_mechanism_code(str(comp.get("selected_barrier") or ""))
+            profile = veto_hypothesis(profile, [previous_key, previous_mechanism], reason="user_correction")
+            learning_model = dict(profile.get("learning_model") or {})
+            comp.update(hypothesis_rejected=True, hypothesis_status="needs_recheck")
+            u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        for key in profile.get("rejected_hypotheses") or {}:
+            scores[key] = 0.0
+        model = dict(profile.get("personal_working_model") or {})
+        model.update(explicit_user_correction=correction, confidence="user_corrected")
+        profile["personal_working_model"] = model
         learning_model["hypothesis_scores"] = scores
         learning_model["primary_hypothesis"] = primary_hypothesis(scores)
         profile.update({"learning_model": learning_model, "hypothesis_scores": scores,
@@ -13017,6 +13107,11 @@ async def main_flow(m: Message):
 
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
+        return
+    if is_misunderstood_button(text) and u.get("stage") not in {"misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await"}:
+        await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
+        return
+    if await handle_memory_confirmation(m, u, text):
         return
     if text == "🧰 Мои рабочие навыки" and collection_screen_allowed(u):
         await show_skill_collection(m, u)
@@ -14012,8 +14107,6 @@ async def main_flow(m: Message):
 
     # "Ты меня не понял" is a rebuild flow, not a dead-end explanation.
     if is_misunderstood_button(text) and u.get("stage") not in {"misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await"}:
-        if user_is_in_action_loop(u):
-            await record_working_map_skill_result(u["user_id"], "failed_skills", current_skill_id(u))
         await open_misunderstood_flow(m, u, u.get("stage") or "unknown")
         return
 
@@ -14924,7 +15017,18 @@ async def main_flow(m: Message):
             except Exception:
                 comp = {}
             comp = comp if isinstance(comp, dict) else {}
+            if comp.get("hypothesis_rejected"):
+                await m.answer("Прежний вывод уже убрали. Что стоит сформулировать вместо него?")
+                set_legacy_stage(u, "misunderstood_problem_await")
+                u["last_misunderstood_reason"] = "wrong_conclusion"
+                await save_user(u, DB_PATH)
+                return
             updated_profile = await update_user_profile(u["user_id"], working_map_profile_patch(comp), DB_PATH, source="working_map_confirmed")
+            if updated_profile.get("hypothesis_rejected"):
+                updated_profile["hypothesis_rejected"] = False
+                model = dict(updated_profile.get("personal_working_model") or {})
+                model["hypothesis_rejected"] = False
+                updated_profile["personal_working_model"] = model
             u["profile_json"] = updated_profile
             if not updated_profile.get("social_support_prompt_shown"):
                 set_legacy_stage(u, "social_support_await")
@@ -14982,6 +15086,7 @@ async def main_flow(m: Message):
         reason = ""
         if text.startswith("1") or "не та проблема" in low:
             reason = "wrong_problem"
+            await reject_current_hypothesis(u, reason)
             set_legacy_stage(u, "misunderstood_problem_await")
             u["last_misunderstood_reason"] = reason
             await save_user(u, DB_PATH)
@@ -14998,60 +15103,21 @@ async def main_flow(m: Message):
             return
         if text.startswith("3") or "не тот навык" in low:
             reason = "wrong_skill"
+            profile = await get_user_profile(u["user_id"], DB_PATH)
+            u["profile_json"] = await update_user_profile(u["user_id"], _not_fit_today_patch(u, profile, current_skill_for_action(u)), DB_PATH, source="wrong_skill")
             set_legacy_stage(u, "misunderstood_problem_await")
             u["last_misunderstood_reason"] = reason
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(misunderstood_single_question(reason))
             return
-        if text.startswith("4") or "не про лень" in low:
-            reason = "not_laziness"
-            await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            try:
-                comp = json.loads(u.get("analysis_json") or "{}")
-                if not isinstance(comp, dict):
-                    comp = {}
-            except Exception:
-                comp = {}
-            safe_prompt = stored_analysis_user_text(u)
-            comp = normalize_analysis(comp, safe_prompt)
-            comp.pop("user_text", None)
-            comp["specific_pattern"] = "страх оценки / стыд / цена ошибки"
-            comp["avoidance_behavior"] = "заморозка перед безопасным черновиком"
-            comp["useful_signal"] = "ленивость исключена из модели; проверяем не внимание, а безопасный черновик"
-            comp["selected_skill"] = "bad_first_draft" if "bad_first_draft" in SKILLS_DB else comp.get("selected_skill")
-            comp.update(safe_analysis_memory(safe_prompt, comp))
-            u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
-            source = misunderstood_context(u).get("source") or "analysis"
-            u["pending_plan_change"] = None
-            set_legacy_stage(u, "confirm_analysis" if source == "confirm_analysis" else "waiting_next_day")
+        if text.startswith("4") or "не про лень" in low or "неправильный вывод" in low:
+            reason = "not_laziness" if "не про лень" in low else "wrong_conclusion"
+            await reject_current_hypothesis(u, reason)
+            set_legacy_stage(u, "misunderstood_problem_await")
+            u["last_misunderstood_reason"] = reason
             await save_user(u, DB_PATH)
-            patch = {
-                "not_laziness_confirmed": True,
-                "last_misunderstood_reason": reason,
-                "main_hypothesis": "страх оценки / стыд / цена ошибки",
-                "main_pattern": "fear_of_evaluation",
-                "avoidance_trigger": "цена ошибки",
-                "avoidance_pattern": "shame_or_evaluation_freeze",
-                "attention_pattern": "",
-            }
-            await update_user_profile(u["user_id"], patch, DB_PATH)
-            await log_event(u["user_id"], "analysis", "analysis_rebuilt", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await log_event(u["user_id"], "analysis", "profile_map_updated", {"source": "misunderstood", **patch}, DB_PATH, SHEETS_WEBHOOK_URL)
-            markup = kb_analysis_confirm if u["stage"] == "confirm_analysis" else kb_training_main
-            await answer_with_keyboard(
-                m,
-                u,
-                "Ок. Исправляю карту.\n\n"
-                "Старую гипотезу убираю.\n"
-                "Новая гипотеза:\n"
-                "— страх оценки / стыд / цена ошибки\n\n"
-                "Сегодня проверяем не внимание,\n"
-                "а безопасный черновик.\n\n"
-                + format_comprehensive_analysis(comp, trainer_key=u.get("trainer_key") or "marsha"),
-                markup,
-                "analysis_rebuilt",
-            )
+            await m.answer(misunderstood_single_question(reason))
             return
         if text.startswith("5") or "объяснить иначе" in low or "по-другому" in low or "по другому" in low:
             reason = "explain_differently"
