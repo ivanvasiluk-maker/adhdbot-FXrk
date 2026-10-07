@@ -363,6 +363,15 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
             source="test_offer_auto",
         )
 
+        # Completed days alone are not evidence of benefit.
+        import aiosqlite
+        from core.attempt_evidence import ensure_schema
+        async with aiosqlite.connect(bot.DB_PATH) as db:
+            await ensure_schema(db)
+            for action in ('offer-proof-1', 'offer-proof-2'):
+                await db.execute("INSERT INTO attempt_evidence (user_id,action_id,skill_id,calendar_date,completed,helpfulness,continued) VALUES (?,?,?,?,1,'helped',1)",
+                                 (uid, action, 'open_only', bot.local_date_for_user(u)))
+            await db.commit()
         auto_msg = FakeMessage(uid, "")
         await bot.show_day3_offer(auto_msg, u, "test_auto", mode="auto")
         user_after_auto = await get_user(uid, bot.DB_PATH)
@@ -639,7 +648,7 @@ async def test_completed_profile_start_resumes_without_onboarding():
         assert "Готов начать разбор и перейти к первому дню?" not in joined
         assert any(marker in joined for marker in (
             "Продолжаем с того места, где остановились.",
-            "Вы уже начали работу со Skiller. Что хотите сделать?",
+            "Пропущенные дни отрабатывать не нужно.",
         ))
 
 
@@ -721,11 +730,11 @@ async def test_stuck_flow_asks_effect_before_aftercare():
         done_msg = FakeMessage(uid, "✅ Сделал")
         await bot.main_flow(done_msg)
         assert any(marker in "\n".join(done_msg.answers) for marker in (
-            "Насколько это помогло?",
+            "Что получилось после шага?",
         ))
 
         effect_text = "\n".join(done_msg.answers)
-        assert "Насколько это помогло?" in effect_text
+        assert "Что получилось после шага?" in effect_text
 
         help_msg = FakeMessage(uid, "Помогло")
         await bot.main_flow(help_msg)
@@ -1065,7 +1074,10 @@ async def test_not_done_context_reason_does_not_mark_worst_skill():
         profile = await bot.get_user_profile(uid, bot.DB_PATH)
         fresh = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
-        assert fresh.get("stage") == "post_action_reflection"
+        assert fresh.get("stage") == "downscale_action"
+        assert "Сейчас только одно:" in "\n".join(m.answers)
+        assert profile["last_skill_feedback"]["completed"] is False
+        assert profile["last_skill_feedback"]["helpfulness"] == "unknown"
         assert profile.get("last_not_completed_reason") == "too_hard"
         assert profile.get("last_not_completed_is_context") is True
         assert not profile.get("worst_skill")
@@ -1367,9 +1379,9 @@ def test_marsha_general_line_shows_assessment_phrase_once_per_day():
     lines = [bot.trainer_general_line_for_user(u) for _ in range(7)]
     assert lines.count("Мягко: это не про оценку, а про следующий маленький шаг.") == 1
     assert lines[1:6] == [
-        "Берём следующий маленький эксперимент.",
-        "Сейчас проверим другой вход.",
-        "Не усиливаем давление. Меняем механизм.",
+        "Можно двигаться маленькими шагами.",
+        "Посмотрим на один доступный шаг.",
+        "Не будем добавлять давления.",
         "Задача не сделать идеально, а остаться рядом.",
         "Ок, двигаемся маленько.",
     ]
@@ -1402,7 +1414,7 @@ async def test_simplified_done_recovery_asks_effect_without_technical_route_mess
         fresh = await get_user(uid, bot.DB_PATH)
         first_response = "\n".join(done_msg.answers)
         assert any(marker in first_response for marker in (
-            "Насколько это помогло?",
+            "Что получилось после шага?",
         ))
         assert "потерял место" not in first_response.lower()
         assert "старый экран" not in first_response.lower()

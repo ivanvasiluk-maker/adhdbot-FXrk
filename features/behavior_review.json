@@ -1,0 +1,5 @@
+{
+  "name": "behavior_review",
+  "behavioral_goal": "return",
+  "success_metric": "A repeating scenario requires distinct reported observations over different local dates; unreported chain links remain unknown until the user supplies them. Confirmation, correction, refusal and one chosen intervention point preserve the daily attempt. Seven-day reviews count journal evidence and distinguish execution, relief and continuation."
+}

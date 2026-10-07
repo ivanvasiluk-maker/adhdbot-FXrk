@@ -79,6 +79,15 @@ async def run():
         bot.PAYMENT_URL_MONTH_1498 = "https://buy.stripe.com/test-skiller-full"
         bot.ENABLE_PAYMENTS = True
         bot.ENABLE_PAID_PLAN = True
+        # Legacy profile signals alone cannot authorize an automatic invitation.
+        import aiosqlite
+        from core.attempt_evidence import ensure_schema
+        async with aiosqlite.connect(db_path) as db:
+            await ensure_schema(db)
+            for action in ('map-proof-1', 'map-proof-2'):
+                await db.execute("INSERT INTO attempt_evidence (user_id,action_id,skill_id,calendar_date,completed,helpfulness,continued) VALUES (?,?,?,?,1,'helped',1)",
+                                 (uid, action, 'bad_draft', bot.local_date_for_user(u)))
+            await db.commit()
         offer_msg = DummyMessage(uid, "")
         await bot.show_day3_offer(offer_msg, u, "smoke_test")
         offer_text = offer_msg.answers[-1]["text"] if offer_msg.answers else ""

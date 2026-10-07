@@ -1,0 +1,1 @@
+{"name":"short_feedback","behavioral_goal":"persist","success_metric":"A newly displayed completed/partial action requires one result choice; relief never implies continuation, failure produces one adapted action after one obstacle choice, and confusion on an active card produces a short physical action."}

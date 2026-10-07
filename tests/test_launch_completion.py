@@ -5,9 +5,17 @@ from unittest.mock import AsyncMock, patch
 import bot
 from db import init_db, migrate_db, default_user, save_user, get_user, update_user_profile, get_user_profile
 from test_dialogue_ux_patch import Message
+from test_commercial_sprint12 import seed_useful
 from core.learning_engine import ExperimentEvidence, update_learning_model
 
 class ConclusionTests(unittest.TestCase):
+    def test_latest_success_does_not_ask_when_task_stopped(self):
+        profile = {'last_skill_feedback': {'skill_id':'open_only','completed':True,
+                   'helpfulness':'helped','continued_after_skill':True}}
+        c = bot.daily_conclusion({},profile)
+        self.assertNotIn('дело остановилось',c['next_test'])
+        self.assertIn('достаточно',c['next_test'])
+
     def test_all_short_screens_share_conflicting_evidence(self):
         model = update_learning_model({}, ExperimentEvidence('open_only', True, 'helped', 'stopped_after_step'), day='2026-10-03')
         profile = {'learning_model':model, 'last_day_review':{'function':'start'},
@@ -82,17 +90,14 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         self.assertIn(u['stage'],{'request_support','request_context'})
         self.assertNotEqual(u['stage'],'training')
 
-    async def test_partial_waits_for_description_and_retains_it(self):
+    async def test_partial_requires_only_one_result_choice(self):
         _,u = await self.send('🟡 Частично')
-        self.assertEqual(u['stage'],'feedback_partial_text')
-        _,u = await self.send('Открыл файл, но на первой строке остановился')
         self.assertEqual(u['stage'],'minimal_feedback_help')
-        await self.send('Не помогло')
-        await self.send('Остановился после шага')
+        await self.send('😐 Без изменений')
         p = await get_user_profile(self.uid,self.path)
         self.assertTrue(p['last_skill_feedback']['partial'])
         self.assertFalse(p['last_skill_feedback']['completed'])
-        self.assertIn('первой строке', p['last_skill_feedback']['user_feedback'])
+        self.assertIsNone(p['last_skill_feedback']['continued_after_skill'])
 
     async def test_offer_restores_exact_pending_question_after_reload(self):
         await self.send('✅ Сделал')
@@ -118,7 +123,7 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         await self.send('✅ Сделал')
         await self.send('Помогло')
         m,u = await self.send('Продолжил задачу')
-        self.assertTrue(any('Если такой формат помогает' in x[0] for x in m.answers))
+        self.assertTrue(any('Вы отметили полезный результат' in x[0] for x in m.answers))
         self.assertEqual(u['stage'],'post_action_reflection')
         self.assertIn('Предлагаю следующий шаг',bot.dialogue_context(u['dialogue_context'])['text'])
         _,u = await self.send('Не сейчас')
@@ -131,11 +136,12 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         u = await get_user(self.uid,self.path)
         u['plan_json']=json.dumps(['open_only'])
         await update_user_profile(self.uid, {'last_skill_feedback':{'completed':True,'helpfulness':'helped','continued_after_skill':True}},self.path)
+        await seed_useful(self.path,u)
         m = Message(uid=self.uid)
         await bot.finalize_day_review(bot.dialogue_message(m,u),u,{'function':'stay','barrier':'отвлечения'},'test')
         texts=[x[0] for x in m.answers]
         final=next(i for i,x in enumerate(texts) if 'Итог программы' in x)
-        offer=next(i for i,x in enumerate(texts) if 'Если такой формат помогает' in x)
+        offer=next(i for i,x in enumerate(texts) if 'Вы отметили полезный результат' in x)
         self.assertLess(final,offer)
         self.assertIn('Самостоятельно:',texts[final])
 
@@ -148,6 +154,7 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         await update_user_profile(self.uid, {'last_skill_feedback':{'completed':True,'helpfulness':'some','continued_after_skill':False}}, self.path)
         u = await get_user(self.uid,self.path)
         m = Message(uid=self.uid)
+        await seed_useful(self.path,u)
         with patch.object(bot,'sync_calendar_day',return_value=3):
             await bot.finalize_day_review(bot.dialogue_message(m,u),u,{'function':'stay','barrier':'отвлечения'},'test')
         texts = [x[0] for x in m.answers]
@@ -170,4 +177,4 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         u = await get_user(self.uid,self.path)
         self.assertEqual(u['stage'],before['stage'])
         self.assertEqual(u['pending_feedback_json'],before['pending_feedback_json'])
-        self.assertIn('Насколько это помогло?',c.message.answers[-1][0])
+        self.assertIn('Что получилось после шага?',c.message.answers[-1][0])

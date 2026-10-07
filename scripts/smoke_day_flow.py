@@ -107,9 +107,8 @@ async def main() -> None:
             user, enough_msg = await send(uid, "🌙 Хватит на сегодня")
             assert "Закрыть день или просто сделать паузу?" in joined(enough_msg)
             user, close_msg = await send(uid, "✅ Закрыть день")
-            assert "Где сегодня чаще ломалась цепочка?" in joined(close_msg)
+            assert "Что сегодня мешало сильнее всего?" in joined(close_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "active"
-            user, _ = await send(uid, "STAY — начал и остановился")
             user, _ = await send(uid, "Телефон / YouTube")
             user, close_msg = await send(uid, "Напряжённо")
             assert "На сегодня можно закончить." in joined(close_msg)
@@ -122,7 +121,7 @@ async def main() -> None:
             assert "🧩 " in joined(voluntary_msg), joined(voluntary_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             user, done_msg = await send(uid, "✅ Сделал")
-            assert "Насколько это помогло?" in joined(done_msg)
+            assert "Что получилось после шага?" in joined(done_msg)
             user, benefit_msg = await send(uid, "Помогло")
             assert "Что произошло дальше?" in joined(benefit_msg)
             user, result_msg = await send(uid, "Продолжил задачу")
@@ -140,8 +139,9 @@ async def main() -> None:
             assert "Если трудно, достаточно этого:" not in force_msg.answers[-2]
             assert "🌱 Новый день" not in force_msg.answers[-1]
             assert "Вчера мы увидели" not in force_msg.answers[-1]
-            assert "🧩 Навык дня — для твоей ситуации:" in force_msg.answers[-1]
-            assert "Минимум:" in force_msg.answers[-1]
+            assert "Способ:" in force_msg.answers[-1]
+            assert "Начать тренировку" in force_msg.answers[-1]
+            assert "Минимум:" not in force_msg.answers[-1]
             assert "📚 Мини-урок" not in force_msg.answers[-1]
             assert user["current_day_id"] != day_id
             assert int(user.get("done_count") or 0) == before_done

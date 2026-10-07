@@ -228,24 +228,8 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
     )
     await m.answer(question, reply_markup=skip_kb)
 
-    # 2️⃣ +1 балл прогресса
-    u["points"] = int(u.get("points") or 0) + 1
-    u["streak"] = int(u.get("streak") or 0) + 1
-    # Уровень растет каждые 7 дней
-    u["level"] = int(u.get("level") or 1)
-    if u["streak"] % 7 == 0:
-        u["level"] += 1
-
-    # Кризисный режим: если не заходил 2 дня
-    last_active = float(u.get("last_active") or 0)
+    # Opening a day is navigation, not a demonstrated ability or return to work.
     now = time.time()
-    if last_active and now - last_active > 2*24*3600:
-        await m.answer(
-            "Пауза = информация, не наказание. "
-            "Сейчас видно, что нужен мягкий возврат: начнём с 3 минут и уточним модель."
-        )
-        u["return_count"] = int(u.get("return_count") or 0) + 1
-
     u["last_active"] = now
     await save_user(u, db_path)
 
@@ -1145,7 +1129,7 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
     first = result.get("first_check") or result.get("recommended_skill_name") or "Назовите одно конкретное дело."
     return ("Что есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
             + "\n\nЧто может мешать\n" + str(hypothesis)
-            + "\nЭто предварительная версия, а не диагноз.\n\nЧто проверим\n" + str(first)
+            + "\n\nЧто можно проверить\n" + str(first)
             + "\n\nПосле шага отдельно посмотрим: стало ли легче и получилось ли продолжить дело. Если станет хуже, остановимся и подберём другой подход.")
 
 
@@ -1365,7 +1349,7 @@ def format_comprehensive_analysis(comp: Dict[str, Any], quick: Optional[Dict[str
     pattern = normalized.get("live_pattern") or comp.get("live_pattern") or detect_live_analysis_pattern(raw_hint)
     return render_analysis_by_trainer(str(pattern), str(key), normalized)
 
-async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini"):
+async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: str, sheets_webhook: str = "", client=None, model: str = "gpt-4o-mini", *, on_action=None, moment_help=False):
     """Запустить анализ"""
     from texts import (
         kb_analysis_confirm,
@@ -1389,6 +1373,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
             await m.answer(comp["support_text"], reply_markup=ReplyKeyboardRemove())
         elif enough:
             await m.answer(comp["support_text"], reply_markup=ReplyKeyboardMarkup(keyboard=[
+                *([[KeyboardButton(text="Вернуться к тренировке")]] if moment_help else []),
                 [KeyboardButton(text="Разобрать конкретное дело")],
                 [KeyboardButton(text="Уточнить мой запрос")],
                 [KeyboardButton(text="На этом пока остановиться")]], resize_keyboard=True))
@@ -1398,12 +1383,14 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
                     "other": "Хочу понять, какая помощь нужна."}[kind]
             note = "\nПо одному описанию диагноз не определяется." if kind == "health_or_medication" else ""
             question = "Что изменилось и как давно?" if kind in {"health_or_medication", "emotional_state"} else "Что произошло и что вы хотите изменить?"
-            await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardRemove())
+            await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Вернуться к тренировке")]], resize_keyboard=True) if moment_help else ReplyKeyboardRemove())
         return
     device = device_from_text(user_text)
     if digital_distraction(user_text) and not device:
         comp = safe_analysis_memory(user_text)
         comp.update(request_kind=kind, request_device=None, device_question_pending=True)
+        if on_action:
+            comp["requested_mode"] = "act_now"
         u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
         set_legacy_stage(u, "request_device")
         await save_user(u, db_path)
@@ -1417,6 +1404,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         memory = safe_analysis_memory(user_text, {"bucket": u.get("bucket") or "mixed"}, needs_more=True)
         memory.update(analysis_routing_memory(memory, analysis_id))
         memory.update(request_kind=kind, request_device=device, physiological_load=physiological_load(user_text))
+        if on_action:
+            memory["requested_mode"] = "act_now"
         u["analysis_json"] = json.dumps(memory, ensure_ascii=False)
         set_legacy_stage(u, "awaiting_barrier_choice")
         u["current_screen_id"] = analysis_id
@@ -1457,6 +1446,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     comp_to_store.update(safe_analysis_memory(user_text, comp_to_store))
     comp_to_store.update(analysis_routing_memory(comp_to_store, f"analysis_{uuid.uuid4().hex[:12]}"))
     analysis_result = build_analysis_result(comp_to_store, user_text)
+    if on_action:
+        comp_to_store["requested_mode"] = "act_now"
     if len(analysis_result.get("evidence_signals") or []) < 3:
         analysis_id = comp_to_store.get("analysis_id") or f"analysis_{uuid.uuid4().hex[:12]}"
         comp_to_store["analysis_id"] = analysis_id
@@ -1473,6 +1464,11 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
     u["analysis_action_transition_shown"] = 0
 
+    if on_action:
+        await save_user(u, db_path)
+        await on_action(m, u)
+        return
+
     # build plan (28 days)
     plan_ids = build_28_day_plan(bucket)
     recommended_variant = analysis_result.get("recommended_variant")
@@ -1480,7 +1476,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         plan_ids[0] = recommended_variant
     if (comp.get("analysis_fallback") or r.get("analysis_fallback")) and "open_only" in SKILLS_DB and recommended_variant not in SKILLS_DB:
         plan_ids[0] = "open_only"
-    if not int(u.get("closed_day_additional_active") or 0):
+    if not moment_help and not int(u.get("closed_day_additional_active") or 0):
         u["plan_json"] = json.dumps(plan_ids, ensure_ascii=False)
         set_legacy_day(u, 1)
 
@@ -1529,34 +1525,21 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
 # ============================================================
 
 async def send_weekly_summary(m: Message, u: dict, db_path: str):
-    """Отправить еженедельный отчет"""
-    uid = u["user_id"]
-    since = time.time() - 7 * 24 * 3600
-
+    """Summarize distinct applications over seven local calendar days."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from core.behavior_review import load_rows, render_week
+    from core.behavior_review import DAILY_SKILL_ALIASES
+    try:
+        today = datetime.now(ZoneInfo(str(u.get("timezone") or "Europe/Vilnius"))).date().isoformat()
+    except (ValueError, KeyError):
+        from datetime import timezone
+        today = datetime.now(timezone.utc).date().isoformat()
     async with aiosqlite.connect(db_path) as db:
-        cur = await db.execute(
-            "SELECT event, COUNT(*) FROM events WHERE user_id=? AND ts>=? GROUP BY event",
-            (uid, since)
-        )
-        rows = await cur.fetchall()
-
-    stats = {e: c for e, c in rows}
-
-    profile = await get_user_profile(uid, db_path)
-    msg = (
-        f"📊 {u.get('name') or 'друг'}, итоги недели:\n\n"
-        f"✅ попытки: {stats.get('done',0)}\n"
-        f"↩️ возвраты: {stats.get('return',0)}\n"
-        f"🆘 кризисы: {stats.get('crisis_message',0)}\n\n"
-        "🏆 Достижения развития:\n"
-        f"{progress_achievements_text(u, profile, stats)}\n\n"
-        f"{growth_history_text(u, profile, stats)}\n\n"
-        "Главное:\n"
-        "ты видишь, как меняешься.\n"
-        "Это не игра — это история роста."
-    )
-
-    await m.answer(msg)
+        rows = await load_rows(db, u["user_id"], aliases=DAILY_SKILL_ALIASES)
+    profile = await get_user_profile(u["user_id"], db_path)
+    await m.answer(render_week(rows, today, {sid:skill['name'] for sid,skill in SKILLS_DB.items()},
+        chains=list((profile.get("behavioral_chains") or {}).values()), rejected=profile.get("rejected_hypotheses") or {}))
 
 async def send_progress_report(m: Message, u: dict, db_path: str):
     """Отправить отчет о прогрессе"""

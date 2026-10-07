@@ -1,0 +1,1 @@
+{"name":"conversation_intent","behavioral_goal":"start","success_metric":"Explicit understand and action requests reach their respective routes; pending application and feedback inputs remain owned by their state; pause and resume restore the exact pending question without inventing success."}

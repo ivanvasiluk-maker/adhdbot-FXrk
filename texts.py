@@ -737,18 +737,8 @@ def bucket_type_honest_explanation(bucket: str) -> str:
 
 
 def preliminary_hypothesis_note() -> str:
-    return (
-        "Пока это предварительная карта.\n\n"
-        "Мы знаем ещё слишком мало.\n"
-        "Сейчас я вижу несколько возможных причин.\n\n"
-        "Но пока не понимаю:\n"
-        "— что помогает тебе возвращаться;\n"
-        "— что сильнее всего выбивает;\n"
-        "— работает ли уменьшение шага;\n"
-        "— помогают ли внешние люди.\n\n"
-        "Это станет понятнее через несколько дней.\n"
-        "Тогда я соберу твою персональную карту."
-    )
+    return "Проверим один шаг. Результат поможет выбрать следующий."
+
 
 
 def preliminary_diagnosis_conclusion_text(
@@ -760,25 +750,17 @@ def preliminary_diagnosis_conclusion_text(
 ) -> str:
     """Short post-diagnosis conclusion; detailed analysis lives behind «📚 Подробнее»."""
     skills_focus = skills_focus or []
-    main_line = main_pattern or "пока вход в действие выглядит слишком дорогим"
-    useful_line = useful_signal or "ты уже заметил(а), где именно ломается старт"
-    check_line = first_check or (str(skills_focus[0]) if skills_focus else "один маленький вход в задачу")
-    reason_line = skill_reason or "он проверяет главный стопор без длинной подготовки"
+    main_line = main_pattern or "первый шаг пока трудно сделать"
+    check_line = first_check or (str(skills_focus[0]) if skills_focus else "один маленький шаг к делу")
+    reason_line = skill_reason or "так проще проверить, что поможет начать"
+    support = f"\n\nНа что можно опереться\n{useful_signal}" if useful_signal else ""
     return (
-        "📌 Короткое заключение\n\n"
-        f"Что вижу сейчас\n— {main_line}\n\n"
-        f"На что можно опереться\n— {useful_line}\n\n"
-        "Что будем делать\n"
-        f"— сначала проверим: {check_line}\n"
-        f"— этот навык выбран потому, что {reason_line}\n"
-        "— после действия обновим вывод по факту, а не будем повторять совет вслепую\n\n"
-        "Что надо развивать\n"
-        "— START: более надёжный вход в задачу\n"
-        "— STAY: удержание после первого шага\n"
-        "— RETURN: возврат после отвлечения или срыва\n\n"
-        "Цель — собрать личный протокол решения этой проблемы, а не просто объяснить, почему она возникает.\n\n"
-        "Если хочешь разбор по механизму — нажми «📚 Подробнее»."
+        f"📌 Короткое заключение\n\nМоя рабочая версия сейчас\n{main_line}"
+        f"{support}\n\nПервый шаг\n{check_line}"
+        f"\n\nПочему этот шаг\n{reason_line}"
+        "\n\nРазбор — по кнопке «📚 Подробнее»."
     )
+
 
 
 def day3_full_conclusion_text(
@@ -1902,7 +1884,7 @@ _ANALYSIS_CLARIFY_SETS = {
 kb_misunderstood_reasons = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
-        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Неправильный вывод")],
         [KeyboardButton(text="5. Хочу объяснить иначе")],
     ],
     resize_keyboard=True
@@ -1940,7 +1922,7 @@ kb_trainer_switch = ReplyKeyboardMarkup(
 kb_misunderstood_reasons = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1. Не та проблема"), KeyboardButton(text="2. Слишком общий ответ")],
-        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Это не про лень")],
+        [KeyboardButton(text="3. Не тот навык"), KeyboardButton(text="4. Неправильный вывод")],
         [KeyboardButton(text="5. Хочу объяснить иначе")],
     ],
     resize_keyboard=True

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import bot
 import aiosqlite
+from test_commercial_sprint12 import seed_useful
 from db import init_db, migrate_db, save_user
 
 
@@ -68,7 +69,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
             bot, "log_event", AsyncMock()
         ):
             await bot.main_flow(message)
-        self.assertEqual(user["stage"], "trainer_intro")
+        self.assertEqual(user["stage"], "await_input_mode")
         self.assertTrue(saved_profile["privacy_consent"])
         self.assertTrue(saved_profile["privacy_consent_at"])
 
@@ -228,6 +229,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
                 user.update({"day": 3, "stage": "day_core_stop"})
                 await save_user(user, file.name)
                 message = SimpleNamespace(answer=AsyncMock())
+                await seed_useful(file.name,user)
                 await bot.show_day3_offer(message, user, "day3", mode="auto")
             finally:
                 bot.DB_PATH = old_db_path

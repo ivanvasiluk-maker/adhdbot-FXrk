@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import re
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from core.skill_schema import Skill
@@ -304,9 +305,15 @@ def update_hypothesis_scores(scores: Mapping[str, float], observations: Sequence
     for observation in observations:
         low = observation.lower()
         matched = {key for key, tokens in aliases.items() if any(token in low for token in tokens)}
+        negated = {key for key, tokens in aliases.items() if any(
+            re.search(r"\bне\s+(?:(?:в|из-за|про|от)\s+)?" + re.escape(token), low)
+            for token in tokens)}
         for key in aliases:
             current = result.get(key, 0.0)
-            result[key] = min(1.0, current + .25) if key in matched else max(0.0, current - .05)
+            if key in negated:
+                result[key] = max(0.0, current - .5)
+            else:
+                result[key] = min(1.0, current + .25) if key in matched else max(0.0, current - .05)
     return result
 
 
@@ -416,6 +423,8 @@ def update_learning_model(
     if evidence.explicitly_changed:
         stats["cooldown_until"] = max(int(stats.get("cooldown_until") or 0), sequence + 3)
     scores = update_hypothesis_scores(current.get("hypothesis_scores") or {}, observations)
+    for key in current.get("rejected_hypotheses") or []:
+        scores[key] = 0.0
     daily_states = {key: value for key, value in (current.get("daily_states") or {}).items()}
     if day:
         daily_states[day] = {

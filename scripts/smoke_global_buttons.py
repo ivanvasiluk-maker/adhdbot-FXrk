@@ -47,9 +47,11 @@ def main() -> None:
         for text, kind in expected.items():
             assert bot.global_button_kind(text, text.lower()) == kind, (state, text, kind)
 
-    assert "стыд" in bot.trainer_style_line("marsha", "stuck")
+    assert "уменьшить шаг" in bot.trainer_style_line("marsha", "stuck")
+    assert "стыд" not in bot.trainer_style_line("marsha", "stuck")
     assert "один шаг" in bot.trainer_style_line("skinny", "general")
-    assert "Гипотеза" in bot.trainer_style_line("beck", "general")
+    assert "проверим один небольшой шаг" in bot.trainer_style_line("beck", "general")
+    assert "избегание" not in bot.trainer_style_line("beck", "general")
     for scenario in ("stuck", "change", "map", "continue", "close", "offer", "curator"):
         assert bot.trainer_style_line("marsha", scenario)
         assert bot.trainer_style_line("skinny", scenario)
