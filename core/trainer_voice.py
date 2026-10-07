@@ -135,13 +135,22 @@ def render_message(
 
 def _render_non_result(trainer: Trainer, content: VoiceContent,
                        recent_template_ids: Sequence[str]) -> RenderedVoiceMessage:
-    if content.message_type == "summary" and content.facts.get("start_result") == "STRONG_SUCCESS":
+    if content.message_type == "summary" and content.facts.get("start_result") == "STRONG_SUCCESS" and content.facts.get("stay_result") in {"EXECUTED_ONLY", "FAILED"}:
         start = str(content.facts.get("start_skill_name") or "навык запуска")
         stay = str(content.facts.get("stay_skill_name") or "навык удержания")
         options = {
-            "skinny": (f"Сегодня «{start}» дал продолжение задачи. «{stay}» удержание не подтвердил. Старт уже получается. Теперь тренируем STAY.",),
-            "marsha": (f"Сегодня через «{start}» получилось продолжить задачу. При этом «{stay}» пока не удержал тебя в ней. Завтра не будем снова учить старту — лучше потренируем STAY.",),
+            "skinny": (f"Сегодня «{start}» дал продолжение задачи. «{stay}» удержание не подтвердил. Начать получилось в этой попытке. Продолжение проверим отдельно.",),
+            "marsha": (f"Сегодня через «{start}» получилось продолжить задачу. Эффект «{stay}» для продолжения пока не подтверждён. В следующий раз можно отдельно проверить продолжение дела.",),
             "beck": (f"Сегодня данные разделяют две функции. «{start}» дал положительный сигнал для START: задача продолжилась. «{stay}» не подтвердил эффект для STAY. Рабочая гипотеза на завтра — смещение барьера к удержанию.",),
+        }[trainer]
+    elif content.message_type == "summary" and content.facts.get("start_result") == "STRONG_SUCCESS":
+        start = str(content.facts.get("start_skill_name") or "способ начала")
+        stay_known = content.facts.get("stay_result") == "STRONG_SUCCESS"
+        detail = "Для способа продолжения тоже подтверждён полезный результат." if stay_known else "Результат способа продолжения пока не известен."
+        options = {
+            "skinny": (f"«{start}»: получилось продолжить дело. {detail} На сегодня достаточно.",),
+            "marsha": (f"После «{start}» дело продолжилось. Сохраним этот результат. {detail}",),
+            "beck": (f"После «{start}» подтверждено продолжение дела в одной попытке. {detail}",),
         }[trainer]
     elif content.message_type == "skill_instruction":
         instruction = str(content.facts.get("instruction") or content.core_message)
