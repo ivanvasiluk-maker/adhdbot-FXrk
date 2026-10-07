@@ -60,6 +60,13 @@ def support_ceiling(rows, today, chains):
         trials = [entries[ref] for ref in set(chain.get('source_refs') or []) if ref in entries
                   and entries[ref].get('completed') == 1 and entries[ref].get('continued') == 0
                   and entries[ref].get('helpfulness') != 'worse']
+        # Re-check the confirmed pattern against newer matching observations.
+        matching = [r for r in entries.values() if chain.get('mechanism')
+                    and chain.get('domain') and r.get('mechanism') == chain['mechanism']
+                    and r.get('context_domain') == chain['domain']]
+        latest = max(matching, key=lambda r: (r['calendar_date'], r.get('reported_at') or '', r['action_id']), default={})
+        if latest.get('continued') == 1 or latest.get('helpfulness') == 'worse':
+            continue
         if len(trials) >= 3 and len({r['calendar_date'] for r in trials}) >= 2:
             return (f'В подтверждённом вами сценарии после {len(trials)} выполненных проб дело не продолжилось. '
                     'Можно продолжать проверять способы здесь или обсудить эту точку с Иваном. '

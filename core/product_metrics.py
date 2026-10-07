@@ -2,6 +2,7 @@
 from collections import defaultdict
 from datetime import date
 from core.autonomy import dated_rows
+from core.behavior_review import reported
 from core.personal_skill_collection import successful, CONTEXTS
 
 
@@ -21,7 +22,7 @@ def product_metrics(users, rows, today, *, model_assessments=(), memory_assessme
     for uid in cohort:
         grouped[uid] = dated_rows([r for r in rows if r.get('user_id') == uid], today)
     active = {r['user_id'] for r in rows if r.get('user_id') in cohort
-              and r.get('skill_id') and valid_assessment_date(r.get('calendar_date'), today)}
+              and r.get('skill_id') and (r.get('shown_at') or reported(r)) and valid_assessment_date(r.get('calendar_date'), today)}
     adopted, independent, transfer, returning = set(), set(), set(), set()
     reported_users = {uid for uid, rr in grouped.items() if rr}
     continued = assessed = 0
@@ -41,7 +42,7 @@ def product_metrics(users, rows, today, *, model_assessments=(), memory_assessme
                     if r.get('context_domain') in CONTEXTS and r['context_domain'] != 'other'}) >= 2
                for applications in skills.values()): transfer.add(uid)
     def judged(records):
-        unique = {r['assessment_id']: r for r in records if r.get('assessment_id')
+        unique = {(r['user_id'], r['assessment_id']): r for r in records if r.get('assessment_id')
                   and r.get('user_id') in cohort and type(r.get('confirmed')) is bool
                   and valid_assessment_date(r.get('calendar_date'), today)}
         return measure(sum(r['confirmed'] is True for r in unique.values()), len(unique))
