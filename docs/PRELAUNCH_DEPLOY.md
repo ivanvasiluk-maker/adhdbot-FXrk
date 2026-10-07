@@ -1,41 +1,50 @@
-# SKILLER staging and production promotion
+# SKILLER: пробный запуск, выпуск и откат
 
-SKILLER keeps the existing single-process/SQLite stack. Staging and production must use different Telegram bots, environment files, and database files.
+Рабочий и тестовый бот используют разные токены Telegram, настройки и базы SQLite. На одном токене работает один процесс. Секреты хранятся вне Git.
 
-## Staging
+## Текущий кандидат
 
-1. Create a Telegram test bot and copy `.env.staging.example` to a secret environment file outside Git.
-2. Set a unique `BOT_TOKEN`, `ADMIN_IDS`, and `DB_PATH=data/skiller-staging.db`. Never point this path at the production volume.
-3. Deploy the `develop`/`staging` branch only.
-4. Validate startup and run the bot:
+Спринты 1–12 из №141 объединены в main. Исправления аудита — №142, ветка `codex/skiller-final-audit-20261007`. Старые №140 и ветка от 3 октября больше не являются кандидатом. Проверки PATCH-62 на коммите `6fdf564154e6adba8e3017c91d3c93d5ea2e95a0` прошли; рабочий бот не обновлён. Для следующих изменений проверять новый итоговый коммит.
+
+## Проверка на отдельном боте
+
+1. Развернуть выбранный коммит на тестовом боте. Взять `.env.staging.example`, указать отдельные BOT_TOKEN, ADMIN_IDS, DB_PATH. Не подключать рабочую базу.
+2. Установить зависимости, загрузить секретные настройки штатным способом сервера и выполнить:
 
 ```bash
-set -a; . /secure/path/skiller-staging.env; set +a
-python scripts/check_build_sanity.py
-python scripts/required_regression_tests.py
+python scripts/regression_gate.py
 BOT_STARTUP_CHECK=1 python bot.py
-bash scripts/start_bot.sh
 ```
 
-5. Manually smoke-test `/admin`: reset test user, start day, fake success/failure, Day 1 insight, prediction, offer paths, free exit, and lead form.
+3. Запустить бота штатным способом сервера. Выполнить [живые проверки](PILOT_CHECKLIST_2026-10-07.md). Автоматические проверки не заменяют голосовое сообщение, ответ подключённой модели и доставку заявки Ивану.
+4. Записать коммит, результаты и замечания. Сначала 5–10 взрослых участников; расширение до 10–30 — после устранения ошибок первого прогона.
 
-## Production promotion
+## Условия и настройки
 
-Production is never deployed directly from an AI-generated commit.
+- FREE_BETA_ACCESS=1, ENABLE_PAYMENTS=0, ENABLE_PAID_PLAN=false, PAYMENT_ACCEPT_ANY=0: бот бесплатный, встроенная оплата выключена.
+- VOLUNTARY_SUPPORT_URL оставить пустым на пробном запуске. Непустая ссылка отдельно включает добровольную поддержку; это не обязательная подписка и не условие доступа. Подключать её после проверки получателя и условий регулярного списания.
+- PERSONAL_MONTH_FROM_EUR=99, GROUP_PROGRAM_EUR=240: отдельная личная работа от €99 в месяц или группа на 8 недель за €240. До оплаты объяснить состав помощи, расписание и условия отмены.
+- На рабочем боте TEST_MODE=0; TEST_CHEAT_CODE и INTERNAL_TEST_USER_IDS пустые. Указать администраторов в ADMIN_IDS. Получатель заявок задаётся отдельно: CURATOR_TELEGRAM_ID — проверенный Telegram ID Ивана, CURATOR_USERNAME — его имя для прямой ссылки. Не полагаться на значения по умолчанию; Иван должен начать диалог с нужным ботом, затем фактически проверить получение заявки. ADMIN_IDS не задаёт получателя заявок.
+- Флаги новых движков и архитектуры оставить как в проверенной конфигурации. Не включать их вместе с выпуском без отдельной проверки.
 
-1. Ensure staging smoke tests passed and the candidate commit is reviewed.
-2. Open and review a PR from `develop`/`staging` to `main`.
-3. Run the full suite on the exact candidate commit: `python scripts/regression_gate.py`.
-4. Merge to `main` only after review.
-5. Copy `.env.production.example` to the production secret store. Use the production Telegram token and `DB_PATH=data/skiller-production.db`; set `PAYMENT_ACCEPT_ANY=0` and `TEST_MODE=0`.
-6. Back up the production database: `python scripts/backup_sqlite.py`.
-7. Run `BOT_STARTUP_CHECK=1 python bot.py` against production configuration.
-8. Deploy `main`, then smoke-test `/health`, `/whoami`, `/privacy`, free navigation, voice transcription, and both support-request paths. Bot payment remains disabled during the free beta.
-9. Roll back to the previous reviewed commit and database backup if startup, routing, or payment smoke checks fail.
+## Обновление рабочего бота
 
+После проверки кандидата и решения о выпуске:
 
-## Launch candidate, 3 October 2026
+1. Записать текущий рабочий коммит и настройки. Проверенный кандидат объединить в main; записать точный коммит выпуска.
+2. Сделать копию базы по её реальному пути. Команда требует позиционный аргумент. Пример для пути из `.env.production.example`:
 
-Candidate branch: `codex/skiller-launch-sprint1-20261003`, PR #140. Before promotion follow the nine journeys in `docs/LAUNCH_AUDIT_2026-10-03.md` on a separate test bot.
+```bash
+python scripts/backup_sqlite.py /data/skiller-production.db --output /secure/backups/skiller-before-release.db
+```
 
-Set `PERSONAL_MONTH_FROM_EUR=99` and `GROUP_PROGRAM_EUR=240`. The former fixed `HUMAN_SKILL_SESSION_EUR` environment setting is superseded; group per-session values derive from the programme price. The programme final summary uses saved plan length, falling back to `PROGRAM_REVIEW_DAY=28` when no plan exists. Keep bot payment flags as reviewed; these changes sell separate live support and do not enable checkout.
+Путь копии должен быть уникальным для каждого выпуска: скрипт запрещает перезапись. Копия содержит данные пользователей; хранить её с ограниченным доступом вне репозитория.
+
+3. Выполнить BOT_STARTUP_CHECK=1 python bot.py с рабочими настройками. Остановить старый процесс и запустить выбранный коммит через обычную систему управления сервером. Не запускать две копии на одном токене.
+4. Проверить /health, /whoami, /privacy, первое действие, настоящее голосовое сообщение, паузу и обе заявки. Доставка подтверждается получением на стороне Ивана, а не только сообщением «отправлено» у пользователя.
+
+## Откат
+
+При невозможности начать действие, потере состояния, ошибке доступа к данным или массовых сбоях остановить новый процесс и вернуть предыдущий проверенный коммит с прежними настройками. Проверить запуск, запустить один процесс и пройти основной путь.
+
+Базу не заменять старой копией автоматически: после выпуска в ней могут появиться новые результаты и заявки. Сначала проверить совместимость предыдущего кода с текущей базой. Восстановление копии нужно при повреждении базы или несовместимом изменении схемы, после сохранения текущей базы и отдельного разбора новых записей. Записать время отката, причину и судьбу новых заявок.
