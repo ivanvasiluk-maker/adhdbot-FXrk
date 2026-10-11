@@ -413,7 +413,7 @@ async def test_support_request_form_remains_available_during_free_beta():
         assert opened["stage"] == "offer_request_form"
         assert opened.get("pending_offer_request_format") == "Личная работа — условия обсудим заранее"
         joined = "\n".join(request_cb.message.answers)
-        assert "соберём заявку" in joined
+        assert "Заявка на формат" in joined
         assert "Личная работа — условия обсудим заранее" in joined
 
 
