@@ -790,91 +790,23 @@ def determine_development_focus(profile: Dict[str, Any]) -> Dict[str, str]:
 
 
 def daily_profile_explanation(profile: Dict[str, Any], skill_id: str = "", day: int | None = None) -> str:
-    """Explain today's recommendation from accumulated profile without sounding diagnostic."""
+    """Name a proposed check; elapsed days never manufacture psychological evidence."""
     profile = profile or {}
-    focus = determine_development_focus(profile)
-    dev_map = normalize_development_map(profile.get("development_map"))
+    skill_label = label(SKILL_LABELS, skill_id, "один небольшой шаг") if skill_id else "один небольшой шаг"
+    latest = profile.get("last_skill_feedback") or {}
+    facts = []
+    if latest.get("continued_after_skill") is True:
+        facts.append("В прошлой отмеченной попытке дело продолжилось.")
+    elif latest.get("helpfulness") in {"helped", "some"}:
+        facts.append("В прошлой отмеченной попытке стало легче. Продолжение дела проверим отдельно.")
+    elif latest.get("helpfulness") == "worse":
+        facts.append("В прошлой отмеченной попытке стало хуже. Прежний способ не стоит повторять автоматически.")
+    if not facts:
+        facts.append("Пока данных мало. Проверим, что помогает в сегодняшней ситуации.")
+    return "\n".join(["🧭 Сегодняшняя проверка", *facts,
+                       f"Попробуем «{skill_label}» и отдельно отметим, получилось ли продолжить дело.",
+                       "Это рабочая версия, не диагноз."])
 
-    yesterday_insights = []
-    if int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in _as_list(dev_map.get("helps")):
-        yesterday_insights.append("вход в задачу часто становится слишком большим")
-        yesterday_insights.append("после уменьшения шага становится легче")
-    if profile.get("attention_pattern") == "scroll_autopilot" or int(profile.get("attention_escape_count") or 0):
-        yesterday_insights.append("телефон появляется как способ уйти от напряжения")
-    if profile.get("failed_skill") or profile.get("failed_skills"):
-        yesterday_insights.append("если навык не подошёл, нужен более простой вход")
-    if profile.get("best_skill") or profile.get("last_successful_skill"):
-        skill = label(SKILL_LABELS, profile.get("best_skill") or profile.get("last_successful_skill"), str(profile.get("best_skill") or profile.get("last_successful_skill")))
-        yesterday_insights.append(f"раньше помогал формат «{skill}»")
-    if not yesterday_insights:
-        yesterday_insights.append("данных пока мало, поэтому начинаем с самого безопасного входа")
-    current_pattern = label(PATTERN_LABELS, profile.get("main_pattern") or profile.get("avoidance_pattern"), "важная задача → много вариантов → напряжение → откладывание → труднее начать")
-
-    if skill_id:
-        skill_label = label(SKILL_LABELS, skill_id, skill_id)
-        today_hypothesis = f"помогает ли тебе навык «{skill_label}» как следующий маленький вход"
-    elif int(profile.get("downscale_count") or 0) > 0:
-        today_hypothesis = "помогает ли тебе вход без требования работать долго"
-    else:
-        today_hypothesis = "помогает ли тебе начать с одного маленького физического шага"
-
-    day_num = max(1, int(day or 1))
-    if day_num == 1:
-        map_lines = [
-            "🧭 Предварительная карта",
-            "",
-            "Пока это гипотеза.",
-            "Сегодня мы смотрим, где ломается вход в задачу.",
-        ]
-    elif day_num == 2:
-        first_signal_lines = [
-            f"что помогает: {label(SKILL_LABELS, skill_id, 'маленький вход в задачу') if skill_id else 'маленький вход в задачу'}",
-            "где шаг оказался большим",
-            "как ты реагируешь на залипание",
-        ]
-        map_lines = [
-            "🧭 Первые сигналы",
-            "",
-            "Уже видно:",
-            "\n".join(f"— {item}" for item in first_signal_lines),
-        ]
-    elif day_num == 3:
-        map_lines = [
-            "🧭 Первый паттерн",
-            "",
-            "Теперь видно не отдельные реакции, а цикл:",
-            current_pattern,
-            "",
-            "Можно продолжить коротко или включить полный режим.",
-        ]
-    else:
-        new_insight = yesterday_insights[0] if yesterday_insights else "карта уточняется по сегодняшним действиям"
-        map_lines = [
-            "🧭 Уточнение карты",
-            "",
-            "Сегодня карта стала точнее:",
-            new_insight,
-            "",
-            "Следующая проверка:",
-            today_hypothesis,
-        ]
-
-    lines = [
-        *map_lines,
-        "",
-        "Это не диагноз и не окончательный вывод.",
-        "Карта уточняется по твоим действиям.",
-        "",
-        f"🧭 Сегодняшний фокус: {focus['label']}.",
-        f"Почему так: {focus['reason']}.",
-    ]
-    if int(profile.get("downscale_count") or 0) > 0 or "уменьшение шага" in _as_list(dev_map.get("helps")):
-        lines.append("В прошлый раз маленький шаг помог тебе начать, поэтому сегодня начнём так же.")
-    if skill_id:
-        skill_label = label(SKILL_LABELS, skill_id, skill_id)
-        lines.append(f"Мы проверим навык «{skill_label}» как следующий маленький шаг маршрута.")
-    lines.append("Эта модель будет уточняться после твоих действий; данных может быть пока мало.")
-    return "\n".join(lines)
 
 def render_development_map(profile: Dict[str, Any]) -> str:
     dev_map = normalize_development_map((profile or {}).get("development_map"))

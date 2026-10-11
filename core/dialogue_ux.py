@@ -15,6 +15,7 @@ VOICE_FAILURE = "Кажется, голосовое не распозналос�
 # Captions change at the boundary; legacy handlers keep stable command values.
 # Callback action IDs are never rewritten.
 BUTTON_LABELS = {
+    "🐈‍⬛ Скинни (жёстко)": "🐈‍⬛ Скинни — коротко и прямо",
     "🚀 Продолжил дело": "🚀 Дело продолжилось",
     "📱 Отвлёкся": "📱 Произошло отвлечение",
     "❓ Не понял, что делать": "❓ Неясно, что делать",
@@ -178,6 +179,7 @@ def plain_text(text: str) -> str:
         part = chunks[i]
         for old, new in sorted(PLAIN_TERMS.items(), key=lambda item: -len(item[0])):
             part = re.sub(r"(?<!\w)" + re.escape(old) + r"(?!\w)", lambda m: new[:1].upper() + new[1:] if m[0][:1].isupper() else new, part, flags=re.I)
+        part = re.sub(r"(?<!\w)default(?:_|\*)start(?:_|\*)block(?!\w)", "первое действие пока трудно выбрать", part)
         for code, label in {"START": "начало", "STAY": "продолжение", "RETURN": "возвращение"}.items():
             part = re.sub(r"\b" + code + r"\b", label, part)
         chunks[i] = part

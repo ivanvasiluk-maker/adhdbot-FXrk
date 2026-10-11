@@ -209,10 +209,10 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
 
     # Утренний быстрый чек — только начиная со 2-го дня
     if day > 1:
-        sleep = u.get("last_sleep") or "?"
-        anxiety = u.get("last_anxiety") or "?"
-        energy = u.get("last_energy") or "?"
-        await m.answer(f"🕒 Быстрый чек\nСон: {sleep}\nТревога: {anxiety}\nЭнергия: {energy}")
+        check = [("Сон", u.get("last_sleep")), ("Тревога", u.get("last_anxiety")), ("Энергия", u.get("last_energy"))]
+        known = [f"{name}: {value}" for name, value in check if value is not None and value != ""]
+        if known:
+            await m.answer("Последние отмеченные значения\n" + "\n".join(known))
 
     await m.answer(daily_profile_explanation(profile, sid, day))
 
@@ -1286,7 +1286,11 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
         log.warning("[AI] Comprehensive analysis fallback: OpenAI client or model is not configured")
         return fallback
 
-    system = AI_ANALYSIS_SYSTEM_PROMPT + "\n" + address_instructions(addressing)
+    system = (AI_ANALYSIS_SYSTEM_PROMPT + "\n" + address_instructions(addressing)
+              + "\nОпирайся только на сообщённые факты. Не утверждай, что телефон снимает напряжение, "
+                "если человек этого не сообщил. Причина — проверяемая гипотеза. Не придумывай симптомы, "
+                "социальные опоры или успешные действия. Поля specific_pattern и useful_signal пиши "
+                "простым русским языком, без кодов, англицизмов и диагноза.")
     try:
         resp = client.chat.completions.create(
             model=model,

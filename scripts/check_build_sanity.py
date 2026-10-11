@@ -289,11 +289,11 @@ def check_launch_week_invariants() -> list[str]:
             errors.append(f"safety tone invariant: forbidden certainty marker remains: {marker!r}")
 
     daily_profile_required = (
-        "Сегодняшний фокус",
+        "Сегодняшняя проверка",
         "current_development_focus",
         "development_focus_reason",
-        "В прошлый раз маленький шаг помог",
-        "Мы проверим навык",
+        'latest.get("continued_after_skill") is True',
+        "Продолжение дела проверим отдельно",
     )
     combined_daily_text = "\n".join((db_text, (REPO_ROOT / "flows.py").read_text(encoding="utf-8")))
     for marker in daily_profile_required:
