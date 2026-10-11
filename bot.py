@@ -1248,17 +1248,30 @@ async def handle_application_input(m, u, text):
             await m.answer("Сейчас открыта заявка. Напиши свой запрос одним сообщением. "
                            "Чтобы вернуться к тренировке без заявки, напиши /cancel.")
             return True
-        request_text = (text or "").strip()
-        if len(request_text) < 5:
-            await m.answer("Напишите одной фразой, с чем нужна помощь. Если в Telegram нет имени пользователя, добавьте один контакт для ответа.")
-            return True
+        incoming = (text or "").strip()
+        ctx = dialogue_context(u.get("dialogue_context"))
+        parts = list(ctx.get("offer_request_parts") or [])
+        if incoming and incoming not in parts:
+            parts.append(incoming)
+        ctx["offer_request_parts"] = parts
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        request_text = "\n".join(parts)
         known_username = getattr(m.from_user, "username", None) or u.get("username")
-        has_contact = bool(known_username or "@" in request_text or re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", request_text) or re.search(r"\+?\d[\d ()-]{6,}", request_text))
+        def contact_only(value):
+            return bool(re.fullmatch(r"(?:@[\w]+|[\w.+-]+@[\w.-]+\.\w+|\+?[\d ()-]{7,}|https?://t\.me/[\w]+)", value.strip()))
+        has_contact = bool(known_username or any(contact_only(part) for part in parts))
+        has_request = any(not contact_only(part) and len(part.strip()) >= 2 for part in parts)
+        if not has_request:
+            await m.answer("Какой вопрос хочется разобрать? Можно коротко, например: СДВГ или тревога.")
+            return True
         if not has_contact:
-            await m.answer("Запрос понял. Не хватает только контакта для ответа — пришли username, почту или телефон.")
+            await m.answer("Ответ сохранён. Для связи нужен контакт: @username, почта или телефон. Можно также дополнить запрос.")
             return True
         source = str(u.get("pending_offer_request_format") or "offer_request")
         lead_meta = lead_metadata(u, m.from_user, request_text, source)
+        ctx.pop("offer_request_parts", None)
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         u["last_offer_action"] = "offer_request_submitted"
         set_legacy_stage(u, OFFER_MENU_STAGE)
         await save_user(u, DB_PATH)
@@ -11823,7 +11836,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-64\n"
+            "Product release PATCH-65\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -13205,6 +13218,13 @@ async def main_flow(m: Message):
 
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
+        return
+    if u.get("stage") in {"await_training_target", "training", "training_main", "await_task_physical_step"} and re.search(
+        r"не (?:хочу|буду) (?:делать|выполнять|проходить) (?:задания|упражнения|тренировки)(?: этого бота| бота)?", text.lower()
+    ):
+        set_legacy_stage(u, "training_main")
+        await save_user(u, DB_PATH)
+        await m.answer("Хорошо, сейчас остановимся. Выполнять задания не обязательно. Можно вернуться позже или выбрать другой способ через меню.", reply_markup=kb_training_main)
         return
     if not proactive_protected(u) and parse_intention(text, u):
         plan = parse_intention(text, u)
@@ -17286,6 +17306,11 @@ async def on_offer_callbacks(c: CallbackQuery):
     if not await claim_callback_once(c, u, "offer"):
         return
     data, _, _ = split_versioned_callback(data)
+    exit_callbacks = {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
+                      OFFER_CALLBACKS["back"], OFFER_CALLBACKS["stay_free"], "continue_free", "offer_back", "stay_free"}
+    if data in exit_callbacks and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
+        await c.answer("Этот экран уже закрыт. Продолжай с текущего места.")
+        return
     if FREE_BETA_ACCESS and data not in {
         OFFER_CALLBACKS["conclusion_full"], OFFER_CALLBACKS["next_plan"],
         OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
@@ -17380,6 +17405,9 @@ async def on_offer_callbacks(c: CallbackQuery):
             OFFER_CALLBACKS["request_group"]: "Группа навыков для взрослых с СДВГ — собеседование",
         }[data]
         set_legacy_stage(u, "offer_request_form")
+        ctx = dialogue_context(u.get("dialogue_context"))
+        ctx.pop("offer_request_parts", None)
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         u["pending_offer_request_format"] = format_label
         u["last_offer_action"] = data
         await save_user(u, DB_PATH)
@@ -18198,7 +18226,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-64)")
+        log.info("Public bot description is current (PATCH-65)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 
