@@ -1260,7 +1260,7 @@ async def handle_application_input(m, u, text):
         known_username = getattr(m.from_user, "username", None) or u.get("username")
         def contact_only(value):
             return bool(re.fullmatch(r"(?:@[\w]+|[\w.+-]+@[\w.-]+\.\w+|\+?[\d ()-]{7,}|https?://t\.me/[\w]+)", value.strip()))
-        has_contact = bool(known_username or any(contact_only(part) for part in parts))
+        has_contact = bool(known_username or re.search(r"@[\w]+|[\w.+-]+@[\w.-]+\.\w+|\+?\d[\d ()-]{6,}|https?://t\.me/[\w]+", request_text))
         has_request = any(not contact_only(part) and len(part.strip()) >= 2 for part in parts)
         if not has_request:
             await m.answer("Какой вопрос хочется разобрать? Можно коротко, например: СДВГ или тревога.")
@@ -8597,18 +8597,16 @@ def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = N
 
 def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = False) -> str:
     contact_line = (
-        "Контакт уже есть в Telegram — повторять username или почту не нужно.\n"
+        "Контакт из Telegram будет добавлен автоматически.\n"
         if has_telegram_contact else
-        "Добавь один контакт для ответа — username, почту или телефон.\n"
+        "Для ответа нужен один контакт: @username, почта или телефон.\n"
     )
     return (
-        f"Ок, соберём заявку на формат: {format_label}.\n\n"
-        "Доступный Telegram-контакт я добавлю автоматически.\n"
+        f"Заявка на формат: {format_label}.\n\n"
         + contact_line +
-        "Напиши одним сообщением только недостающее:\n"
-        "1. Как к тебе обращаться (если ещё не указано)\n"
-        "2. Что хочешь разобрать / какой запрос\n\n"
-        "Можно коротко; Telegram-ник повторять не нужно."
+        "Что хочется разобрать? Можно коротко, например: СДВГ или тревога.\n"
+        "Имя, запрос и контакт можно прислать вместе или отдельными сообщениями.\n\n"
+        "Отменить заявку и вернуться — /cancel."
     )
 
 

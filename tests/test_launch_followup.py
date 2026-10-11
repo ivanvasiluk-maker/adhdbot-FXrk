@@ -46,3 +46,9 @@ class Followup(unittest.IsolatedAsyncioTestCase):
             await bot.on_offer_callbacks(c)
             leave.assert_not_awaited()
             self.assertFalse(c.message.answers)
+
+    async def test_contact_in_same_message_is_accepted(self):
+        u = await self.user(stage='offer_request_form')
+        with patch.object(bot, 'notify_offer_request', AsyncMock(return_value=True)) as notify, patch.object(bot, 'log_event', AsyncMock()):
+            await bot.handle_application_input(Message(self.uid,'СДВГ @ivam'),u,'СДВГ @ivam')
+            notify.assert_awaited_once()
