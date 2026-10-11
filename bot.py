@@ -12360,6 +12360,8 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
     comp["specific_pattern"] = PUBLIC_ENUM_LABELS[barrier]
     comp["live_pattern"] = barrier_patterns[barrier]
     comp["hypothesis"] = PUBLIC_ENUM_LABELS[barrier]
+    if str(comp.get("useful_signal") or "").startswith("чаще всего вход ломает"):
+        comp["useful_signal"] = "ты уточняешь, что сейчас мешает"
     comp["analysis_result"] = build_analysis_result(comp, stored_analysis_user_text(u))
     analysis_result = comp["analysis_result"]
     if comp.get("request_device") and analysis_result.get("recommended_variant") in SKILLS_DB:

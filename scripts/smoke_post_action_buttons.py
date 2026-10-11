@@ -414,8 +414,10 @@ async def run() -> None:
         locked_before = u.get("day_core_skill_id")
         next_step_msg = await send(uid, "💪 Продолжить тренировку")
         next_step_text = last_text(next_step_msg)
-        assert any(title in next_step_text for title in ("Один короткий подход", "Проверим этот способ", "Кусочек настоящего дела")), next_step_text
-        assert "После попытки можно остановиться" in next_step_text, next_step_text
+        assert "Следующий шаг по задаче" in next_step_text, next_step_text
+        assert "Сделай:" in next_step_text and "Минимум:" in next_step_text, next_step_text
+        assert "Это следующий шаг, не повтор старта" not in next_step_text, next_step_text
+        assert "Можно остановиться" in next_step_text, next_step_text
         assert (await get_user(uid, db_path))["day_core_skill_id"] == locked_before
 
         await set_post_action_user(uid, db_path, "training", rounds=1)

@@ -64,7 +64,7 @@ class LaunchJourneys(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Записал в карту', m.answers[-1][0])
 
     async def test_selected_barrier_replaces_old_generic_pattern(self):
-        u = await self.user(stage='awaiting_barrier_choice', analysis_json=json.dumps({'specific_pattern': 'default_start_block', 'live_pattern': 'default_start_block'}))
+        u = await self.user(stage='awaiting_barrier_choice', analysis_json=json.dumps({'specific_pattern': 'default_start_block', 'live_pattern': 'default_start_block', 'useful_signal':'чаще всего вход ломает переключаюсь с задачи'}))
         m = Message(self.uid, '📱 Отвлечения')
         await bot.continue_analysis_from_barrier(m, u, m.text)
         answer = m.answers[-1][0]
