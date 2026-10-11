@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import bot
-from db import init_db, migrate_db, get_user, save_user, default_user
+from db import init_db, migrate_db, get_user, save_user, default_user, update_user_profile
 from core.dialogue_ux import (
     valid_transcript, is_clarification, concrete_step, review_focus,
     plain_text, VOICE_FAILURE, VOICE_SKIP, OTHER, BUTTON_LABELS,
@@ -166,6 +166,7 @@ class DialogueIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def test_voice_noise_preserves_pending_question_and_screen(self):
+        self.user['profile_json'] = await update_user_profile(self.user['user_id'], {'privacy_consent': True}, self.path)
         self.user['dialogue_context'] = json.dumps({'text': 'Что происходит после этого?', 'stage': self.user['stage']})
         await save_user(self.user, self.path)
         m = Message(voice=SimpleNamespace())

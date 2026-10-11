@@ -159,9 +159,10 @@ async def run():
         assert "Сравнение с состоянием около 2026-01-01" in mirror_90, mirror_90
         assert "раньше старт задачи" in mirror_90, mirror_90
         assert focus.get("code") in {"task_initiation", "attention_holding", "self_regulation", "self_criticism", "slip_recovery", "social_activity", "professional_activity"}, focus
-        assert "Сегодняшний фокус" in daily_explanation, daily_explanation
-        assert "Мы проверим навык" in daily_explanation, daily_explanation
-        assert "эта модель будет уточняться" in daily_explanation.lower(), daily_explanation
+        assert "Сегодняшняя проверка" in daily_explanation, daily_explanation
+        assert "отдельно отметим" in daily_explanation, daily_explanation
+        assert "рабочая версия, не диагноз" in daily_explanation.lower(), daily_explanation
+        assert "уйти от напряжения" not in daily_explanation, daily_explanation
         assert "точный показатель" not in daily_explanation.lower(), daily_explanation
         assert "USER PROFILE" not in offer_text, offer_text
         assert has_group_offer, kb_texts
@@ -180,7 +181,7 @@ async def run():
         print("[SMOKE] offer contains selling specifics:", has_selling_specifics)
         print("[SMOKE] mirror monthly report present:", "месячный отчёт" in mirror_month)
         print("[SMOKE] mirror long reports present:", "отчёт за 180 дней" in mirror_all)
-        print("[SMOKE] daily explanation personalized:", "Сегодняшний фокус" in daily_explanation)
+        print("[SMOKE] daily explanation personalized:", "Сегодняшняя проверка" in daily_explanation)
         print("[SMOKE] payment url month set:", bool(bot.PAYMENT_URL_MONTH_1498))
         print("[SMOKE] OK")
 

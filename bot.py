@@ -1244,6 +1244,10 @@ async def handle_application_input(m, u, text):
     if text.startswith("/"):
         return False
     if u.get("stage") == "offer_request_form":
+        if is_known_reply_button(text):
+            await m.answer("Сейчас открыта заявка. Напиши свой запрос одним сообщением. "
+                           "Чтобы вернуться к тренировке без заявки, напиши /cancel.")
+            return True
         request_text = (text or "").strip()
         if len(request_text) < 5:
             await m.answer("Напишите одной фразой, с чем нужна помощь. Если в Telegram нет имени пользователя, добавьте один контакт для ответа.")
@@ -2785,6 +2789,9 @@ def _analysis_main_hypothesis(comp: Dict[str, Any]) -> str:
     analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
     if analysis_result.get("core_hypothesis"):
         return str(analysis_result.get("core_hypothesis"))
+    specific = str(comp.get("specific_pattern") or "")
+    if re.search(r"[а-яА-ЯёЁ]", specific):
+        return specific
     pattern = str(comp.get("live_pattern") or comp.get("main_pattern") or comp.get("specific_pattern") or "")
     if pattern == "perfectionism_visibility_fear" or "оцен" in pattern or "ошиб" in pattern:
         return "страх ошибки или оценки"
@@ -2831,31 +2838,16 @@ def working_map_profile_patch(comp: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def preliminary_development_map_from_analysis(comp: Dict[str, Any]) -> str:
-    """Build the preliminary development map shown after user confirms analysis."""
+    """Show one hypothesis and its next check, without repeating categorical facts."""
     comp = comp if isinstance(comp, dict) else {}
-    assumptions: List[str] = []
-    main = _analysis_main_hypothesis(comp)
-    if main:
-        assumptions.append(main)
-    analysis_result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
-    for item in analysis_result.get("evidence_signals") or []:
-        if item and len(assumptions) < 3:
-            assumptions.append(str(item))
-    if comp.get("avoidance_behavior") and len(assumptions) < 3:
-        assumptions.append(str(comp.get("avoidance_behavior")))
-
-    secondary_checks = _analysis_secondary_hypotheses(comp)
-    # Keep the required product checks visible even when AI produced custom checks.
-    required_checks = [
-        "помогает ли уменьшение шага",
-        "помогает ли плохой черновик",
-        "помогает ли присутствие других людей",
-    ]
-    checks = list(required_checks)
-    for item in secondary_checks:
-        if item not in checks:
-            checks.append(item)
-    return preliminary_development_map_text(assumptions, checks)
+    result = comp.get("analysis_result") if isinstance(comp.get("analysis_result"), dict) else {}
+    hypothesis = public_enum_text(_analysis_main_hypothesis(comp))
+    check = public_enum_text(result.get("first_check") or result.get("recommended_skill_name") or "один небольшой шаг")
+    return ("🗺 Предварительная карта\n\n"
+            f"Рабочая версия: {hypothesis or 'причину ещё уточняем'}.\n\n"
+            f"Проверим: {check}.\n"
+            "После попытки отдельно отметим: стало ли легче и продолжилось ли дело.\n"
+            "Это не диагноз. Версию можно исправить.")
 
 
 def working_map_text(comp: Dict[str, Any], trainer_key: str) -> str:
@@ -7868,7 +7860,7 @@ def offer_screen_text(u: Dict[str, Any], summary: Dict[str, Any], profile: Dict[
 def offer_menu_text() -> str:
     return (
         "Выбери формат, о котором хочешь узнать больше.\n\n"
-        "Сам бот во время тестированияа остаётся бесплатным; группа и личная работа — отдельные форматы."
+        "Сам бот во время тестирования остаётся бесплатным; группа и личная работа — отдельные форматы."
     )
 
 
@@ -10008,7 +10000,8 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
         if latest.get("helpfulness") == "worse" and skill_family_id(str(latest.get("skill_id") or "")) == skill_family_id(locked):
             await m.answer("Этот способ пока не повторяем. Можно остановиться или попросить помощь с конкретной ситуацией.", reply_markup=kb_training_main)
             return
-        sid = locked
+        progressed = latest.get("continued_after_skill") is True or active_attempt(u).get("effect_status") == "helped_start"
+        sid = continuation_skill_id(u) if progressed else locked
     else:
         sid = recommended if recommended in SKILLS_DB and not should_block_skill_for_repetition(u, recommended) else continuation_skill_id(u)
     skill = dict(SKILLS_DB[sid])
@@ -10025,7 +10018,12 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
     mark_action_card_active(u)
     await save_user(u, DB_PATH)
     await bot_record_action_event(u, "attempt_started", skill_id=sid, metadata={"source": source, "continuation": True})
-    await answer_with_keyboard(m, u, build_current_skill_text(skill, next_step_prefix(u, repeat=True), u), action_keyboard(), "next_logical_step")
+    name, reason, steps, minimum = _skill_card_parts(skill, u)
+    continuation = (f"Следующий шаг по задаче «{current_task_title(u, 'текущее дело')}»\n\n"
+                    f"Сделай:\n{steps}\n\nМинимум:\n{minimum}\n\n"
+                    "После попытки отметь результат. Можно остановиться."
+                    f"\n\n🧩 Навык: {name}")
+    await answer_with_keyboard(m, u, continuation, action_keyboard(), "next_logical_step")
 
 
 CLOSED_DAY_VOLUNTARY_STEP_TEXT = (
@@ -11825,6 +11823,8 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
+            "Product release PATCH-64\n"
+            f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
             f"Voice transcription ready {str(bool(OPENAI_API_KEY and client is not None)).lower()}\n"
@@ -12354,16 +12354,29 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
     comp["barrier_candidates"] = list(dict.fromkeys([*(comp.get("barrier_candidates") or []), barrier]))
     comp["selected_skill"] = skill_id
     comp["recommended_skill"] = skill_id
-    comp["hypothesis"] = comp.get("specific_pattern") or PUBLIC_ENUM_LABELS[barrier]
+    barrier_patterns = {"overload": "anxious_overload", "fear_of_error": "anxious_fear_error",
+                        "attention_escape": "attention_escape", "too_many_options": "default_start_block",
+                        "low_reward": "default_start_block"}
+    comp["specific_pattern"] = PUBLIC_ENUM_LABELS[barrier]
+    comp["live_pattern"] = barrier_patterns[barrier]
+    comp["hypothesis"] = PUBLIC_ENUM_LABELS[barrier]
+    if str(comp.get("useful_signal") or "").startswith("чаще всего вход ломает"):
+        comp["useful_signal"] = "ты уточняешь, что сейчас мешает"
     comp["analysis_result"] = build_analysis_result(comp, stored_analysis_user_text(u))
     analysis_result = comp["analysis_result"]
     if comp.get("request_device") and analysis_result.get("recommended_variant") in SKILLS_DB:
         skill_id = analysis_result["recommended_variant"]
         comp["selected_skill"] = skill_id
         comp["recommended_skill"] = skill_id
+    selected_card = SKILLS_DB[skill_id]
+    if analysis_result.get("recommended_variant") != skill_id:
+        analysis_result.update(recommended_variant=skill_id,
+                               recommended_skill_name=selected_card.get("name") or public_enum_text(skill_id),
+                               recommended_skill_reason=selected_card.get("why_short") or selected_card.get("explain") or "проверим один посильный шаг",
+                               first_check=selected_card.get("minimum") or selected_card.get("name") or public_enum_text(skill_id))
     conclusion = preliminary_diagnosis_conclusion_text(
-        comp.get("specific_pattern") or comp.get("live_pattern") or PUBLIC_ENUM_LABELS[barrier],
-        comp.get("useful_signal") or f"чаще всего вход ломает {PUBLIC_ENUM_LABELS[barrier]}",
+        public_enum_text(comp.get("specific_pattern") or comp.get("live_pattern") or PUBLIC_ENUM_LABELS[barrier]),
+        public_enum_text(comp.get("useful_signal")) if comp.get("useful_signal") else "ты можешь назвать, что сейчас мешает",
         comp.get("skills_focus") if isinstance(comp.get("skills_focus"), list) else [],
         analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or "",
         analysis_result.get("recommended_skill_reason") or "",
@@ -13151,6 +13164,14 @@ async def main_flow(m: Message):
     normalize_action_context(u)
     await save_user(u, DB_PATH)
 
+    if m.voice:
+        consent_profile = await get_user_profile(uid, DB_PATH)
+        if not consent_profile.get("privacy_consent"):
+            original = m.original if isinstance(m, DialogueMessage) else m
+            await original.answer("Голосовое пока не обрабатываю. Сначала нужно согласие на обработку данных. "
+                           "Информация — /privacy. Продолжить регистрацию можно через /start.")
+            return
+
     voice_text = await transcribe_voice_for_current_prompt(m, u)
     if voice_text == "":
         return
@@ -13197,6 +13218,13 @@ async def main_flow(m: Message):
             [InlineKeyboardButton(text="Да, один раз", callback_data=f"proactive:plan:{plan['token']}:yes"),
              InlineKeyboardButton(text="Без напоминания", callback_data=f"proactive:plan:{plan['token']}:no")]]))
         return
+    if u.get("stage") == "social_support_await":
+        support_labels = {button.text for row in kb_social_support.keyboard for button in row}
+        if text not in support_labels and is_known_reply_button(text):
+            await answer_with_keyboard(m, u, "Это ответ с предыдущего экрана. Кто может поддержать тебя? "
+                                       "Выбери вариант ниже или напиши своими словами.", kb_social_support, "social_support")
+            return
+
     if resolve_intent(text, str(u.get("stage") or ""), _skiller_session(u)) == "ACKNOWLEDGE":
         reply = {
             "skinny": "Хорошо.",
@@ -14968,8 +14996,7 @@ async def main_flow(m: Message):
     # await_problem_text
     if u["stage"] == "await_problem_text":
         if m.voice:
-            await m.answer("Распознаю голосовое…")
-            user_text = await whisper_transcribe(m)
+            user_text = text
             if not user_text:
                 await m.answer("Не смог разобрать голосовое. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
                 return
@@ -14996,7 +15023,7 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await m.answer("Ок. Выбери режим:", reply_markup=kb_input_mode)
             return
-        t = await whisper_transcribe(m) if m.voice else text
+        t = text
         if not t:
             await m.answer("Не смог разобрать голосовое. Напиши, пожалуйста, текстом 1–3 предложения.")
             return
@@ -15091,6 +15118,9 @@ async def main_flow(m: Message):
                 await open_closed_day_analysis_step(m, u)
                 return
             profile = await get_user_profile(u["user_id"], DB_PATH)
+            if int(u.get("has_started_training") or 0) or training_context(u).get("moment_training"):
+                await start_intent_action(m, u)
+                return
             if not profile.get("social_support_prompt_shown"):
                 set_legacy_stage(u, "social_support_await")
                 u["pending_plan_change"] = json.dumps({"type": "social_support", "return_stage": "start_day"}, ensure_ascii=False)
@@ -15136,6 +15166,9 @@ async def main_flow(m: Message):
                 model["hypothesis_rejected"] = False
                 updated_profile["personal_working_model"] = model
             u["profile_json"] = updated_profile
+            if int(u.get("has_started_training") or 0) or training_context(u).get("moment_training"):
+                await start_intent_action(m, u)
+                return
             if not updated_profile.get("social_support_prompt_shown"):
                 set_legacy_stage(u, "social_support_await")
                 u["pending_plan_change"] = json.dumps({"type": "social_support", "return_stage": "working_map"}, ensure_ascii=False)
@@ -15550,7 +15583,7 @@ async def main_flow(m: Message):
     # crisis tool selection: second layer after stabilization
     if u.get("stage") == "crisis_tool_select":
         if m.voice:
-            t = await whisper_transcribe(m)
+            t = text
             if not t:
                 await m.answer("Я не смог разобрать голос. Напиши 1–2 фразы или выбери кнопками, что ближе.", reply_markup=crisis_multiselect_keyboard(_selected_crisis_patterns(u)))
                 return
@@ -15604,8 +15637,7 @@ async def main_flow(m: Message):
 
         # Если сразу прислал голосовое — обрабатываем без лишних шагов
         if m.voice:
-            await m.answer("Распознаю голосовое…")
-            t = await whisper_transcribe(m)
+            t = text
             if t:
                 u["crisis_text"] = t
                 await save_user(u, DB_PATH)
@@ -15650,8 +15682,7 @@ async def main_flow(m: Message):
 
     if u.get("stage") == "crisis_text":
         if m.voice and not text:
-            await m.answer("Распознаю голосовое…")
-            t = await whisper_transcribe(m)
+            t = text
             if not t:
                 await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
                 return
@@ -15680,7 +15711,7 @@ async def main_flow(m: Message):
         if not m.voice:
             await m.answer("Пришли голосовое 🎙")
             return
-        t = await whisper_transcribe(m)
+        t = text
         if not t:
             await m.answer("Не смог разобрать. Напиши текстом 1–3 предложения или пришли голосовое ещё раз.")
             set_legacy_stage(u, "crisis_text")
@@ -17269,6 +17300,12 @@ async def on_offer_callbacks(c: CallbackQuery):
         )
         await c.answer()
         return
+    if u.get("stage") == "offer_request_form" and data not in {
+        OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
+        OFFER_CALLBACKS["stay_free"], "continue_free",
+    }:
+        await c.answer("Заявка уже открыта. Напиши запрос или /cancel, чтобы выйти.")
+        return
     u["last_offer_action"] = data
     click_event = {
         OFFER_CALLBACKS["bot"]: "offer_subscription_clicked",
@@ -17325,7 +17362,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         )
         await c.message.answer(
             "💚 Добровольная поддержка SKILLER — €4,99 в месяц.\n\n"
-            "Это не обязательная оплата: во время тестированияа все функции останутся доступны, даже если не оформлять поддержку. "
+            "Это не обязательная оплата: во время тестирования все функции останутся доступны, даже если не оформлять поддержку. "
             "Если продукт уже полезен и хочешь помочь его развивать — можно оформить поддержку по кнопке.\n\n"
             "Подпиской и её отменой можно управлять через платёжный сервис.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -17566,6 +17603,10 @@ async def on_callbacks(c: CallbackQuery):
             comp = comp if isinstance(comp, dict) else {}
             updated_profile = await update_user_profile(u["user_id"], working_map_profile_patch(comp), DB_PATH, source="working_map_confirmed")
             u["profile_json"] = updated_profile
+            if int(u.get("has_started_training") or 0) or training_context(u).get("moment_training"):
+                await start_intent_action(c.message, u)
+                await c.answer()
+                return
             if not updated_profile.get("social_support_prompt_shown"):
                 set_legacy_stage(u, "social_support_await")
                 u["pending_plan_change"] = json.dumps({"type": "social_support", "return_stage": "working_map"}, ensure_ascii=False)
@@ -18137,6 +18178,31 @@ def start_sheets_sync_background_task(db_path: str):
     return asyncio.create_task(loop_fn(db_path))
 
 
+PUBLIC_BOT_DESCRIPTION = (
+    "SKILLER — тренажёр навыков для взрослых 18+. Помогает начать конкретное дело, "
+    "вернуться после отвлечения и найти посильный следующий шаг. "
+    "Выбери стиль общения, опиши ситуацию и попробуй короткое действие. "
+    "Бот отдельно спросит, стало ли легче и продолжилось ли дело. "
+    "Во время тестирования бот бесплатный. Это не диагностика, психотерапия или экстренная помощь."
+)
+PUBLIC_BOT_SHORT_DESCRIPTION = "SKILLER: начать дело, удержать внимание и вернуться после отвлечения. Тренажёр навыков, 18+."
+
+
+async def sync_public_bot_description(telegram_bot) -> None:
+    if not env_bool("BOT_METADATA_SYNC", "1"):
+        return
+    try:
+        current = await telegram_bot.get_my_description()
+        if current.description != PUBLIC_BOT_DESCRIPTION:
+            await telegram_bot.set_my_description(description=PUBLIC_BOT_DESCRIPTION)
+        short = await telegram_bot.get_my_short_description()
+        if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
+            await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
+        log.info("Public bot description is current (PATCH-64)")
+    except Exception as error:
+        log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
+
+
 def build_dispatcher() -> Dispatcher:
     """Build a dispatcher that serializes updates for each user/chat."""
     return Dispatcher(events_isolation=SimpleEventIsolation())
@@ -18179,6 +18245,7 @@ async def main() -> int:
             log.info("Startup check completed successfully; polling was not started")
             return 0
 
+        await sync_public_bot_description(bot)
         asyncio.create_task(background_checkins(bot))
         start_sheets_sync_background_task(DB_PATH)
         log.info("Bot started")

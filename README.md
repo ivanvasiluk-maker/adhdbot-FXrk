@@ -1,13 +1,20 @@
-# ADHD Self-Regulation Trainer Bot
+# SKILLER — тренажёр навыков в Telegram
 
-Telegram bot that guides users through a 28-day self-regulation practice with three trainer personas (Skinny, Marsha, Beck). Built on aiogram 3, stores state in SQLite, and can optionally use OpenAI for analysis and Whisper transcription.
+SKILLER помогает взрослым начать конкретное дело, вернуться после отвлечения и подобрать посильный следующий шаг. Пользователь выбирает стиль общения: Марша — мягкая поддержка, Скинни — коротко и прямо, Бек — спокойные объяснения.
 
-## Features
-- Onboarding flow with trainer selection and multiple diagnostic modes (text, voice via Whisper, quick test).
-- Daily skill plan with short practice loops, progress logging, and crisis flow entry from any stage.
-- Optional AI analysis (OpenAI Chat + Whisper); falls back to scripted responses when API keys are absent.
-- SQLite persistence with automatic init/migrations at startup.
-- Dockerfile for containerized runs.
+Обычный сценарий: описать одно дело → при необходимости ответить на уточняющий вопрос → попробовать действие на 60–120 секунд → отдельно отметить выполнение, облегчение и продолжение дела. Версию объяснения можно исправить, тренировку — остановить. Результаты сохраняются для следующих попыток.
+
+Бот предназначен для взрослых 18+. Это не диагностика, психотерапия или экстренная помощь. На этапе тестирования бот бесплатный; группа и личная работа с Иваном — отдельные услуги, условия обсуждаются до оплаты. Клиническая эффективность не подтверждена пилотом.
+
+## Выпуск PATCH-64 · 11 октября 2026
+
+Исправления живого прогона: голос только после согласия и без повторного распознавания; старые кнопки не записываются как опора или заявка; выбор причины обновляет рекомендацию; внутренние коды скрыты; повторная ситуация переходит к действию без нового опроса об опорах; продолжение не повторяет успешное удаление телефона. Карта и дневной текст стали короче и не выводят причину из числа прошедших дней.
+
+Публичное описание Telegram обновляется при обычном запуске, только если изменилось. `BOT_METADATA_SYNC=0` отключает обновление. `/health` показывает PATCH-64 и SHA из `RAILWAY_GIT_COMMIT_SHA` или `RELEASE_SHA`, если сервер предоставляет его. Автоматические проверки работают без Telegram/OpenAI и не подтверждают доставку живых заявок. Порядок выпуска и отката: [PRELAUNCH_DEPLOY.md](docs/PRELAUNCH_DEPLOY.md).
+
+## Устройство
+
+Python / aiogram 3, SQLite для состояния и результатов. OpenAI используется для части разборов и распознавания голоса. Google Sheets — необязательный экспорт обезличенных событий. Рабочая база должна находиться на постоянном диске; секреты хранятся вне Git.
 
 ## Requirements
 - Python 3.11
@@ -159,7 +166,7 @@ docker run --env-file .env adhd-bot
 ## Troubleshooting
 - If `BOT_TOKEN` is missing, startup raises a runtime error.
 - If OpenAI import fails, the bot logs a warning and continues without AI features.
-- Ensure `.env` is in the working directory you run from; `load_dotenv(override=True)` is called early in [bot.py](bot.py).
+- Ensure `.env` is in the working directory you run from; `load_dotenv(override=False)` is called early in [bot.py](bot.py).
 - Do not test paid flows while `TelegramConflictError: terminated by other getUpdates request` appears. It means another process is already polling the same Telegram bot token, so this instance may stop or miss messages. Stop duplicate Railway/local/container runs and keep exactly one active polling process before clicking any payment link.
 - For payment QA, first verify the bot responds normally to `/start` or `/show_offer`, then use the €1 `PAYMENT_TEST_URL`, and only after payment press “✅ Я оплатил(а) — тест” or send `/confirm_payment`.
 - If the “✅ Я оплатил(а) — тест” button is missing from the offer, check Railway variables: `PAYMENT_ACCEPT_ANY` must be truthy (`1`, `true`, `yes`, `on`, or `debug`) and the bot must be redeployed after changing env vars.
