@@ -71,3 +71,11 @@ class SalesDialogue(unittest.IsolatedAsyncioTestCase):
         profile=await get_user_profile(self.uid,bot.DB_PATH)
         self.assertFalse(profile['soft_help_offer_active'])
         self.assertTrue(profile['offer_suppressed_until'])
+
+    async def test_notification_sends_clickable_telegram_profile(self):
+        u=await self.user(name='Иван')
+        m=Message(self.uid);m.bot=SimpleNamespace(send_message=AsyncMock())
+        with patch.object(bot,'log_event',AsyncMock()):
+            self.assertTrue(await bot.notify_offer_request(m,u,'group','СДВГ'))
+        call=m.bot.send_message.await_args
+        self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url,f'tg://user?id={self.uid}')

@@ -8457,7 +8457,13 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
         await log_event(u["user_id"], "offer", "offer_request_notification_skipped", {"source": source, "reason": "no_bot"}, DB_PATH, SHEETS_WEBHOOK_URL)
         return False
     try:
-        await bot_obj.send_message(CURATOR_TELEGRAM_ID, offer_request_notification_text(u, source, form_text, getattr(sender, "original", sender) if hasattr(sender, "from_user") else getattr(sender, "message", None)))
+        await bot_obj.send_message(
+            CURATOR_TELEGRAM_ID,
+            offer_request_notification_text(u, source, form_text, getattr(sender, "original", sender) if hasattr(sender, "from_user") else getattr(sender, "message", None)),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Открыть Telegram-профиль", url=f"tg://user?id={int(u['user_id'])}"),
+            ]]),
+        )
     except Exception as e:
         log.warning("Failed to notify offer request recipient %s: %s", CURATOR_TELEGRAM_ID, e)
         await log_event(u["user_id"], "offer", "offer_request_notification_failed", {"source": source, "error": str(e)[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
