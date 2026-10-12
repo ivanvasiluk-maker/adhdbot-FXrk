@@ -7968,7 +7968,7 @@ async def maybe_show_help_offer(m: Message, u: Dict[str, Any], *, final=False, s
     await m.answer("Вы отметили полезный результат. Можно продолжать самостоятельно. Если захотите больше поддержки, доступны группа и личная работа с Иваном. Условия — по вашему выбору.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     u["dialogue_context"] = previous_context
     await save_user(u, DB_PATH)
-    u["profile_json"] = await update_user_profile(u["user_id"], {key:utc_iso()}, DB_PATH, source="help_offer_after_value")
+    u["profile_json"] = await update_user_profile(u["user_id"], {key:utc_iso(), "soft_help_offer_active": True}, DB_PATH, source="help_offer_after_value")
     return True
 
 
@@ -17345,6 +17345,14 @@ async def on_offer_callbacks(c: CallbackQuery):
     data, _, _ = split_versioned_callback(data)
     exit_callbacks = {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"],
                       OFFER_CALLBACKS["back"], OFFER_CALLBACKS["stay_free"], "continue_free", "offer_back", "stay_free"}
+    if data == OFFER_CALLBACKS["choose_later"] and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
+        profile = await get_user_profile(uid, DB_PATH)
+        if profile.get("soft_help_offer_active"):
+            await remember_offer_decision(u, declined=True)
+            u["profile_json"] = await update_user_profile(uid, {"soft_help_offer_active": False}, DB_PATH, source="soft_offer_declined")
+            await save_user(u, DB_PATH)
+            await c.answer("Сохранено. Продолжаем самостоятельно.")
+            return
     if data in exit_callbacks and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
         await c.answer("Этот экран уже закрыт. Продолжай с текущего места.")
         return

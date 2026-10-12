@@ -59,3 +59,15 @@ class SalesDialogue(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('default',result)
         self.assertIn('Рабочая гипотеза',result)
         self.assertIn('Что будем делать',result)
+
+    async def test_soft_invitation_decline_keeps_training_and_suppresses_offer(self):
+        from db import update_user_profile
+        await self.user(stage='training_main')
+        await update_user_profile(self.uid, {'soft_help_offer_active': True}, bot.DB_PATH)
+        c=SimpleNamespace(from_user=SimpleNamespace(id=self.uid), data=bot.OFFER_CALLBACKS['choose_later'], message=Message(self.uid), answer=AsyncMock())
+        with patch.object(bot,'claim_callback_once',AsyncMock(return_value=True)),patch.object(bot,'handle_safety_callback',AsyncMock(return_value=False)):
+            await bot.on_offer_callbacks(c)
+        self.assertEqual((await get_user(self.uid,bot.DB_PATH))['stage'],'training_main')
+        profile=await get_user_profile(self.uid,bot.DB_PATH)
+        self.assertFalse(profile['soft_help_offer_active'])
+        self.assertTrue(profile['offer_suppressed_until'])

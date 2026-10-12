@@ -52,7 +52,7 @@ class AddressCopyTests(unittest.TestCase):
 
     def test_known_terms_are_plain_and_agreement_is_preserved(self):
         text = plain_text('Рабочая гипотеза. Основной паттерн. START. Body doubling. beta-доступ.')
-        self.assertEqual(text, 'Рабочая версия. Что чаще мешает. начало. Работа рядом с другим человеком. пробный доступ.')
+        self.assertEqual(text, 'Рабочая гипотеза. Что чаще мешает. начало. Работа рядом с другим человеком. пробный доступ.')
         self.assertEqual(plain_text('«START body doubling»'), '«START body doubling»')
 
     def test_no_new_user_reminders_before_choice(self):
