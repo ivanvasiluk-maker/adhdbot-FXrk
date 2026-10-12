@@ -25,6 +25,7 @@ from core.attempt_evidence import PREDICT_BUTTON, ACTUAL_BUTTON, find_attempt, r
 from core.personal_skill_collection import load as load_skill_collection, familiar as familiar_skill, describe as describe_collected_skill, CONTEXTS as SKILL_CONTEXTS
 from core.training_track import begin_moment, restore_training, context as training_context, record_reply, next_format, render_format, action_instruction
 from core.conversation_intent import resolve_intent, STOP_WORDS, FEEDBACK_STAGES
+from core.experiment_dialogue import feedback_kind, adaptation_question
 from core.case_sessions import begin_case, parsed as parse_case_data
 from core.request_routing import DEVICE_LABELS, observed_changes, support_text, request_kind
 import datetime as dt
@@ -1467,7 +1468,7 @@ async def handle_conversation_intent(m, u, text):
     if intent == "STOP":
         if u.get("stage") != "intent_paused":
             ctx["intent_resume"] = {key: u.get(key) for key in OFFER_RETURN_FIELDS}
-            ctx["intent_resume"]["dialogue_context"] = u.get("dialogue_context")
+            ctx["intent_resume"]["dialogue_context"] = json.dumps({key:value for key,value in ctx.items() if key not in {"intent_resume", "intent_resume_date"}}, ensure_ascii=False)
             ctx["intent_resume_date"] = local_date_for_user(u)
         set_legacy_stage(u, "intent_paused")
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
@@ -1475,6 +1476,14 @@ async def handle_conversation_intent(m, u, text):
         await m.answer(render_pause(u.get("trainer_key") or "marsha"), reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Продолжить")]], resize_keyboard=True))
         return True
     if intent == "CONTINUE" and u.get("stage") == "intent_paused":
+        if ctx.pop("paused_due_to_worse", False):
+            ctx.pop("intent_resume", None)
+            ctx.pop("intent_resume_date", None)
+            u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+            set_legacy_stage(u, "recovery_context")
+            await save_user(u, DB_PATH)
+            await m.answer("Прежний способ пока не повторяем. Что именно усилилось после попытки: тревога, напряжение или трудность самой задачи? Можно ответить одной фразой или написать «Не сейчас».")
+            return True
         snapshot = ctx.get("intent_resume") or {}
         if snapshot and ctx.get("intent_resume_date") == local_date_for_user(u):
             for key, value in snapshot.items():
@@ -1521,6 +1530,8 @@ async def handle_conversation_intent(m, u, text):
         comp = normalize_analysis(memory, text)
         comp.update(request_kind=kind, requested_mode="understand")
         comp["analysis_result"] = build_analysis_result(comp, text)
+        from core.experiment_dialogue import reported_chain
+        comp["behavioral_chain"] = reported_chain(text)
         if day_closed_today(u) and not int(u.get("closed_day_additional_active") or 0):
             begin_case(u, await get_user_profile(u["user_id"], DB_PATH))
         u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
@@ -5710,7 +5721,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
             summary = "Дело продолжилось. Этот шаг сработал в этой попытке. Сохраню результат для похожих ситуаций."
             markup = kb_quick_success
         elif helpfulness == "worse":
-            summary = "Упражнение пока остановим. Не нужно продолжать через силу. Этот способ пока не повторяем."
+            summary = "После шага стало хуже. Упражнение пока остановим. Не нужно продолжать через силу. Этот способ пока не повторяем."
             markup = ReplyKeyboardMarkup(keyboard=[
                 [KeyboardButton(text="Уточнить, что стало хуже")], [KeyboardButton(text="Не сейчас")]], resize_keyboard=True)
         elif helpfulness == "helped":
@@ -5932,7 +5943,7 @@ async def handle_skill_result_feedback(m: Message, u: Dict[str, Any], text: str)
     if stage == "minimal_feedback_help":
         quick_map = {
             "🚀 Продолжил дело": ("unknown", True), "🙂 Стало легче": ("helped", None),
-            "😐 Без изменений": ("not_helped", None), "😣 Стало хуже": ("worse", None),
+            "😐 Без изменений": ("not_helped", None), "😣 Стало хуже": ("worse", None), "Стало хуже": ("worse", None),
             "😣 Стало хуже / сильнее избегаю": ("worse", None),
         }
         if text in quick_map:
@@ -8448,15 +8459,20 @@ def offer_request_notification_text(u: Dict[str, Any], source: str, form_text: s
 
 async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form_text: str) -> bool:
     """Send an offer sign-up/request form to Ivan via Telegram DM when possible."""
-    if not CURATOR_TELEGRAM_ID:
-        return False
     bot_obj = getattr(sender, "bot", None)
     if bot_obj is None and getattr(sender, "message", None) is not None:
         bot_obj = getattr(sender.message, "bot", None)
     if bot_obj is None:
         await log_event(u["user_id"], "offer", "offer_request_notification_skipped", {"source": source, "reason": "no_bot"}, DB_PATH, SHEETS_WEBHOOK_URL)
-        return False
-    try:
+    from core.lead_delivery import deliver_lead
+    ctx = dialogue_context(u.get("dialogue_context"))
+    lead_id = ctx.get("application_request_id") or uuid.uuid4().hex
+    ctx["application_request_id"] = lead_id
+    u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    async def send():
+        if not bot_obj or not CURATOR_TELEGRAM_ID:
+            raise RuntimeError("notification_not_configured")
         await bot_obj.send_message(
             CURATOR_TELEGRAM_ID,
             offer_request_notification_text(u, source, form_text, getattr(sender, "original", sender) if hasattr(sender, "from_user") else getattr(sender, "message", None)),
@@ -8464,12 +8480,9 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
                 InlineKeyboardButton(text="Открыть Telegram-профиль", url=f"tg://user?id={int(u['user_id'])}"),
             ]]),
         )
-    except Exception as e:
-        log.warning("Failed to notify offer request recipient %s: %s", CURATOR_TELEGRAM_ID, e)
-        await log_event(u["user_id"], "offer", "offer_request_notification_failed", {"source": source, "error": str(e)[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
-        return False
-    await log_event(u["user_id"], "offer", "offer_request_notification_sent", {"source": source, "curator_id": CURATOR_TELEGRAM_ID}, DB_PATH, SHEETS_WEBHOOK_URL)
-    return True
+    sent = await deliver_lead(DB_PATH, lead_id, u["user_id"], source, form_text, send)
+    await log_event(u["user_id"], "offer", "offer_request_notification_sent" if sent else "offer_request_notification_unconfirmed", {"source":source,"request_id":lead_id}, DB_PATH, SHEETS_WEBHOOK_URL)
+    return sent
 
 
 async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> bool:
@@ -8624,7 +8637,7 @@ def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = F
 
 def offer_request_submitted_text(sent: bool) -> str:
     contact = curator_contact_url() or "@Ivan_Vasiliuk"
-    sent_line = "Я отправил заявку Ивану." if sent else "Заявка сохранена, но не отправлена Ивану. Пожалуйста, напишите ему напрямую."
+    sent_line = "Я отправил заявку Ивану." if sent else "Заявка записана, но доставка Ивану не подтверждена. Пожалуйста, напишите ему напрямую."
     return (
         f"{sent_line}\n\n"
         f"Если хочешь ускорить контакт, можно написать напрямую: {contact}\n\n"
@@ -9325,10 +9338,11 @@ def new_day_skill_card_text(
 ) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
     trainer_line = trainer_general_line_for_user(u) if u else "Давай бережно: только маленький вход, без давления на результат."
+    practice = trainer_practice((u or {}).get("trainer_key") or "marsha")
     task = current_task_label(u or {})
     mechanism = _current_mechanism_label(u, profile)
     card = (
-        f"{trainer_line}\n\n"
+        f"{trainer_line}\n\n{practice}\n\n"
         f"{why_short}\n\n"
         "Что вижу\n"
         f"— задача: {task}\n"
@@ -9337,8 +9351,8 @@ def new_day_skill_card_text(
         f"— {why_short}\n"
         "— проверим навык действием, а не будем считать гипотезу фактом\n\n"
         "Что развиваем\n"
-        "— сначала START — более надёжный вход в задачу\n"
-        "— затем STAY и RETURN — удержание и возврат после срыва\n\n"
+        "— сначала старт — более надёжный вход в задачу\n"
+        "— затем удержание внимания и возврат после срыва\n\n"
         f"Сделай:\n{step_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
         f"🧩 Навык дня — для твоей ситуации: {skill_name}\n\n"
@@ -9662,7 +9676,7 @@ async def _start_normalized_experiment_for_day(u: Dict[str, Any], skill: Dict[st
         experiment_id = await create_behavioral_experiment(DB_PATH, BehavioralExperiment(
             None, int(u["user_id"]), situation_id, skill_id, mechanism, context,
             int(skill.get("selected_difficulty") or 1), card.standard_variant, target,
-            card.completion_criterion, None, None, "proposed", parent_id,
+            skill.get("completion_criterion") or card.completion_criterion, None, None, "proposed", parent_id,
             progression,
             (skill.get("ranking_reason_codes") or ["FEATURE_GATED_RANKING"])[0],
             str(u.get("trainer_key") or "marsha"), 0,
@@ -9703,15 +9717,16 @@ async def _start_normalized_experiment_for_day(u: Dict[str, Any], skill: Dict[st
 def build_current_skill_text(skill: Dict[str, Any], prefix: str = "", u: Optional[Dict[str, Any]] = None) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
     trainer_line = prefix.strip() or trainer_general_line_for_user(u)
+    practice = trainer_practice((u or {}).get("trainer_key") or "marsha")
     if u and u.get("day_core_skill_date") == local_date_for_user(u) and not day_closed_today(u) and not training_context(u).get("moment_training"):
         history = training_context(u).get("action_formats") or []
         if history:
-            return render_format(action_instruction(minimum, step_text), why_short, next_format(u))
+            return practice + "\n\n" + render_format(action_instruction(minimum, step_text), why_short, next_format(u))
         next_format(u, "classic")
     if u and parse_case_data(u.get("analysis_json"), {}).get("requested_mode") == "act_now":
-        return f"Один шаг сейчас\n{minimum}\n\n{why_short}\n\nПосле попытки отметь, что получилось."
+        return f"Один шаг сейчас\n{minimum}\n\n{practice}\n\n{why_short}\n\nПосле попытки отметь, что получилось."
     return (
-        f"{trainer_line}\n\n"
+        f"{trainer_line}\n\n{practice}\n\n"
         f"{why_short}\n\n"
         f"Сделай:\n{step_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
@@ -10018,6 +10033,8 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
     conclusion = daily_conclusion(u, profile)
     recommended = conclusion.get("next_skill_id")
     locked = u.get("day_core_skill_id") if u.get("day_core_skill_date") == local_date_for_user(u) else None
+    if _canonical_daily_skill_id(str(locked or "")) in not_fit_today_skills(u, profile):
+        locked = None
     if locked in SKILLS_DB:
         latest = profile.get("last_skill_feedback") or {}
         if latest.get("helpfulness") == "worse" and skill_family_id(str(latest.get("skill_id") or "")) == skill_family_id(locked):
@@ -10025,8 +10042,11 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
             return
         progressed = latest.get("continued_after_skill") is True or active_attempt(u).get("effect_status") == "helped_start"
         sid = continuation_skill_id(u) if progressed else locked
+        if progressed and skill_family_id(sid) == skill_family_id(previous_sid):
+            sid = _first_non_repeating_skill_id(u, ["one_tab_focus", "bad_first_step", "external_start"], [previous_sid])
     else:
-        sid = recommended if recommended in SKILLS_DB and not should_block_skill_for_repetition(u, recommended) else continuation_skill_id(u)
+        blocked = not_fit_today_skills(u, profile)
+        sid = recommended if recommended in SKILLS_DB and _canonical_daily_skill_id(recommended) not in blocked and not should_block_skill_for_repetition(u, recommended) else _first_non_repeating_skill_id(u, [continuation_skill_id(u), "one_tab_focus", "external_start"], blocked)
     skill = dict(SKILLS_DB[sid])
     skill.setdefault("skill_id", sid)
     set_legacy_stage(u, "training")
@@ -11455,15 +11475,12 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/reset_me":
         await reset_current_user(uid, m.chat.id)
-        await m.answer("Профиль полностью сброшен для нового прогона. Напиши /start.")
+        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль полностью сброшен. Напиши /start.")
         return True
 
     if command == "/start_over":
         await reset_current_user(uid, m.chat.id)
-        await m.answer(
-            start_over_confirm_text(),
-            reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True),
-        )
+        await cmd_start(m.original if isinstance(m, DialogueMessage) else m)
         return True
 
     return False
@@ -11846,7 +11863,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-66\n"
+            "Product release PATCH-67\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -12404,7 +12421,9 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
         analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or "",
         analysis_result.get("recommended_skill_reason") or "",
     )
-    conclusion = behavioral_chain_text(current_task_title(u, ""), comp.get("avoidance_behavior") or "") + "\n\n" + conclusion
+    from core.experiment_dialogue import render_chain
+    chain = comp.get("behavioral_chain")
+    conclusion = (render_chain(chain) if isinstance(chain, dict) else behavioral_chain_text(current_task_title(u, ""), comp.get("avoidance_behavior") or "")) + "\n\n" + conclusion
     comp["short_conclusion"] = conclusion
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket") or u.get("bucket") or "mixed"
@@ -13173,6 +13192,122 @@ async def handle_successful_payment(m: Message):
         await send_full_mode_welcome(m, u)
 
 
+async def handle_reported_experiment_feedback(m, u, text):
+    stage = str(u.get("stage") or "")
+    owned = set(FEEDBACK_STAGES) | {"training", "training_main", "day_core_stop", "success_menu", "skill_feedback_adapt", "request_task", "request_context", "intent_choose"}
+    sid = current_skill_for_action(u) or current_skill_id(u)
+    if stage not in owned or not sid or text.startswith("/"):
+        return False
+    if stage in FEEDBACK_STAGES and text and not text[0].isalnum():
+        return False
+    ctx = dialogue_context(u.get("dialogue_context"))
+    if stage == "skill_feedback_adapt" and text in {"Уменьшить шаг", "Другой способ", "Скука", "Тревога", "Да, мешает", "Есть, но дело идёт"}:
+        kind = ctx.get("experiment_feedback_kind") or "different"
+        if text == "Есть, но дело идёт":
+            set_legacy_stage(u, "training_main")
+            await save_user(u, DB_PATH)
+            await m.answer("Самокритика осталась, а дело продолжилось — это разные результаты. Не нужно ждать полного исчезновения мыслей, чтобы двигаться дальше. Можно остановиться или продолжить задачу.", reply_markup=kb_training_main)
+            return True
+        known_feedback = get_minimal_feedback(u)
+        if type(known_feedback.get("completed")) is bool:
+            if kind == "not_helped":
+                known_feedback["helpfulness"] = "not_helped"
+            set_minimal_feedback(u, known_feedback)
+            await persist_minimal_skill_feedback(m, u, show_summary=False)
+            fresh = dialogue_context(u.get("dialogue_context"))
+            fresh.update({key:value for key,value in ctx.items() if key.startswith("experiment_feedback")})
+            ctx = fresh
+        u["pending_feedback_json"] = None
+        candidates = (["self_criticism_to_instruction", "check_the_facts_light"] if kind == "self_criticism" else
+                      ["bad_first_step", "bad_draft"] if text == "Тревога" else
+                      ["open_only", "ninety_sec_start"] if text == "Уменьшить шаг" else
+                      ["one_tab_focus", "bad_first_step", "external_start"])
+        if text == "Скука":
+            candidates = ["ninety_sec_start", "one_tab_focus", "external_start"]
+        detail = (ctx.get("experiment_feedback_detail") or "").lower()
+        if text == "Другой способ" and any(word in detail for word in ("тревог", "ошиб", "оценк", "страш")):
+            candidates = ["bad_first_step", "check_the_facts_light"]
+        selected = next((value for value in candidates if value in SKILLS_DB and skill_family_id(value) != skill_family_id(str(sid))), None)
+        reduced_repeat = not selected and text == "Уменьшить шаг"
+        if reduced_repeat:
+            selected = str(sid)
+        if not selected:
+            await m.answer("Этот способ пока не повторяем. Можно остановиться или уточнить, что именно мешает текущей задаче.", reply_markup=kb_training_main)
+            return True
+        ctx["adaptation_reason"] = {"previous_skill":sid, "feedback":kind, "selected_skill":selected, "repeat_reason":"уменьшение до одного действия по запросу" if reduced_repeat else None}
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        u["current_skill"] = selected
+        u["pending_skill_id"] = selected
+        set_legacy_stage(u, "training")
+        mark_action_card_active(u)
+        sync_active_attempt(u, bump=True, attempt_status="not_tried", effect_status="unknown", is_closed=False)
+        await save_user(u, DB_PATH)
+        card = dict(SKILLS_DB[selected])
+        if reduced_repeat:
+            from texts import _skill_steps
+            first = (_skill_steps(card) or [card.get("minimum") or "Открой место задачи"])[0]
+            card.update(steps=[first], simple=[first], minimum_action=first, minimum=first, completion_criterion="Выполнено одно указанное физическое действие.", why_short="По твоему запросу сокращаем этот способ до одного действия, без таймера.")
+        card.setdefault("skill_id", selected)
+        previous_experiment = u.get("active_experiment_id") or active_attempt(u).get("behavioral_experiment_id")
+        if previous_experiment:
+            async with aiosqlite.connect(DB_PATH) as db:
+                row = await (await db.execute("SELECT status,state_revision FROM behavioral_experiments WHERE id=? AND user_id=?", (int(previous_experiment), int(u["user_id"])))).fetchone()
+            if row and row[0] in {"proposed", "accepted", "started"}:
+                try:
+                    await transition_behavioral_experiment(DB_PATH, int(previous_experiment), status="abandoned", expected_revision=int(row[1]))
+                except ValueError:
+                    pass  # A concurrent result may have closed this trial already.
+            attempt = active_attempt(u)
+            attempt.pop("behavioral_experiment_id", None)
+            attempt.pop("behavioral_experiment_revision", None)
+            u["active_attempt"] = attempt
+            u["active_experiment_id"] = None
+        session = _skiller_session(u)
+        session.update(state=SkillerDialogState.DAY_OPEN.value, awaiting_target=False, awaiting_barrier=False, active_skill=card.get("name"))
+        _save_skiller_session(u, session)
+        await _start_normalized_experiment_for_day(u, card)
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m, u, "Меняем подход по твоему ответу; задача остаётся прежней.\n" + ("Этот же способ сокращаем до одного действия без таймера.\n" if reduced_repeat else "") + "\n" + format_skill_card(u, card, current_task_label(u)), action_keyboard(), "training")
+        return True
+    kind = "different" if text == "Проверить" and stage in {"recovery_context", "skill_feedback_adapt", "request_task"} else feedback_kind(text)
+    if kind == "worse" and stage == "minimal_feedback_help" and get_minimal_feedback(u).get("completed") is not None:
+        feedback = get_minimal_feedback(u)
+        feedback["user_feedback"] = text[:240]
+        set_minimal_feedback(u, feedback)
+        return await handle_skill_result_feedback(m, u, "Стало хуже")
+    if stage == "skill_feedback_adapt" and not kind and not is_known_reply_button(text):
+        ctx["experiment_feedback_detail"] = text[:240]
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await m.answer("Уточнение сохранено для текущей задачи. Что проверим дальше: меньший шаг или другой способ?", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Уменьшить шаг")],[KeyboardButton(text="Другой способ")],[KeyboardButton(text="Хочу остановиться")]], resize_keyboard=True))
+        return True
+    if not kind or (is_known_reply_button(text) and text != "Проверить"):
+        return False
+    observations = list(ctx.get("experiment_feedback_observations") or [])
+    observations.append({"skill_id":sid, "kind":kind, "report":text[:240], "completed":None, "continued":None})
+    ctx["experiment_feedback_observations"] = observations[-20:]
+    ctx["experiment_feedback_kind"] = kind
+    u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+    if kind == "worse":
+        ctx["paused_due_to_worse"] = True
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        profile = await get_user_profile(u["user_id"], DB_PATH)
+        report = {"skill_id":sid, "helpfulness":"worse", "completed":None, "partial":None, "continued_after_skill":None, "user_feedback":text[:240], "source":"reported_experiment"}
+        u["profile_json"] = await update_user_profile(u["user_id"], {"last_skill_feedback":report, **_not_fit_today_patch(u, profile, sid)}, DB_PATH, source="reported_experiment_worse")
+        await save_user(u, DB_PATH)
+        await handle_conversation_intent(m, u, "стоп")
+        await m.answer("Ты сообщаешь об ухудшении. Этот способ пока не повторяем. Результат сохранён без предположений о выполнении; когда будет подходяще, уточним, что изменилось.")
+        return True
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    u["profile_json"] = await update_user_profile(u["user_id"], {"last_experiment_feedback_observation":observations[-1], **_not_fit_today_patch(u, profile, sid)}, DB_PATH, source="reported_experiment_feedback")
+    set_legacy_stage(u, "skill_feedback_adapt")
+    await save_user(u, DB_PATH)
+    choices = ["Скука", "Тревога"] if kind == "boring" else ["Да, мешает", "Есть, но дело идёт"] if kind == "self_criticism" else ["Уменьшить шаг", "Другой способ"]
+    markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=choice)] for choice in choices]+[[KeyboardButton(text="Хочу остановиться")]],resize_keyboard=True)
+    await answer_with_keyboard(m, u, "Текущая задача: «" + current_task_title(u, current_task_label(u)) + "».\n\n" + adaptation_question(kind,u.get("trainer_key")), markup, "skill_feedback_adapt")
+    return True
+
+
 @router.message()
 async def main_flow(m: Message):
     uid = m.from_user.id
@@ -13227,6 +13362,15 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    # Recognized commands and stops precede every psychological/feedback router.
+    if text.startswith("/"):
+        if normalize_slash_command(text) == "/start":
+            await cmd_start(m.original if isinstance(m, DialogueMessage) else m)
+            return
+        if await handle_admin_command(m, u, text) or await handle_user_command(m, u, text) or await handle_dialogue_help(m, u, text):
+            return
+        await m.answer("Неизвестная команда. Можно открыть /start или /help; текущий шаг сохранён.")
+        return
     # Application text owns its input before help, details, or psychological routing.
     if await handle_application_input(m, u, text):
         return
@@ -13236,6 +13380,28 @@ async def main_flow(m: Message):
         set_legacy_stage(u, "training_main")
         await save_user(u, DB_PATH)
         await m.answer("Хорошо, сейчас остановимся. Выполнять задания не обязательно. Можно вернуться позже или выбрать другой способ через меню.", reply_markup=kb_training_main)
+        return
+    if text.lower().replace("ё", "е").strip(" .!?") in {"стоп", "stop", "остановиться", "хватит", "не надо", "убери", "хочу остановиться"}:
+        await handle_conversation_intent(m, u, text)
+        return
+    if u.get("stage") == "recovery_context" and text != "Проверить":
+        if await handle_recovery_context(m, u, text):
+            return
+    continuation_answers = {"Продолжил задачу":True, "Остановился после шага":False, "Сделал что-то другое":False}
+    if u.get("stage") == "post_action_reflection" and text in continuation_answers:
+        latest = (await get_user_profile(uid, DB_PATH)).get("last_skill_feedback") or {}
+        if isinstance(latest, dict) and latest.get("completed") is not None:
+            feedback = minimal_feedback_base(u, source=latest.get("source") or "late_continuation")
+            feedback.update(latest)
+            feedback.update(continued_after_skill=continuation_answers[text], next_after_skill=text)
+            set_minimal_feedback(u, feedback)
+            await persist_minimal_skill_feedback(m, u)
+            return
+    canonical_results = {"Да", "Нет", "Частично", "Помогло", "Немного", "Не помогло", "Стало хуже", "Не сейчас", "Продолжил задачу", "Остановился после шага", "Сделал что-то другое", "Пока не знаю", "🙂 Стало легче", "😐 Без изменений", "😣 Стало хуже", "🚀 Дело продолжилось", "🚀 Продолжил дело", "✅ Получилось сделать", "✅ Сделал"}
+    if u.get("stage") in FEEDBACK_STAGES and text in canonical_results:
+        if await handle_skill_result_feedback(m, u, text):
+            return
+    if await handle_reported_experiment_feedback(m, u, text):
         return
     if not proactive_protected(u) and parse_intention(text, u):
         plan = parse_intention(text, u)
@@ -17458,6 +17624,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         set_legacy_stage(u, "offer_request_form")
         ctx = dialogue_context(u.get("dialogue_context"))
         ctx.pop("offer_request_parts", None)
+        ctx["application_request_id"] = uuid.uuid4().hex
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         u["pending_offer_request_format"] = format_label
         u["last_offer_action"] = data
@@ -18277,7 +18444,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-66)")
+        log.info("Public bot description is current (PATCH-67)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 

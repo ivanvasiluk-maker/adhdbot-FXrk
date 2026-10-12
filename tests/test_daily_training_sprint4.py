@@ -86,15 +86,15 @@ class DailyTrackJourneys(unittest.IsolatedAsyncioTestCase):
         self.assertIn('moment_training',context(u));self.assertEqual(u['plan_json'],self.before['plan_json'])
         m,u=await self.send('Вернуться к тренировке');self.assertEqual(u['current_action_id'],self.before['current_action_id'])
     async def test_boredom_gives_choices_then_changes_format_not_core(self):
-        m,u=await self.send('скучно');self.assertEqual(u['stage'],'training_format')
-        self.assertNotIn('?',m.answers[0][0]);self.assertNotIn('подробнее',m.answers[0][0])
-        m,u=await self.send('⚡ 30 секунд');self.assertEqual(u['stage'],'training')
-        self.assertIn('30 секунд',m.answers[0][0]);self.assertEqual(u['day_core_skill_id'],self.before['day_core_skill_id'])
+        m,u=await self.send('скучно');self.assertEqual(u['stage'],'skill_feedback_adapt')
+        self.assertIn('скука',m.answers[0][0].lower());self.assertNotIn('подробнее',m.answers[0][0])
+        m,u=await self.send('Уменьшить шаг');self.assertEqual(u['stage'],'training')
+        self.assertIn('Меняем подход',m.answers[0][0]);self.assertEqual(u['day_core_skill_id'],self.before['day_core_skill_id'])
         self.assertEqual(u['plan_json'],self.before['plan_json'])
         self.assertEqual(bot.active_attempt(u)['effect_status'],'unknown')
     async def test_feedback_and_application_own_bored_words(self):
         await self.send('✅ Сделал');m,u=await self.send('скучно')
-        self.assertEqual(u['stage'],'minimal_feedback_help')
+        self.assertEqual(u['stage'],'skill_feedback_adapt')
         self.assertNotIn('Похоже, этот формат',m.answers[0][0])
         u['stage']='offer_request_form';await save_user(u,self.path)
         with patch.object(bot,'notify_offer_request',AsyncMock()) as notify:

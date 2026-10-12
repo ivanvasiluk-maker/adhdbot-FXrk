@@ -440,6 +440,13 @@ def _target_header_text(today_target: str, user: dict | None = None) -> str:
         target = "важное дело, которое ты сейчас откладываешь"
     return f"📌 Дело: {target}"
 
+def trainer_practice(style):
+    return {
+        "marsha": "Если появляется самокритичная мысль, можно назвать её мыслью, а не приговором. Разреши себе посильный минимум. Если давление растёт, можно остановиться.",
+        "skinny": "Критерий завершения: выполнен один указанный шаг. После него остановись и отметь результат.",
+        "beck": "Перед действием: запиши одну автоматическую мысль и прогноз, что случится. После шага сравни прогноз с фактом: состояние и продвижение задачи учитываем отдельно.",
+    }.get(style, "Разреши себе посильный минимум; после него отдельно проверим результат.")
+
 def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
     """Single compact skill card without duplicated title/minimum/lesson blocks."""
     def clean(value: object) -> str:
@@ -474,8 +481,11 @@ def format_skill_card(user: dict, skill: dict, today_target: str) -> str:
             "Частичное выполнение тоже даёт данные."
         ),
     }.get((user or {}).get("trainer_key") or "marsha")
+    style = (user or {}).get("trainer_key") or "marsha"
+    practice = trainer_practice(style)
     return (
         f"🧩 {skill_name}\n\n"
+        f"{practice}\n\n"
         f"{steps_text}\n\n"
         f"Если трудно, достаточно этого: {minimum_action}\n\n"
         "Что получилось после попытки?"
@@ -2530,8 +2540,5 @@ def trainer_introduction(key):
 
 
 def behavioral_chain_text(situation="", avoidance=""):
-    return ("Поведенческая цепочка\n"
-            + "Ситуация: " + (situation or "ещё не уточнена")
-            + "\nДействие вместо задачи: " + (avoidance or "ещё не уточнено")
-            + "\nМысли, чувства и результат: учитываем только то, что сообщено; остальное уточняем."
-            + ("\nУточни: что происходит вместо дела и что меняется сразу после этого?" if not avoidance else ""))
+    from core.experiment_dialogue import reported_chain, render_chain
+    return render_chain(reported_chain(situation, avoidance=avoidance))

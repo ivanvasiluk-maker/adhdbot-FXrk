@@ -3,7 +3,7 @@ import re
 
 FEEDBACK_STAGES = frozenset({'minimal_feedback_help', 'minimal_feedback_next', 'minimal_feedback_done', 'feedback_partial_text', 'skill_result_feedback', 'skill_done_effect', 'skill_done_effect_text', 'skill_obstacle', 'skill_obstacle_other', 'post_action_reflection', 'recovery_context'})
 NAVIGATION_STAGES = frozenset({'training', 'training_main', 'day_core_stop', 'success_menu', 'day_closed_menu', 'closed_day_new_situation', 'request_task', 'intent_choose', 'intent_understand_context', 'intent_understand_result', 'intent_act_context', 'intent_paused'})
-STOP_WORDS = frozenset({'стоп', 'stop', 'остановиться', 'хватит', 'не сейчас', 'на этом пока остановиться', 'мне достаточно', 'пока достаточно', 'до свидания', 'до встречи', 'пока', 'на сегодня все', 'спасибо, на сегодня все'})
+STOP_WORDS = frozenset({'стоп', 'stop', 'остановиться', 'хватит', 'не надо', 'убери', 'хочу остановиться', 'не сейчас', 'на этом пока остановиться', 'мне достаточно', 'пока достаточно', 'до свидания', 'до встречи', 'пока', 'на сегодня все', 'спасибо, на сегодня все'})
 ACKNOWLEDGE_WORDS = frozenset({'спасибо', 'спасибо большое', 'благодарю', 'понятно', 'понял', 'поняла', 'ясно'})
 CONTINUE_WORDS = frozenset({'продолжить', 'продолжим', 'давай дальше'})
 
@@ -13,6 +13,8 @@ def resolve_intent(text, stage='', session=None):
     session = session or {}
     if stage == 'offer_request_form':
         return 'APPLICATION_DATA'
+    if low in {'стоп','stop','остановиться','хватит','не надо','убери','хочу остановиться'}:
+        return 'STOP'
     # A paused screen owns navigation even while its frozen session awaits feedback.
     if stage == 'intent_paused':
         if low in STOP_WORDS:
