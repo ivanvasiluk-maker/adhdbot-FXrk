@@ -183,7 +183,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         for section in (
             "Навык дня — для твоей ситуации", "закончить презентацию",
             "Что вижу", "Что будем делать", "Что развиваем",
-            "START", "STAY", "RETURN", "После ответа я обновлю карту",
+            "старт", "удержание", "возврат", "После ответа я обновлю карту",
         ):
             self.assertIn(section, text)
         self.assertIn("Цель не качество", text)
