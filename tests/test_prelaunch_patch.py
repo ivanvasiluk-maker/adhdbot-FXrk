@@ -78,7 +78,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("🟢 Продолжить бесплатно", labels)
+        self.assertIn("💬 Продолжить чат с тренером бесплатно", labels)
         self.assertFalse(any("€4.99/мес" in label for label in labels))
         self.assertIn("👥 Хочу в группу — €240", labels)
         self.assertTrue(any(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in label for label in labels))
@@ -131,11 +131,11 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
             "last_day_closed_at": bot.local_date_for_user(user),
             "free_mode": 0, "full_mode": 0,
         })
-        self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
+        self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         with patch.object(bot, "FREE_BETA_ACCESS", False):
             self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         user.update({"day": 10, "last_offer_shown_at": (now - bot.dt.timedelta(days=7)).isoformat(), "last_active": now.timestamp()})
-        self.assertFalse(bot.scheduled_offer_due(user, {}, now=now))
+        self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         with patch.object(bot, "FREE_BETA_ACCESS", False):
             self.assertTrue(bot.scheduled_offer_due(user, {}, now=now))
         user["last_active"] = (now - bot.dt.timedelta(days=8)).timestamp()

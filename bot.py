@@ -908,7 +908,7 @@ def offer_recently_limited(u: Dict[str, Any], profile: Optional[Dict[str, Any]] 
 
 def scheduled_offer_due(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None, *, now: Optional[dt.datetime] = None) -> bool:
     """Show at Day 3 close, then weekly while the unpaid user remains active."""
-    if FREE_BETA_ACCESS:
+    if FREE_BETA_ACCESS and not (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER):
         return False
     profile = profile or {}
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -1249,6 +1249,9 @@ async def handle_application_input(m, u, text):
                            "Чтобы вернуться к тренировке без заявки, напиши /cancel.")
             return True
         incoming = (text or "").strip()
+        if incoming.lower().strip(" .!?") in {"скучно", "вы меня не поняли", "ты меня не понял", "ты меня не поняла"}:
+            await m.answer("Сейчас открыта заявка Ивану. Какой вопрос хочется обсудить со специалистом? Для возврата в чат — /cancel.")
+            return True
         ctx = dialogue_context(u.get("dialogue_context"))
         parts = list(ctx.get("offer_request_parts") or [])
         if incoming and incoming not in parts:
@@ -1260,7 +1263,7 @@ async def handle_application_input(m, u, text):
         known_username = getattr(m.from_user, "username", None) or u.get("username")
         def contact_only(value):
             return bool(re.fullmatch(r"(?:@[\w]+|[\w.+-]+@[\w.-]+\.\w+|\+?[\d ()-]{7,}|https?://t\.me/[\w]+)", value.strip()))
-        has_contact = bool(known_username or re.search(r"@[\w]+|[\w.+-]+@[\w.-]+\.\w+|\+?\d[\d ()-]{6,}|https?://t\.me/[\w]+", request_text))
+        has_contact = bool(getattr(m.from_user, "id", None) or known_username or re.search(r"@[\w]+|[\w.+-]+@[\w.-]+\.\w+|\+?\d[\d ()-]{6,}|https?://t\.me/[\w]+", request_text))
         has_request = any(not contact_only(part) and len(part.strip()) >= 2 for part in parts)
         if not has_request:
             await m.answer("Какой вопрос хочется разобрать? Можно коротко, например: СДВГ или тревога.")
@@ -1524,7 +1527,7 @@ async def handle_conversation_intent(m, u, text):
         set_legacy_stage(u, "intent_understand_result")
         await save_user(u, DB_PATH)
         result = comp["analysis_result"]
-        await m.answer("Моя рабочая версия сейчас:\n" + str(result.get("core_hypothesis") or comp["specific_pattern"])
+        await m.answer(behavioral_chain_text(text[:240], comp.get("avoidance_behavior") or "") + "\n\nРабочая гипотеза:\n" + public_enum_text(result.get("core_hypothesis") or comp["specific_pattern"])
                        + "\n\nЧто можно изменить\n" + str(result.get("first_check") or "Уменьшить первый шаг.")
                        + "\n\nЭто предложение для проверки. Можно закончить разбор или попробовать шаг.",
                        reply_markup=ReplyKeyboardMarkup(keyboard=[
@@ -1669,9 +1672,11 @@ async def handle_dialogue_help(m, u, text):
         u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         onboarding = u.get("stage") == "ask_address"
         if onboarding:
-            set_legacy_stage(u, "await_trainer")
+            set_legacy_stage(u, "privacy_consent" if ctx.get("trainer_selected_before_address") else "await_trainer")
         await save_user(u, DB_PATH)
-        if onboarding:
+        if onboarding and ctx.get("trainer_selected_before_address"):
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
+        elif onboarding:
             await m.answer("Какой стиль общения вам ближе?\n\nМарша — поддержка.\nСкинни — короткие прямые инструкции.\nБек — спокойные объяснения.", reply_markup=kb_trainers)
         else:
             previous = str(ctx.get("text") or "") if ctx.get("stage") == u.get("stage") else ""
@@ -7934,6 +7939,11 @@ async def remember_offer_decision(u, *, declined=False):
 async def automatic_support_allowed(u, profile, *, first=False):
     if commercial_blocked(u, profile) or has_unfinished_exercise_for_offer(u):
         return False
+    if str(u.get("payment_status") or "") in {"paid", "active"}:
+        return False
+    shown = _parse_aware_datetime(profile.get("offer_seen_at") or u.get("last_offer_shown_at"))
+    if shown and int(u.get("day") or 1) > 3 and dt.datetime.now(dt.timezone.utc) - shown < dt.timedelta(days=7):
+        return False
     facts = offer_evidence(await autonomy_rows(u), local_date_for_user(u))
     return facts["useful_applications"] >= (1 if first else 2) and not facts["latest_worse"] and not facts["latest_failed"]
 
@@ -8423,14 +8433,15 @@ def offer_request_notification_text(u: Dict[str, Any], source: str, form_text: s
     email_match = re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", form_text or "")
     tg_label = f"@{username}" if username else "—"
     return (
-        "✍️ Заявка из offer\n\n"
+        "✍️ Новая заявка SKILLER\n\n"
         f"Формат: {u.get('pending_offer_request_format') or source}\n"
-        f"User ID: {u.get('user_id')}\n"
-        f"TG: {tg_label}\n"
-        f"First: {first_name or '—'}\n"
-        f"Last: {last_name or '—'}\n"
-        f"Lang: {lang or '—'}\n"
-        f"Email: {email_match.group(0) if email_match else 'не распознан'}\n\n"
+        f"Номер пользователя: {u.get('user_id')}\n"
+        f"Telegram: {tg_label}\n"
+        f"Профиль: tg://user?id={u.get('user_id')}\n"
+        f"Имя: {first_name or '—'}\n"
+        f"Фамилия: {last_name or '—'}\n"
+        
+        f"Почта: {email_match.group(0) if email_match else 'не указана'}\n\n"
         f"Сообщение пользователя:\n{(form_text or '').strip()[:2000]}"
     )
 
@@ -8446,7 +8457,7 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
         await log_event(u["user_id"], "offer", "offer_request_notification_skipped", {"source": source, "reason": "no_bot"}, DB_PATH, SHEETS_WEBHOOK_URL)
         return False
     try:
-        await bot_obj.send_message(CURATOR_TELEGRAM_ID, offer_request_notification_text(u, source, form_text, sender if isinstance(sender, Message) else getattr(sender, "message", None)))
+        await bot_obj.send_message(CURATOR_TELEGRAM_ID, offer_request_notification_text(u, source, form_text, getattr(sender, "original", sender) if hasattr(sender, "from_user") else getattr(sender, "message", None)))
     except Exception as e:
         log.warning("Failed to notify offer request recipient %s: %s", CURATOR_TELEGRAM_ID, e)
         await log_event(u["user_id"], "offer", "offer_request_notification_failed", {"source": source, "error": str(e)[:160]}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -8543,7 +8554,7 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
     keyboard.extend([
         [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
         [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
-        [InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
+        [InlineKeyboardButton(text="💬 Продолжить чат с тренером бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
         [InlineKeyboardButton(text="Другие форматы поддержки", callback_data=OFFER_CALLBACKS["compare"])],
     ])
     if ENABLE_GROUP_OFFER:
@@ -8572,7 +8583,7 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
         ])
         return InlineKeyboardMarkup(inline_keyboard=rows)
-    rows = [[InlineKeyboardButton(text="🟢 Продолжить бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
+    rows = [[InlineKeyboardButton(text="💬 Продолжить чат с тренером бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
     if paid_plan_available():
         rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
     if ENABLE_GROUP_OFFER:
@@ -8596,17 +8607,12 @@ def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = N
 
 
 def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = False) -> str:
-    contact_line = (
-        "Контакт из Telegram будет добавлен автоматически.\n"
-        if has_telegram_contact else
-        "Для ответа нужен один контакт: @username, почта или телефон.\n"
-    )
     return (
         f"Заявка на формат: {format_label}.\n\n"
-        + contact_line +
-        "Что хочется разобрать? Можно коротко, например: СДВГ или тревога.\n"
-        "Имя, запрос и контакт можно прислать вместе или отдельными сообщениями.\n\n"
-        "Отменить заявку и вернуться — /cancel."
+        "Имя и Telegram-профиль будут добавлены автоматически.\n"
+        "Какой вопрос хочется разобрать? Достаточно одной фразы, например: трудно начинать дела или СДВГ.\n\n"
+        "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку для ответа на заявку. "
+        "Другой контакт можно добавить по желанию. Отменить — /cancel."
     )
 
 
@@ -11834,7 +11840,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-65\n"
+            "Product release PATCH-66\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -12392,6 +12398,7 @@ async def continue_analysis_from_barrier(m: Message, u: Dict[str, Any], text: st
         analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or "",
         analysis_result.get("recommended_skill_reason") or "",
     )
+    conclusion = behavioral_chain_text(current_task_title(u, ""), comp.get("avoidance_behavior") or "") + "\n\n" + conclusion
     comp["short_conclusion"] = conclusion
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
     u["bucket"] = comp.get("bucket") or u.get("bucket") or "mixed"
@@ -13235,6 +13242,23 @@ async def main_flow(m: Message):
         await original.answer(f"Напомнить о «{plan['planned_action']}» {plan['due_at'][:10]} в {plan['approx_time']}?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Да, один раз", callback_data=f"proactive:plan:{plan['token']}:yes"),
              InlineKeyboardButton(text="Без напоминания", callback_data=f"proactive:plan:{plan['token']}:no")]]))
+        return
+    if u.get("stage") == "social_support_await" and text == "Больше не спрашивать об опорах":
+        u["profile_json"] = await update_user_profile(u["user_id"], {"social_support_opt_out": 1, "social_support_prompt_shown": 1}, DB_PATH, source="social_support_opt_out")
+        pending = json.loads(u.get("pending_plan_change") or "{}")
+        u["pending_plan_change"] = None
+        return_stage = pending.get("return_stage") or "waiting_next_day"
+        set_legacy_stage(u, "working_map" if return_stage == "working_map" else "waiting_next_day")
+        await save_user(u, DB_PATH)
+        await m.answer("Сохранено. Больше не буду спрашивать об опорах. Можно вернуться к этой теме по собственной инициативе.")
+        if return_stage == "start_day":
+            ensure_first_start_date(u)
+            await save_user(u, DB_PATH)
+            await start_day(m, u, calendar_program_day(u), DB_PATH, SHEETS_WEBHOOK_URL)
+        elif return_stage == "working_map":
+            await answer_with_keyboard(m, u, preliminary_development_map_from_analysis(json.loads(u.get("analysis_json") or "{}")), kb_working_map, "working_map")
+        else:
+            await answer_with_keyboard(m, u, "Можно продолжить тренировку или вернуться позже.", kb_training_main, "training_main")
         return
     if u.get("stage") == "social_support_await":
         support_labels = {button.text for row in kb_social_support.keyboard for button in row}
@@ -14830,9 +14854,12 @@ async def main_flow(m: Message):
         if text and text.lower() != "пропустить":
             u["name"] = text[:50]
         await log_event(u["user_id"], "onboarding", "name_provided", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        set_legacy_stage(u, "ask_address")
+        set_legacy_stage(u, "await_trainer")
+        ctx = dialogue_context(u.get("dialogue_context"))
+        ctx["trainer_before_address"] = True
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         await save_user(u, DB_PATH)
-        await m.answer("Давайте на «ты» или на «вы»?", reply_markup=address_keyboard())
+        await m.answer(TRAINER_INTRO, reply_markup=kb_trainers)
         return
 
     # ============================================================
@@ -14851,10 +14878,18 @@ async def main_flow(m: Message):
             await show_context_fallback(m, u, "await_trainer_invalid_button")
             return
         u["trainer_key"] = chosen
-        set_legacy_stage(u, "privacy_consent")
+        ctx = dialogue_context(u.get("dialogue_context"))
+        new_order = bool(ctx.get("trainer_before_address"))
+        set_legacy_stage(u, "ask_address" if new_order else "privacy_consent")
+        ctx["trainer_selected_before_address"] = new_order
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
         await save_user(u, DB_PATH)
         await log_event(u["user_id"], "onboarding", "trainer_selected", {"trainer_key": chosen}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
+        if new_order:
+            await m.answer(trainer_introduction(chosen))
+            await m.answer("Давайте на «ты» или на «вы»?", reply_markup=address_keyboard())
+        else:
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
         return
 
     if u.get("stage") == "notification_consent":
@@ -15139,7 +15174,7 @@ async def main_flow(m: Message):
             if int(u.get("has_started_training") or 0) or training_context(u).get("moment_training"):
                 await start_intent_action(m, u)
                 return
-            if not profile.get("social_support_prompt_shown"):
+            if not profile.get("social_support_prompt_shown") and not profile.get("social_support_opt_out"):
                 set_legacy_stage(u, "social_support_await")
                 u["pending_plan_change"] = json.dumps({"type": "social_support", "return_stage": "start_day"}, ensure_ascii=False)
                 await update_user_profile(u["user_id"], {"social_support_prompt_shown": 1}, DB_PATH, source="social_support_prompt")
@@ -15187,7 +15222,7 @@ async def main_flow(m: Message):
             if int(u.get("has_started_training") or 0) or training_context(u).get("moment_training"):
                 await start_intent_action(m, u)
                 return
-            if not updated_profile.get("social_support_prompt_shown"):
+            if not updated_profile.get("social_support_prompt_shown") and not updated_profile.get("social_support_opt_out"):
                 set_legacy_stage(u, "social_support_await")
                 u["pending_plan_change"] = json.dumps({"type": "social_support", "return_stage": "working_map"}, ensure_ascii=False)
                 await update_user_profile(u["user_id"], {"social_support_prompt_shown": 1}, DB_PATH, source="social_support_prompt")
@@ -15780,11 +15815,13 @@ async def main_flow(m: Message):
         if not value:
             await answer_with_keyboard(m, u, social_support_prompt_text(), kb_social_support, "social_support")
             return
-        no_support = "нет опоры" in value.lower()
+        opt_out = value == "Больше не спрашивать об опорах"
+        no_support = opt_out or "нет опоры" in value.lower()
         presence_help = "среди людей" in value.lower()
         external_start = any(x in value.lower() for x in ("коллег", "партн", "чат", "групп", "комьюнити", "человек", "написать"))
         short_report = not no_support and any(x in value.lower() for x in ("человек", "коллег", "партн", "сем", "близ", "чат", "групп", "комьюнити"))
         patch = {
+            "social_support_opt_out": int(opt_out),
             "social_support_choice": value,
             "social_support_available": 0 if no_support else 1,
             "social_support_notes": value,
@@ -15807,7 +15844,9 @@ async def main_flow(m: Message):
             await show_safety_support(m, u, "social_support_after_crisis")
             return
         return_stage = pending.get("return_stage") if isinstance(pending, dict) and pending.get("type") == "social_support" else "waiting_next_day"
-        if no_support:
+        if opt_out:
+            await m.answer("Сохранено. Больше не буду спрашивать об опорах. Можно вернуться к этой теме по собственной инициативе.")
+        elif no_support:
             await m.answer(
                 "Ок. Тогда пока не строим план на поддержке других людей. Будем искать автономные опоры: среда, таймер, маленький шаг, ритуал старта.\n\n"
                 f"{social_support_map_text()}"
@@ -17633,7 +17672,7 @@ async def on_callbacks(c: CallbackQuery):
                 await start_intent_action(c.message, u)
                 await c.answer()
                 return
-            if not updated_profile.get("social_support_prompt_shown"):
+            if not updated_profile.get("social_support_prompt_shown") and not updated_profile.get("social_support_opt_out"):
                 set_legacy_stage(u, "social_support_await")
                 u["pending_plan_change"] = json.dumps({"type": "social_support", "return_stage": "working_map"}, ensure_ascii=False)
                 await update_user_profile(u["user_id"], {"social_support_prompt_shown": 1}, DB_PATH, source="social_support_prompt")
@@ -18205,13 +18244,13 @@ def start_sheets_sync_background_task(db_path: str):
 
 
 PUBLIC_BOT_DESCRIPTION = (
-    "SKILLER — тренажёр навыков для взрослых 18+. Помогает начать конкретное дело, "
+    "SKILLER — тренажёр навыков. Помогает начать конкретное дело, "
     "вернуться после отвлечения и найти посильный следующий шаг. "
     "Выбери стиль общения, опиши ситуацию и попробуй короткое действие. "
     "Бот отдельно спросит, стало ли легче и продолжилось ли дело. "
     "Во время тестирования бот бесплатный. Это не диагностика, психотерапия или экстренная помощь."
 )
-PUBLIC_BOT_SHORT_DESCRIPTION = "SKILLER: начать дело, удержать внимание и вернуться после отвлечения. Тренажёр навыков, 18+."
+PUBLIC_BOT_SHORT_DESCRIPTION = "SKILLER: начать дело, удержать внимание и вернуться после отвлечения. Тренажёр навыков."
 
 
 async def sync_public_bot_description(telegram_bot) -> None:
@@ -18224,7 +18263,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-65)")
+        log.info("Public bot description is current (PATCH-66)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 

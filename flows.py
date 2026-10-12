@@ -1508,6 +1508,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
         (analysis_result.get("recommended_skill_reason") or ""),
     )
+    from texts import behavioral_chain_text
+    preliminary_conclusion = behavioral_chain_text(user_text[:240], comp_to_store.get("avoidance_behavior") or "") + "\n\n" + preliminary_conclusion
     comp_to_store["short_conclusion"] = preliminary_conclusion
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
     await save_user(u, db_path)

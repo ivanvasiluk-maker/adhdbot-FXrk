@@ -17,6 +17,7 @@ class Followup(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot, 'notify_offer_request', AsyncMock(return_value=True)) as notify, patch.object(bot, 'log_event', AsyncMock()):
             for text in ('Иван', 'СДВГ', '@ivam'):
                 m = Message(self.uid, text)
+                m.from_user.id = None  # legacy input without Telegram identity
                 await bot.handle_application_input(m, u, text)
             self.assertEqual(notify.await_args.args[3], 'Иван\nСДВГ\n@ivam')
             self.assertEqual(notify.await_count, 1)
