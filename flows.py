@@ -1128,7 +1128,10 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
     hypothesis = result.get("core_hypothesis") or comp.get("specific_pattern") or "Причину ещё уточняем"
     first = result.get("first_check") or result.get("recommended_skill_name") or "Назовите одно конкретное дело."
     from texts import behavioral_chain_text
-    return (behavioral_chain_text(facts[0] if facts else "", comp.get("avoidance_behavior") or "") + "\n\nЧто есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
+    from core.experiment_dialogue import render_chain
+    chain = comp.get("behavioral_chain")
+    chain_text = render_chain(chain) if isinstance(chain, dict) else behavioral_chain_text(facts[0] if facts else "", comp.get("avoidance_behavior") or "")
+    return (chain_text + "\n\nЧто есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
             + "\n\nЧто может мешать\n" + str(hypothesis)
             + "\n\nЧто можно проверить\n" + str(first)
             + "\n\nПосле шага отдельно посмотрим: стало ли легче и получилось ли продолжить дело. Если станет хуже, остановимся и подберём другой подход.")
@@ -1509,6 +1512,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
         (analysis_result.get("recommended_skill_reason") or ""),
     )
+    from core.experiment_dialogue import reported_chain
+    comp_to_store["behavioral_chain"] = reported_chain(user_text)
     from texts import behavioral_chain_text
     preliminary_conclusion = behavioral_chain_text(user_text[:240], comp_to_store.get("avoidance_behavior") or "") + "\n\n" + preliminary_conclusion
     comp_to_store["short_conclusion"] = preliminary_conclusion

@@ -67,6 +67,11 @@ def _case(source: str, target: str) -> str:
 
 
 def _render(part: str, mode: str, form: str) -> str:
+    ready = 'будете готовы' if mode == 'vy' else 'будешь готова' if form == 'female' else 'будешь готов' if form == 'male' else 'можно будет попробовать'
+    part = re.sub(r'\b(?:будешь|будете)\s+готов(?:а|ы)?\b', lambda m: _case(m[0], ready), part, flags=re.I)
+    thought = 'что вы об этом подумали' if mode == 'vy' else 'что ты об этом подумала' if form == 'female' else 'что ты об этом подумал' if form == 'male' else 'какая мысль об этом появилась'
+    part = re.sub(r'\bчто\s+(?:ты|вы)\s+об этом\s+подумал(?:а|и)?\b', lambda m: _case(m[0], thought), part, flags=re.I)
+    part = re.sub(r'(?<!\.)\.\.(?!\.)', '.', part)
     if mode == 'ty' and form == 'neutral':
         part = re.sub(r'\b(?:ты|вы)\s+не\s+од(?:ин|на|ни)\b', 'не обязательно справляться в одиночку', part, flags=re.I)
         part = re.sub(r'\b(?:ты|вы)\s+не\s+готов(?:а|ы)?\b', 'пока не хочется пробовать', part, flags=re.I)
