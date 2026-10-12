@@ -9338,6 +9338,7 @@ def new_day_skill_card_text(
 ) -> str:
     skill_name, why_short, step_text, minimum = _skill_card_parts(skill, u)
     trainer_line = trainer_general_line_for_user(u) if u else "Давай бережно: только маленький вход, без давления на результат."
+    practice = trainer_practice((u or {}).get("trainer_key") or "marsha")
     task = current_task_label(u or {})
     mechanism = _current_mechanism_label(u, profile)
     card = (
@@ -9350,8 +9351,8 @@ def new_day_skill_card_text(
         f"— {why_short}\n"
         "— проверим навык действием, а не будем считать гипотезу фактом\n\n"
         "Что развиваем\n"
-        "— сначала START — более надёжный вход в задачу\n"
-        "— затем STAY и RETURN — удержание и возврат после срыва\n\n"
+        "— сначала старт — более надёжный вход в задачу\n"
+        "— затем удержание и возврат — удержание и возврат после срыва\n\n"
         f"Сделай:\n{step_text}\n\n"
         f"Минимум:\n{minimum}\n\n"
         f"🧩 Навык дня — для твоей ситуации: {skill_name}\n\n"
