@@ -1127,7 +1127,8 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
         return "Пока мало данных для вывода. Ответьте на текущий вопрос — затем уточним, что мешает и какой шаг проверить."
     hypothesis = result.get("core_hypothesis") or comp.get("specific_pattern") or "Причину ещё уточняем"
     first = result.get("first_check") or result.get("recommended_skill_name") or "Назовите одно конкретное дело."
-    return ("Что есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
+    from texts import behavioral_chain_text
+    return (behavioral_chain_text(facts[0] if facts else "", comp.get("avoidance_behavior") or "") + "\n\nЧто есть в вашем описании\n" + ("\n".join("— " + item for item in facts) if facts else "Пока мало конкретных фактов.")
             + "\n\nЧто может мешать\n" + str(hypothesis)
             + "\n\nЧто можно проверить\n" + str(first)
             + "\n\nПосле шага отдельно посмотрим: стало ли легче и получилось ли продолжить дело. Если станет хуже, остановимся и подберём другой подход.")
@@ -1508,6 +1509,8 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
         (analysis_result.get("first_check") or analysis_result.get("recommended_skill_name") or ""),
         (analysis_result.get("recommended_skill_reason") or ""),
     )
+    from texts import behavioral_chain_text
+    preliminary_conclusion = behavioral_chain_text(user_text[:240], comp_to_store.get("avoidance_behavior") or "") + "\n\n" + preliminary_conclusion
     comp_to_store["short_conclusion"] = preliminary_conclusion
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
     await save_user(u, db_path)

@@ -138,7 +138,7 @@ async def run():
         has_primary_map = all(section in offer_text for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше"))
         has_day3_conclusion = "Где пока труднее" in offer_text and "Что сработало" in offer_text
         has_personal_offer = (
-            "🟢 Продолжить бесплатно" in kb_texts
+            any("Продолжить бесплатно" in label for label in kb_texts)
             and has_group_offer and has_live_offer
         )
         has_model_value = "Что могло мешать" in offer_text and "Что проверим дальше" in offer_text

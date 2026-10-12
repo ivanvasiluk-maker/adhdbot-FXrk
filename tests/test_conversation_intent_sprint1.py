@@ -38,7 +38,7 @@ class IntentJourneys(unittest.IsolatedAsyncioTestCase):
             m,u=await self.send('Почему я постоянно откладываю отчёт, хотя хочу начать работу?')
             action.assert_not_awaited()
         self.assertEqual(u['stage'],'intent_understand_result')
-        self.assertIn('Моя рабочая версия',m.answers[-1][0])
+        self.assertIn('Рабочая гипотеза',m.answers[-1][0])
         self.assertIn('Мне достаточно',str(m.answers[-1][1]))
         self.assertEqual(u['current_action_id'],'keep_action')
     async def test_understand_missing_case_waits(self):
