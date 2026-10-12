@@ -78,7 +78,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("💬 Продолжить чат с тренером бесплатно", labels)
+        self.assertIn("💬 Продолжить бесплатно — чат с тренером", labels)
         self.assertFalse(any("€4.99/мес" in label for label in labels))
         self.assertIn("👥 Хочу в группу — €240", labels)
         self.assertTrue(any(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in label for label in labels))

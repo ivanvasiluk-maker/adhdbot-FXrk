@@ -8554,7 +8554,7 @@ def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> Inli
     keyboard.extend([
         [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
         [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
-        [InlineKeyboardButton(text="💬 Продолжить чат с тренером бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])],
+        [InlineKeyboardButton(text="💬 Продолжить бесплатно — чат с тренером", callback_data=OFFER_CALLBACKS["stay_free"])],
         [InlineKeyboardButton(text="Другие форматы поддержки", callback_data=OFFER_CALLBACKS["compare"])],
     ])
     if ENABLE_GROUP_OFFER:
@@ -8583,7 +8583,7 @@ def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
         ])
         return InlineKeyboardMarkup(inline_keyboard=rows)
-    rows = [[InlineKeyboardButton(text="💬 Продолжить чат с тренером бесплатно", callback_data=OFFER_CALLBACKS["stay_free"])]]
+    rows = [[InlineKeyboardButton(text="💬 Продолжить бесплатно — чат с тренером", callback_data=OFFER_CALLBACKS["stay_free"])]]
     if paid_plan_available():
         rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
     if ENABLE_GROUP_OFFER:

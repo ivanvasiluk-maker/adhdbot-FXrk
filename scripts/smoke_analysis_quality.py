@@ -43,16 +43,7 @@ async def main() -> None:
     details_text = render_analysis_details_by_trainer(comp, "beck")
     for marker in ("Коротко", "Моя рабочая гипотеза", "проверяем"):
         assert marker in analysis_text, analysis_text
-    for marker in (
-        "## 🧭 Почему я сейчас думаю именно так",
-        "### Что ты прямо описал",
-        "### Как может выглядеть цикл сейчас",
-        "Это пока не диагноз и не окончательный вывод",
-        "### Почему выбрана эта гипотеза",
-        "### Что уже известно",
-        "### Что проверим первым",
-        "Чтобы не гадать",
-    ):
+    for marker in ("Поведенческая цепочка", "Что есть в вашем описании", "Что может мешать", "Что можно проверить"):
         assert marker in details_text, details_text
     for marker in ("статью нужно сдать сегодня", "паника", "Плохой черновик"):
         assert marker in details_text, details_text
