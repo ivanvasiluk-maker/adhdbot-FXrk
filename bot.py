@@ -8110,6 +8110,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
             "Сейчас можно изучить варианты или вернуться к тренировке.\n\n"
             + text
         )
+    await m.answer("Бот остаётся бесплатным. Ниже — варианты поддержки с психологом.",reply_markup=ReplyKeyboardRemove())
     await answer_with_inline_screen(m, u, text, offer_inline_keyboard(u["user_id"], bool(int(u.get("is_test_user") or 0))), "offer")
 
 
@@ -17634,6 +17635,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         set_legacy_stage(u, OFFER_MENU_STAGE)
         u["offer_mode"] = u.get("offer_mode") or "manual"
         await save_user(u, DB_PATH)
+        await c.message.answer("Бот остаётся бесплатным. Выбираем формат поддержки.",reply_markup=ReplyKeyboardRemove())
 
     if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
         await remember_offer_decision(u, declined=True)

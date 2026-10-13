@@ -142,3 +142,12 @@ class Funnel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chain['behavior'],'я лежу')
         self.assertIsNone(chain['immediate'])
         self.assertIsNone(chain['thoughts'])
+
+    async def test_support_button_opens_modal_and_removes_training_keyboard(self):
+        from aiogram.types import ReplyKeyboardRemove
+        await self.user(stage='training_main',has_started_training=1,today_target='Маркетинг')
+        m=Message(self.uid,'🤝 Поддержка психолога')
+        await bot.main_flow(m)
+        self.assertTrue(any(isinstance(kwargs.get('reply_markup'),ReplyKeyboardRemove) for _,kwargs in m.answers))
+        self.assertEqual((await get_user(self.uid,bot.DB_PATH))['stage'],bot.OFFER_MENU_STAGE)
+        self.assertLessEqual(sum(len(row) for row in m.answers[-1][1]['reply_markup'].inline_keyboard),4)
