@@ -133,8 +133,9 @@ async def run():
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
-        has_group_offer = "👥 Хочу в группу — €240" in kb_texts
-        has_live_offer = any("👤 Личная работа" in t for t in kb_texts)
+        has_group_offer = "👥 Групповой тренинг" in kb_texts
+        has_live_offer = any("👤 Индивидуальный тренинг" in t for t in kb_texts)
+        assert len(kb_texts) <= 4
         has_primary_map = all(section in offer_text for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше"))
         has_day3_conclusion = "Где пока труднее" in offer_text and "Что сработало" in offer_text
         has_personal_offer = (
