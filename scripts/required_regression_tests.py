@@ -591,14 +591,20 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     assert "Можно продолжать самостоятельно" in text
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
-    assert "👥 Хочу в группу — €240" in keyboard_text
-    assert f"👤 Личная работа — от €{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in keyboard_text
+    assert "👥 Групповой тренинг" in keyboard_text
+    assert "€240" in bot.tariff_group_text()
+    assert "👤 Индивидуальный тренинг" in keyboard_text
+    assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц" in bot.tariff_live_text()
     assert "Продолжить бесплатно" in keyboard_text
     callbacks = [button.callback_data for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row]
-    assert callbacks.count(bot.OFFER_CALLBACKS["stay_free"]) == 1
-    assert "🧭 План на следующие 7 дней" in keyboard_text
-    assert "📖 Почему такой вывод" in keyboard_text
-    assert "Другие форматы поддержки" in keyboard_text
+    assert callbacks.count(bot.OFFER_CALLBACKS["continue_training"]) == 1
+    assert len(callbacks) <= 4
+    assert "📖 Подробнее и план" in keyboard_text
+    details = [b.callback_data for row in bot.offer_details_inline_keyboard(93009).inline_keyboard for b in row]
+    assert len(details) <= 4
+    assert bot.OFFER_CALLBACKS["next_plan"] in details
+    assert bot.OFFER_CALLBACKS["conclusion_full"] in details
+    assert bot.OFFER_CALLBACKS["back"] in details
     assert "Оплатить" not in keyboard_text
 
     map_text = render_short_user_map({
