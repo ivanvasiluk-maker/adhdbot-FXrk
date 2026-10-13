@@ -106,7 +106,7 @@ class DecisionsPersist(unittest.IsolatedAsyncioTestCase):
             await save_user(u,path);m=AsyncMock()
             with patch.object(bot,'DB_PATH',path), patch.object(bot,'autonomy_rows',AsyncMock(return_value=[row()])), patch.object(bot,'ENABLE_GROUP_OFFER',True):
                 self.assertTrue(await bot.maybe_show_help_offer(m,u))
-                self.assertEqual(u['stage'],'post_action_reflection')
+                self.assertEqual(u['stage'],'day_core_stop')
                 self.assertEqual(u['dialogue_context'],'reflection')
                 args=m.answer.call_args
                 self.assertNotIn('€',args.args[0])

@@ -131,3 +131,14 @@ class Funnel(unittest.IsolatedAsyncioTestCase):
         m=Message(self.uid,'/start');await bot.main_flow(m)
         self.assertEqual((await get_user(self.uid,bot.DB_PATH))['stage'],'offer_request_form')
         self.assertIn('/cancel',m.answers[-1][0])
+
+    def test_marketing_case_chain_preserves_reported_apathy_and_distinguishes_action(self):
+        from core.experiment_dialogue import reported_chain
+        text='Мне нужно сегодня заниматься маркетингом, вместо этого я лежу и не могу себя заставить, у меня какая-то апатия. Я постоянно отвлекаюсь.'
+        chain=reported_chain(text)
+        self.assertIn('маркетингом',chain['situation'])
+        self.assertNotIn('лежу',chain['situation'])
+        self.assertIn('апатия',chain['feelings'])
+        self.assertEqual(chain['behavior'],'я лежу')
+        self.assertIsNone(chain['immediate'])
+        self.assertIsNone(chain['thoughts'])
