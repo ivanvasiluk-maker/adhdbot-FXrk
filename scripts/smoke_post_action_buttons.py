@@ -46,6 +46,16 @@ class DummyMessage:
         return None
 
 
+async def available_keyboard_texts(message, uid, db_path):
+    visible = keyboard_texts(message.answers[-1]["reply_markup"])
+    assert len(visible) <= 4, visible
+    user = await get_user(uid,db_path)
+    pager = bot.dialogue_context(user.get("dialogue_context")).get("keyboard_pages") or {}
+    if pager.get("stage") == user.get("stage") and pager.get("buttons"):
+        return (visible - {"➡️ Ещё варианты"}) | {b["text"] for b in pager["buttons"]}
+    return visible
+
+
 def last_text(message: DummyMessage) -> str:
     return str(message.answers[-1]["text"] if message.answers else "")
 
@@ -253,7 +263,7 @@ async def run() -> None:
             "добровольный шаг. день остаётся завершённым" in last_text(stale_repeat_msg).lower()
             or "день уже закрыт. это не отменяется" in last_text(stale_repeat_msg).lower()
         ), last_text(stale_repeat_msg)
-        assert keyboard_texts(stale_repeat_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Частично", "🟡 Не получилось", "🌙 Точно закрыть день"}} | {OTHER}
+        assert (await available_keyboard_texts(stale_repeat_msg,uid,db_path)) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Частично", "🟡 Не получилось", "🌙 Точно закрыть день"}}
         assert "Если трудно, достаточно этого:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
         voluntary_done_msg = await send(uid, "✅ Сделал")
         assert "Что получилось после шага?" in last_text(voluntary_done_msg), last_text(voluntary_done_msg)
@@ -308,20 +318,20 @@ async def run() -> None:
         await save_user(u, db_path)
         stuck_msg = await send(uid, "🟡 Не получилось")
         assert "не провал" in last_text(stuck_msg).lower(), last_text(stuck_msg)
-        assert "📱 Ушёл в телефон / YouTube" in keyboard_texts(stuck_msg.answers[-1]["reply_markup"]), last_text(stuck_msg)
+        assert "📱 Ушёл в телефон / YouTube" in (await available_keyboard_texts(stuck_msg,uid,db_path)), last_text(stuck_msg)
 
         phone_msg = await send(uid, "📱 Ушёл в телефон / YouTube")
         phone_text = last_text(phone_msg)
         assert "Телефон / YouTube / новости" in phone_text, phone_text
         assert "Убрать телефон вне руки" in phone_text, phone_text
-        assert keyboard_texts(phone_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}} | {OTHER}
+        assert (await available_keyboard_texts(phone_msg,uid,db_path)) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}}
 
         done_feedback_prompt = await send(uid, "✅ Сделал")
         assert "Что получилось после шага?" in last_text(done_feedback_prompt), last_text(done_feedback_prompt)
         assert "Получилось сделать?" not in last_text(done_feedback_prompt)
         help_prompt = done_feedback_prompt
         assert "Что получилось после шага?" in last_text(help_prompt), last_text(help_prompt)
-        assert keyboard_texts(help_prompt.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"🚀 Продолжил дело", "🙂 Стало легче", "😐 Без изменений", "😣 Стало хуже"}}
+        assert (await available_keyboard_texts(help_prompt,uid,db_path)) == {BUTTON_LABELS.get(label, label) for label in {"🚀 Продолжил дело", "🙂 Стало легче", "😐 Без изменений", "😣 Стало хуже"}}
         next_prompt = await send(uid, "Не помогло")
         assert "Что произошло дальше?" in last_text(next_prompt), last_text(next_prompt)
         no_relief_msg = await send(uid, "Пока не знаю")
@@ -350,14 +360,14 @@ async def run() -> None:
         assert "Что было труднее" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Рабочая гипотеза" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Минимальный физический шаг" in last_text(reflected_msg), last_text(reflected_msg)
-        assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset(keyboard_texts(reflected_msg.answers[-1]["reply_markup"]))
+        assert {"✅ Да, похоже", "🟡 Не совсем", "🔄 Сменить навык", "🧠 Уточнить"}.issubset((await available_keyboard_texts(reflected_msg,uid,db_path)))
         reflected_msg = await send(uid, "✅ Да, похоже")
         assert "Плохой черновик" in last_text(reflected_msg), last_text(reflected_msg)
         assert "Написать одну плохую строку" in last_text(reflected_msg), last_text(reflected_msg)
 
         repeat_stuck_msg = await send(uid, "😣 Не могу")
         assert "ещё меньше" in last_text(repeat_stuck_msg).lower(), last_text(repeat_stuck_msg)
-        assert keyboard_texts(repeat_stuck_msg.answers[-1]["reply_markup"]) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}} | {OTHER}
+        assert (await available_keyboard_texts(repeat_stuck_msg,uid,db_path)) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "😣 Не могу", "🧩 Ещё меньше", "🆘 Мне всё ещё плохо"}}
         profile = await get_user_profile(uid, db_path)
         assert profile.get("last_not_fit_skill"), profile
         assert profile.get("last_not_fit_reason") in {"overwhelm", "shame", "phone", "energy", "not_my_skill"}, profile
