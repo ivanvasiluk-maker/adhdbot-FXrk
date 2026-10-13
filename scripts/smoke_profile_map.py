@@ -133,8 +133,9 @@ async def run():
         print("[SMOKE] recommended_track:", p3.get("recommended_track"))
         print("[SMOKE] development_history_snapshots:", len(history.get("snapshots") or []))
         print("[SMOKE] daily_focus:", focus.get("code"))
-        has_group_offer = "👥 Хочу в группу — €240" in kb_texts
-        has_live_offer = any("👤 Личная работа" in t for t in kb_texts)
+        has_group_offer = "👥 Групповой тренинг" in kb_texts
+        has_live_offer = any("👤 Индивидуальный тренинг" in t for t in kb_texts)
+        assert len(kb_texts) <= 4
         has_primary_map = all(section in offer_text for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше"))
         has_day3_conclusion = "Где пока труднее" in offer_text and "Что сработало" in offer_text
         has_personal_offer = (
@@ -144,7 +145,8 @@ async def run():
         has_model_value = "Что могло мешать" in offer_text and "Что проверим дальше" in offer_text
         has_selling_specifics = (
             "выбери формат и напиши Ивану" in offer_text
-            and "📖 Почему такой вывод" in kb_texts
+            and "📖 Подробнее и план" in kb_texts
+            and bot.OFFER_CALLBACKS["conclusion_full"] in [b.callback_data for row in bot.offer_details_inline_keyboard(uid).inline_keyboard for b in row]
         )
         assert int(task_start.get("value") or 0) >= 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt

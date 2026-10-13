@@ -32,14 +32,20 @@ def reported_chain(text, *, avoidance=''):
     if not thought:
         explicit_thought = find(r'\b(?:думаю|мысль|кажется|боюсь,? что)\b')
         thought = [explicit_thought] if explicit_thought else []
-    situation = find(r'открыва\w*.*(?:презентац|документ|файл)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:сделать|написать|подготовить)')
+    situation = find(r'открыва\w*.*(?:презентац|документ|файл)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
+    if situation:
+        situation = re.split(r',?\s+(?:а\s+)?вместо (?:этого|задачи|работы)\b',situation,maxsplit=1,flags=re.I)[0].strip(' ,')
     deadline = find(r'до сдачи|дедлайн|срок')
     if situation and deadline and deadline != situation:
         situation = (situation + '. ' + deadline)[:320]
     intensity = re.search(r'\b(?:тревог\w*|напряж\w*|страх\w*|интенсивность)\s*[:—=-]?\s*(?:10|[0-9])\s*(?:/\s*10|из 10)', text, re.I)
-    emotion_roots = {'тревога':'тревог|тревож','напряжение':'напряж','страх':'страх','стыд':'стыд','злость':'злость|злюсь','усталость':'устал'}
+    emotion_roots = {'тревога':'тревог|тревож','напряжение':'напряж','страх':'страх','стыд':'стыд','злость':'злость|злюсь','усталость':'устал','апатия':'апати'}
     feelings = [word for word,root in emotion_roots.items() if re.search(r'\b(?:'+root+r')\w*', text, re.I) and not re.search(r'\b(?:не|нет|без)\s+(?:'+root+r')\w*', text, re.I)]
     behavior = find(r'закрыва\w*.*(?:документ|файл)|переключа\w*.*(?:YouTube|ютуб|новост|телефон)|(?:вместо|ухожу|смотрю).*(?:YouTube|ютуб|новост|лент|телефон)|вместо (?:задачи|работы|этого).+')
+    if behavior:
+        alternative = re.search(r'вместо (?:задачи|работы|этого)\s+(.+)',behavior,re.I)
+        if alternative:
+            behavior = re.split(r',\s*(?:у меня|чувствую)|\s+и не могу',alternative.group(1),maxsplit=1,flags=re.I)[0].strip(' ,')
     immediate = find(r'(?:после|сразу|временно|становится).*(?:легче|облегчен|тревог\w*.*снижа|спокойнее)')
     delayed = find(r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем)')
     return {'situation':situation,'thoughts':'; '.join(thought) or None,
@@ -57,10 +63,10 @@ def render_chain(chain):
         lines.append('Интенсивность переживаний: '+(chain.get('intensity') or 'ещё не уточнена.'))
     missing=chain.get('missing') or []
     questions={'situation':'В какой момент и с каким конкретным делом это происходит?',
-               'thoughts':'Какая мысль появляется перед переключением?',
+               'thoughts':'Какая мысль появляется, когда собираешься начать дело?',
                'feelings':'Что ты ощущаешь в этот момент?',
                'behavior':'Что ты делаешь вместо задачи?',
-               'immediate':'Что меняется сразу после переключения?',
+               'immediate':'Что меняется сразу после того, как откладываешь дело?',
                'delayed':'Что происходит с делом и состоянием позже?'}
     if missing:
         lines.append('Уточним одно звено: '+questions[missing[0]])

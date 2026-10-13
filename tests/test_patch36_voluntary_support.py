@@ -8,10 +8,10 @@ class Patch36VoluntarySupportTests(unittest.TestCase):
     def labels(self):
         return [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
 
-    def test_link_alone_enables_voluntary_monthly_support(self):
+    def test_funnel_does_not_advertise_voluntary_payment_from_old_link(self):
         with patch.object(bot, "VOLUNTARY_SUPPORT_URL", "https://buy.stripe.com/skiller-support"):
             self.assertTrue(bot.voluntary_support_available())
-            self.assertIn("💚 Поддержать SKILLER — €4,99/мес", self.labels())
+            self.assertNotIn("💚 Поддержать SKILLER — €4,99/мес", self.labels())
 
     def test_missing_or_unsafe_link_hides_payment_button(self):
         for value in ("", "http://buy.stripe.com/test", "https://example.com/payment"):

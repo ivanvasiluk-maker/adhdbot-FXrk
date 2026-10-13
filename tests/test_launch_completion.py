@@ -123,7 +123,7 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         await self.send('✅ Сделал')
         await self.send('Помогло')
         m,u = await self.send('Продолжил задачу')
-        self.assertTrue(any('Вы отметили полезный результат' in x[0] for x in m.answers))
+        self.assertFalse(any('Вы отметили полезный результат' in x[0] for x in m.answers))
         self.assertEqual(u['stage'],'post_action_reflection')
         self.assertIn('Предлагаю следующий шаг',bot.dialogue_context(u['dialogue_context'])['text'])
         _,u = await self.send('Не сейчас')

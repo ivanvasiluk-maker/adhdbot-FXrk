@@ -130,9 +130,11 @@ class AttemptEvidenceJourneys(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.active_attempt(after)['attempt_id'], action_id)
         await self.callback('expected', action_id, '8')
         await self.send('✅ Сделал')
-        m, _ = await self.send('🙂 Стало легче')
+        m, after = await self.send('🙂 Стало легче')
         labels = [b.text for row in m.answers[0][1]['reply_markup'].keyboard for b in row]
-        self.assertIn(ACTUAL_BUTTON, labels)
+        pager=bot.dialogue_context(after["dialogue_context"]).get("keyboard_pages") or {}
+        self.assertIn(ACTUAL_BUTTON, labels+[b["text"] for b in pager.get("buttons") or []])
+        self.assertLessEqual(len(labels),4)
         c = await self.callback('actual', action_id, '3')
         self.assertIn('8/10, получилось 3/10', c.message.answer.await_args.args[0])
         repeated = await self.callback('actual', action_id, '9')

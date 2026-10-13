@@ -27,9 +27,9 @@ class OfferPathTests(unittest.TestCase):
             rows = offer_inline_keyboard(123).inline_keyboard
         callbacks = [row[0].callback_data for row in rows]
         self.assertIn(OFFER_CALLBACKS["live"], callbacks)
-        self.assertIn(OFFER_CALLBACKS["next_plan"], callbacks)
-        self.assertIn(OFFER_CALLBACKS["conclusion_full"], callbacks)
-        self.assertEqual(callbacks.count(OFFER_CALLBACKS["stay_free"]), 1)
+        self.assertIn(OFFER_CALLBACKS["compare"], callbacks)
+        self.assertLessEqual(len(callbacks),4)
+        self.assertEqual(callbacks.count(OFFER_CALLBACKS["continue_training"]), 1)
         self.assertNotIn(OFFER_CALLBACKS["beta_purchase_intent"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["bot"], callbacks)
         self.assertNotIn(OFFER_CALLBACKS["paid_test"], callbacks)
@@ -37,7 +37,7 @@ class OfferPathTests(unittest.TestCase):
     def test_offer_also_exposes_conclusion_and_next_plan(self):
         callbacks = [
             button.callback_data
-            for row in offer_inline_keyboard(123).inline_keyboard
+            for row in bot.offer_details_inline_keyboard(123).inline_keyboard
             for button in row if button.callback_data
         ]
         self.assertIn(OFFER_CALLBACKS["conclusion_full"], callbacks)
@@ -65,7 +65,7 @@ class OfferPathTests(unittest.TestCase):
         self.assertIn("персональная карта навыков", text)
         self.assertNotIn("Learning Engine", text)
 
-    def test_dormant_paid_path_can_only_be_enabled_explicitly(self):
+    def test_funnel_menu_does_not_expose_paid_path_even_with_old_settings(self):
         with patch.object(bot, "FREE_BETA_ACCESS", False), patch.object(
             bot, "ENABLE_PAYMENTS", True,
         ), patch.object(bot, "PAYMENT_MONTH_URL", "https://buy.stripe.com/real-link"):
@@ -73,7 +73,8 @@ class OfferPathTests(unittest.TestCase):
                 button.callback_data for row in offer_inline_keyboard(123).inline_keyboard
                 for button in row if button.callback_data
             ]
-        self.assertIn(OFFER_CALLBACKS["bot"], callbacks)
+        self.assertNotIn(OFFER_CALLBACKS["bot"], callbacks)
+        self.assertLessEqual(len(callbacks),4)
 
     def test_group_and_consultation_terms_are_explicit(self):
         group = tariff_group_text()

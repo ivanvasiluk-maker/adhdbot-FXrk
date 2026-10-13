@@ -78,10 +78,12 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_offer_ladder_uses_prelaunch_entry_prices(self):
         labels = [button.text for row in bot.offer_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("💬 Продолжить бесплатно — чат с тренером", labels)
+        self.assertIn("Продолжить бесплатно", labels)
         self.assertFalse(any("€4.99/мес" in label for label in labels))
-        self.assertIn("👥 Хочу в группу — €240", labels)
-        self.assertTrue(any(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}/мес" in label for label in labels))
+        self.assertIn("👥 Групповой тренинг", labels)
+        self.assertIn("👤 Индивидуальный тренинг", labels)
+        self.assertIn(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц", bot.tariff_live_text())
+        self.assertIn("€240",bot.tariff_group_text())
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
             bot, "ENABLE_PAID_PLAN", True,
@@ -91,7 +93,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
                 for row in bot.offer_inline_keyboard(1).inline_keyboard
                 for button in row
             ]
-        self.assertIn("👥 Хочу в группу — €240", enabled_labels)
+        self.assertIn("👥 Групповой тренинг", enabled_labels)
         self.assertFalse(any("Оплатить" in label for label in enabled_labels))
 
     def test_manual_beta_offer_advertises_product_without_live_checkout(self):
@@ -104,7 +106,9 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("€", text)
         self.assertNotIn("Группа навыков", text)
         self.assertNotIn("С человеком", labels)
-        self.assertEqual(labels, ["Продолжить бесплатный тест", "↩️ Назад"])
+        self.assertEqual(len(labels),4)
+        self.assertIn("Продолжить бесплатно",labels)
+        self.assertIn("Назад к форматам",labels)
 
     def test_day1_completion_can_unlock_offer_after_value_report(self):
         user = bot.default_user(1)

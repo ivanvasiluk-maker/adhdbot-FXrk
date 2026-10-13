@@ -358,10 +358,30 @@ async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model:
 router = Router()
 
 
+@router.callback_query(lambda c: (c.data or "").startswith("menu_page:"))
+async def on_menu_page(c: CallbackQuery):
+    u = await get_user(c.from_user.id,DB_PATH)
+    ctx = dialogue_context(u.get("dialogue_context"))
+    pager = ctx.get("inline_pages") or {}
+    if safety_mode(u) != "none" or pager.get("stage") != u.get("stage") or c.data != "menu_page:"+str(pager.get("token") or ""):
+        await c.answer("Этот список уже закрыт. Используйте текущий экран.")
+        return
+    if not await claim_callback_once(c,u,"offer" if u.get("stage") in OFFER_STAGES else "menu_page"):
+        return
+    pager["page"] = int(pager.get("page") or 0)+1
+    ctx["inline_pages"] = pager
+    u["dialogue_context"] = json.dumps(ctx,ensure_ascii=False)
+    await dialogue_message(c.message,u).edit_text(pager["text"],reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton.model_validate(b)] for b in pager["buttons"]]))
+    await c.answer()
+
+
 @router.callback_query(lambda c: (c.data or "").startswith("fsm:"))
 async def on_flow_state_callback(c: CallbackQuery) -> None:
     """Apply revisioned callbacks; stale buttons can never mutate state."""
     u = await get_user(c.from_user.id, DB_PATH)
+    if u.get("stage") in OFFER_STAGES | {"offer_request_form"}:
+        await c.answer("Сначала закройте варианты поддержки или заявку; тренировка сохранена.")
+        return
     prepare_calendar_routing(u)
     normalize_action_context(u)
     await save_user(u, DB_PATH)
@@ -1019,7 +1039,7 @@ def daily_conclusion(u: Dict[str, Any], profile: Dict[str, Any], review_override
     inferred = state.primary_problem
     bottleneck = "unclear" if explicit and inferred and explicit != inferred else explicit or inferred or "unclear"
     worse = feedback.get("helpfulness") == "worse"
-    supported = [e.skill_id for e in history if e.result == "STRONG_SUCCESS"]
+    supported = [e.skill_id for e in history if e.completed and e.after_action == "continued_target_task"]
     negative = {e.skill_id for e in history if e.subjective_effect in {"worse", "did_not_help"}}
     best = next((sid for sid in reversed(supported) if sid not in negative), None)
     hypothesis = public_enum_text(str(review.get("barrier") or feedback.get("barrier") or
@@ -1190,6 +1210,7 @@ class DialogueMessage:
     async def _send(self, method, text, kwargs):
         text = plain_text(text)
         markup = kwargs.get("reply_markup")
+        page_context = dialogue_context(self.user.get("dialogue_context"))
         labels = []
         if isinstance(markup, ReplyKeyboardMarkup):
             rows = []
@@ -1198,12 +1219,38 @@ class DialogueMessage:
             labels = [b.text for row in rows for b in row]
             protected = str(self.user.get("stage") or "") in {"privacy_consent", "notification_consent", "restart_onboarding_confirm", "safety_mode", "ask_name", "ask_address", "await_trainer"}
             short_screen = any(markup is globals().get(key) for key in ("kb_short_action", "kb_quick_feedback", "kb_quick_success"))
-            if not protected and not short_screen and labels and not text.startswith(VOICE_FAILURE) and not any("друг" in x.casefold() or "своими словами" in x.casefold() for x in labels) and len(labels) < MAX_KEYBOARD_BUTTONS:
+            if not protected and not short_screen and labels and not text.startswith(VOICE_FAILURE) and not any("друг" in x.casefold() or "своими словами" in x.casefold() for x in labels) and len(labels) < 4:
                 rows.append([KeyboardButton(text=OTHER)])
+            if len([b for row in rows for b in row]) > 4:
+                buttons = [b.model_dump(mode="json") for row in rows for b in row]
+                pager = page_context.get("keyboard_pages") or {}
+                page = int(pager.get("page") or 0) if pager.get("buttons") == buttons and pager.get("stage") == self.user.get("stage") else 0
+                pages = (len(buttons)+2)//3
+                page %= pages
+                visible = buttons[page*3:page*3+3]
+                rows = [[KeyboardButton.model_validate(b)] for b in visible]
+                rows.append([KeyboardButton(text="➡️ Ещё варианты")])
+                page_context["keyboard_pages"] = {"buttons":buttons,"page":page,"stage":self.user.get("stage"),"text":text[:3500]}
+            else:
+                page_context.pop("keyboard_pages",None)
+            self.user["dialogue_context"] = json.dumps(page_context,ensure_ascii=False)
             markup = markup.model_copy(update={"keyboard": rows, "input_field_placeholder": "Можно написать или отправить голосовое"})
             kwargs["reply_markup"] = markup
         elif isinstance(markup, InlineKeyboardMarkup):
             rows = [[button.model_copy(update={"text": BUTTON_LABELS.get(button.text, button.text)}) for button in row] for row in markup.inline_keyboard]
+            buttons = [b.model_dump(mode="json") for row in rows for b in row]
+            if len(buttons) > 4:
+                pager = page_context.get("inline_pages") or {}
+                if pager.get("buttons") != buttons or pager.get("stage") != self.user.get("stage"):
+                    pager = {"buttons":buttons,"page":0,"stage":self.user.get("stage"),"token":uuid.uuid4().hex[:10],"text":text[:3500]}
+                page = int(pager.get("page") or 0) % ((len(buttons)+2)//3)
+                rows = [[InlineKeyboardButton.model_validate(b)] for b in buttons[page*3:page*3+3]]
+                rows.append([InlineKeyboardButton(text="➡️ Ещё варианты",callback_data="menu_page:"+pager["token"])])
+                page_context["inline_pages"] = pager
+                self.user["dialogue_context"] = json.dumps(page_context,ensure_ascii=False)
+            else:
+                page_context.pop("inline_pages",None)
+                self.user["dialogue_context"] = json.dumps(page_context,ensure_ascii=False)
             markup = markup.model_copy(update={"inline_keyboard": rows})
             kwargs["reply_markup"] = markup
             labels = [b.text for row in rows for b in row]
@@ -3395,6 +3442,7 @@ def extract_task_context_from_text(text: str) -> Dict[str, str]:
     if not task_name and result["current_task_object"]:
         sentence = next((part.strip() for part in re.split(r"[.!?]", raw) if result["current_task_object"][:6].lower() in part.lower()), "")
         task_name = sentence
+    task_name = re.split(r",?\s+(?:а?\s*вместо этого|но я|но не могу|потому что)\b", task_name, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,;:—-")
     task_name = re.sub(r"\b(но|и)?\s*боюсь\b.*$", "", task_name, flags=re.IGNORECASE).strip(" ,;:—-")
     task_name = re.sub(r"\b(дедлайн|срок)\b.*$", "", task_name, flags=re.IGNORECASE).strip(" ,;:—-")
     task_name = re.sub(r"\s+к\s+(сегодня|завтра|понедельнику|вторнику|среде|четвергу|пятнице|субботе|воскресенью)\b.*$", "", task_name, flags=re.IGNORECASE).strip(" ,;:—-")
@@ -3457,7 +3505,7 @@ def current_task_title(u: Dict[str, Any], fallback: str = "важное дело
     title = str(u.get("current_task_name") or u.get("current_task_title") or u.get("today_target") or "").strip()
     if not title or title == "__target_not_selected__":
         return fallback
-    return title
+    return re.split(r",?\s+(?:а?\s*вместо этого|но я|но не могу|потому что)\b", title, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,;:—-")[:140]
 
 
 def current_task_label(u: Dict[str, Any]) -> str:
@@ -4153,6 +4201,8 @@ def _select_downscale_skill(u: Dict[str, Any]) -> str:
 async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
     """Send a keyboard only if it respects the reply-keyboard button limit and log it."""
     m = dialogue_message(m, u)
+    if keyboard_name in {"day_core_stop", "training_main", "post_action_reflection"} and isinstance(reply_markup,ReplyKeyboardMarkup) and (ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER):
+        reply_markup = reply_markup.model_copy(update={"keyboard":reply_markup.keyboard+[[KeyboardButton(text="🤝 Поддержка психолога")]]})
     if (keyboard_name in {"training_main", "day_core_stop", "post_action_reflection"}
             and isinstance(reply_markup, ReplyKeyboardMarkup)
             and sum(len(row) for row in reply_markup.keyboard) < MAX_KEYBOARD_BUTTONS
@@ -4185,6 +4235,8 @@ async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_m
             updates["day_closed"] = True
         if "skill" in (keyboard_name or "") or "step" in (keyboard_name or "") or "training" in (keyboard_name or ""):
             updates.setdefault("is_closed", False)
+        if keyboard_name in {"closed_day_voluntary_step", "closed_day_voluntary_tiny"}:
+            updates.update(is_closed=False,day_closed=False)
         await bump_active_attempt_screen(u, f"keyboard:{keyboard_name}", **updates)
     button_count = keyboard_button_count(reply_markup)
     event_name = "keyboard_shown" if button_count <= MAX_KEYBOARD_BUTTONS else "keyboard_warning"
@@ -4197,10 +4249,6 @@ async def answer_with_keyboard(m: Message, u: Dict[str, Any], text: str, reply_m
         SHEETS_WEBHOOK_URL,
     )
     try:
-        if button_count > MAX_KEYBOARD_BUTTONS:
-            log.warning("Keyboard %s has %s buttons; sending text without markup", keyboard_name, button_count)
-            await m.answer(text)
-            return
         sent = await m.answer(text, reply_markup=reply_markup)
         remember_last_safe_screen(u, keyboard_name, {"text": text}, getattr(sent, "message_id", None))
         await save_user_best_effort(u)
@@ -5773,7 +5821,6 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
         next_choice_keyboard(), "post_action_reflection",
     )
     await maybe_show_day1_insight(m, u)
-    await maybe_show_help_offer(m, u)
     return True
 
 
@@ -7889,7 +7936,7 @@ def offer_screen_text(u: Dict[str, Any], summary: Dict[str, Any], profile: Dict[
 def offer_menu_text() -> str:
     return (
         "Выбери формат, о котором хочешь узнать больше.\n\n"
-        "Сам бот во время тестирования остаётся бесплатным; группа и личная работа — отдельные форматы."
+        "Бот бесплатный. Индивидуальный и групповой тренинг с психологом — отдельные платные форматы. Можно продолжать самостоятельно."
     )
 
 
@@ -7965,13 +8012,15 @@ async def maybe_show_help_offer(m: Message, u: Dict[str, Any], *, final=False, s
     profile = await get_user_profile(u["user_id"], DB_PATH)
     day = int(u.get("day") or 1)
     key = "final_help_offer_seen" if final else "day1_help_offer_seen"
+    if not final and not day_closed_today(u):
+        return False
     if profile.get(key) or not await automatic_support_allowed(u, profile, first=not final):
         return False
     rows = []
     if ENABLE_GROUP_OFFER:
         rows.append([InlineKeyboardButton(text="👥 Группа", callback_data=OFFER_CALLBACKS["group"])])
     if ENABLE_HUMAN_OFFER:
-        rows.append([InlineKeyboardButton(text="👤 Иван", callback_data=OFFER_CALLBACKS["live"])])
+        rows.append([InlineKeyboardButton(text="👤 Индивидуально", callback_data=OFFER_CALLBACKS["live"])])
     rows.append([InlineKeyboardButton(text="Не сейчас", callback_data=OFFER_CALLBACKS["choose_later"])])
     await remember_offer_decision(u)
     previous_context = u.get("dialogue_context")
@@ -8061,6 +8110,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
             "Сейчас можно изучить варианты или вернуться к тренировке.\n\n"
             + text
         )
+    await m.answer("Бот остаётся бесплатным. Ниже — варианты поддержки с психологом.",reply_markup=ReplyKeyboardRemove())
     await answer_with_inline_screen(m, u, text, offer_inline_keyboard(u["user_id"], bool(int(u.get("is_test_user") or 0))), "offer")
 
 
@@ -8103,6 +8153,7 @@ async def resume_after_offer_if_needed(message: Message, u: Dict[str, Any]) -> b
 
 async def leave_offer_menu(message: Message, u: Dict[str, Any], source: str) -> None:
     u["last_offer_action"] = source
+    await message.answer("Можно продолжать бесплатно. Твоя задача, карта и результаты сохранены.")
     if await resume_after_offer_if_needed(message, u):
         return
     set_legacy_stage(u, "training_main" if not day_closed_today(u) else "day_core_stop")
@@ -8458,7 +8509,7 @@ def offer_request_notification_text(u: Dict[str, Any], source: str, form_text: s
 
 
 async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form_text: str) -> bool:
-    """Send an offer sign-up/request form to Ivan via Telegram DM when possible."""
+    """Notify Ivan through independent channels; either accepted delivery succeeds."""
     bot_obj = getattr(sender, "bot", None)
     if bot_obj is None and getattr(sender, "message", None) is not None:
         bot_obj = getattr(sender.message, "bot", None)
@@ -8481,8 +8532,17 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
             ]]),
         )
     sent = await deliver_lead(DB_PATH, lead_id, u["user_id"], source, form_text, send)
+    from core.lead_email import email_configured, send_lead_email
+    email_sent = False
+    if email_configured():
+        notification = offer_request_notification_text(u,source,form_text,getattr(sender,"original",sender) if hasattr(sender,"from_user") else getattr(sender,"message",None))
+        async def email_send():
+            await send_lead_email(notification,idempotency_key=lead_id)
+        email_sent = await deliver_lead(DB_PATH,lead_id+":email",u["user_id"],source,form_text,email_send)
+        await log_event(u["user_id"],"offer","offer_email_sent" if email_sent else "offer_email_unconfirmed",{"request_id":lead_id},DB_PATH,SHEETS_WEBHOOK_URL)
+
     await log_event(u["user_id"], "offer", "offer_request_notification_sent" if sent else "offer_request_notification_unconfirmed", {"source":source,"request_id":lead_id}, DB_PATH, SHEETS_WEBHOOK_URL)
-    return sent
+    return sent or email_sent
 
 
 async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> bool:
@@ -8562,55 +8622,25 @@ async def grant_paid_access(u: Dict[str, Any], source: str, meta: Optional[Dict[
 
 
 def offer_inline_keyboard(user_id: int, user_is_test_user: bool = False) -> InlineKeyboardMarkup:
-    keyboard = []
-    if paid_plan_available():
-        keyboard.append([InlineKeyboardButton(text=f"🔵 Продолжить со SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["bot"])])
+    rows=[]
     if ENABLE_HUMAN_OFFER:
-        keyboard.append([InlineKeyboardButton(
-            text=f"👤 Личная работа — от €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес",
-            callback_data=OFFER_CALLBACKS["live"],
-        )])
-    keyboard.extend([
-        [InlineKeyboardButton(text="🧭 План на следующие 7 дней", callback_data=OFFER_CALLBACKS["next_plan"])],
-        [InlineKeyboardButton(text="📖 Почему такой вывод", callback_data=OFFER_CALLBACKS["conclusion_full"])],
-        [InlineKeyboardButton(text="💬 Продолжить бесплатно — чат с тренером", callback_data=OFFER_CALLBACKS["stay_free"])],
-        [InlineKeyboardButton(text="Другие форматы поддержки", callback_data=OFFER_CALLBACKS["compare"])],
-    ])
+        rows.append([InlineKeyboardButton(text="👤 Индивидуальный тренинг",callback_data=OFFER_CALLBACKS["live"])])
     if ENABLE_GROUP_OFFER:
-        keyboard.append([InlineKeyboardButton(
-            text=f"👥 Хочу в группу — €{GROUP_PROGRAM_PRICE_LABEL}",
-            callback_data=OFFER_CALLBACKS["group"],
-        )])
-    if voluntary_support_available():
-        keyboard.append([InlineKeyboardButton(text="💚 Поддержать SKILLER — €4,99/мес", url=VOLUNTARY_SUPPORT_URL)])
-    if test_payment_allowed(user_id, user_is_test_user):
-        keyboard.append([InlineKeyboardButton(text="✅ Я оплатил(а) — тест", callback_data=OFFER_CALLBACKS["paid_test"])])
-    if is_admin(user_id) and PAYMENT_TEST_URL:
-        keyboard.append([InlineKeyboardButton(text="🧪 Тестовая оплата", url=PAYMENT_TEST_URL)])
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+        rows.append([InlineKeyboardButton(text="👥 Групповой тренинг",callback_data=OFFER_CALLBACKS["group"])])
+    rows.extend([
+        [InlineKeyboardButton(text="📖 Подробнее и план",callback_data=OFFER_CALLBACKS["compare"])],
+        [InlineKeyboardButton(text="Продолжить бесплатно",callback_data=OFFER_CALLBACKS["continue_training"])],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def offer_details_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    if FREE_BETA_ACCESS:
-        rows = []
-        if ENABLE_GROUP_OFFER:
-            rows.append([InlineKeyboardButton(text=f"👥 Группа — €{GROUP_PROGRAM_PRICE_LABEL}", callback_data=OFFER_CALLBACKS["group"])])
-        if ENABLE_HUMAN_OFFER:
-            rows.append([InlineKeyboardButton(text=f"👤 Личная работа — от €{HUMAN_SKILL_SESSION_EUR_LABEL}/мес", callback_data=OFFER_CALLBACKS["live"])])
-        rows.extend([
-            [InlineKeyboardButton(text="Продолжить бесплатный тест", callback_data=OFFER_CALLBACKS["continue_training"])],
-            [InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])],
-        ])
-        return InlineKeyboardMarkup(inline_keyboard=rows)
-    rows = [[InlineKeyboardButton(text="💬 Продолжить бесплатно — чат с тренером", callback_data=OFFER_CALLBACKS["stay_free"])]]
-    if paid_plan_available():
-        rows.append([InlineKeyboardButton(text="🔵 Подписка SKILLER", callback_data=OFFER_CALLBACKS["bot"])])
-    if ENABLE_GROUP_OFFER:
-        rows.append([InlineKeyboardButton(text="👥 Группа навыков", callback_data=OFFER_CALLBACKS["group"])])
-    if ENABLE_HUMAN_OFFER:
-        rows.append([InlineKeyboardButton(text="👤 С человеком", callback_data=OFFER_CALLBACKS["live"])])
-    rows.append([InlineKeyboardButton(text="↩️ Назад", callback_data=OFFER_CALLBACKS["back"])])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧭 План на неделю",callback_data=OFFER_CALLBACKS["next_plan"])],
+        [InlineKeyboardButton(text="📖 Почему такой вывод",callback_data=OFFER_CALLBACKS["conclusion_full"])],
+        [InlineKeyboardButton(text="Назад к форматам",callback_data=OFFER_CALLBACKS["back"])],
+        [InlineKeyboardButton(text="Продолжить бесплатно",callback_data=OFFER_CALLBACKS["continue_training"])],
+    ])
 
 
 def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = None) -> InlineKeyboardMarkup:
@@ -8619,7 +8649,7 @@ def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = N
         rows.append([InlineKeyboardButton(text="✍️ Написать / записаться", callback_data=request_callback)])
     rows.extend([
         [InlineKeyboardButton(text="← Назад к вариантам", callback_data=OFFER_CALLBACKS["back"])],
-        [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+        [InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
         [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -8629,9 +8659,9 @@ def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = F
     return (
         f"Заявка на формат: {format_label}.\n\n"
         "Имя и Telegram-профиль будут добавлены автоматически.\n"
-        "Какой вопрос хочется разобрать? Достаточно одной фразы, например: трудно начинать дела или СДВГ.\n\n"
-        "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку для ответа на заявку. "
-        "Другой контакт можно добавить по желанию. Отменить — /cancel."
+        "Одним сообщением напишите:\n1. Что хотите изменить (например, трудно начинать дела).\n2. Когда удобно: утром или вечером, ваш часовой пояс.\n3. Для индивидуального формата: к Ивану или на подбор специалиста.\n\n"
+        "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку в Telegram для ответа на заявку; если подключена рабочая почта, заявка дублируется через почтовый сервис. "
+        "Отправляя заявку, вы соглашаетесь передать эти данные Ивану для ответа. Передача выбранному коллеге — только после отдельного согласования. Другой контакт можно добавить по желанию. Отменить — /cancel."
     )
 
 
@@ -8661,7 +8691,7 @@ def lead_metadata(u: Dict[str, Any], from_user: Any, request_text: str, offer_ty
 
 def offer_request_done_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"])],
+        [InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
         [InlineKeyboardButton(text="Выбрать позже", callback_data=OFFER_CALLBACKS["choose_later"])],
     ])
 
@@ -8698,7 +8728,8 @@ def tariff_bot_text() -> str:
 def tariff_live_text() -> str:
     return (
         f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц\n\n"
-        "Вместе разберём вашу ситуацию, выберем посильные действия и будем проверять результат.\n\n"
+        "Индивидуальный тренинг навыков — как занятия с тренером в спортзале, только для повседневных действий. Вместе разберём вашу ситуацию, потренируем посильные шаги и скорректируем подход по результатам.\n\n"
+        "Можно оставить заявку Ивану или на подбор коллеги. Специалиста и условия согласуем с вами; автоматически другим психологам ваши ответы не передаются.\n\n"
         "Число встреч, задания, поддержку между встречами и точную цену согласуем до оплаты.\n\n"
         "Можно оставить заявку без оплаты. Иван свяжется с вами и ответит на вопросы."
     )
@@ -8708,6 +8739,8 @@ def tariff_group_text() -> str:
     installment = f"Можно оплатить двумя частями по €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR / 2)}. " if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else "Условия оплаты можно уточнить до записи. "
     return (
         f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
+        "Групповой тренинг навыков: практика на своих задачах с психологом и другими участниками.\n"
+        "Есть утренние и вечерние варианты. Напишите удобное время — подберём подходящий набор и согласуем расписание до записи.\n\n"
         "8 недель, 8 онлайн-встреч по одной в неделю. Небольшая группа до 12 человек.\n"
         "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
         "На встречах будем пробовать:\n"
@@ -8730,7 +8763,7 @@ def tariff_specialist_text() -> str:
         "Внутри:\n"
         "— полный доступ к боту;\n"
         "— специалист раз в неделю смотрит твой прогресс;\n"
-        "— 4 коротких коротких созвона по 15 минут в месяц;\n"
+        "— 4 коротких созвона по 15 минут в месяц;\n"
         "— корректировка маршрута раз в неделю.\n\n"
         "Без неограниченной переписки.\n"
         "Без кризисного сопровождения.\n"
@@ -8756,18 +8789,16 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="👤 Хочу личную терапию", callback_data=OFFER_CALLBACKS["request_live"])],
-        [InlineKeyboardButton(text="💬 Написать Ивану", url="https://t.me/Ivan_Vasiliuk")],
-    ]
+        [InlineKeyboardButton(text="Записаться на индивидуальный тренинг", callback_data=OFFER_CALLBACKS["request_live"])],
+            ]
     rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def tariff_group_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="✍️ Записаться на собеседование", callback_data=OFFER_CALLBACKS["request_group"])],
-        [InlineKeyboardButton(text="💬 Написать Ивану", url="https://t.me/Ivan_Vasiliuk")],
-    ]
+        [InlineKeyboardButton(text="Записаться в группу", callback_data=OFFER_CALLBACKS["request_group"])],
+            ]
     rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -9478,7 +9509,10 @@ def _first_available_skill_id(candidates: List[str], blocked: List[str]) -> str:
 
 
 def _first_non_repeating_skill_id(u: Dict[str, Any], candidates: List[str], blocked: List[str], *, repeat_requested: bool = False) -> str:
-    normalized_blocked = {_canonical_daily_skill_id(sid) for sid in blocked}
+    facts = (stored_analysis_user_text(u)+" "+str(u.get("current_task_fear") or "")+" "+str(u.get("bucket") or "")+" "+str(dialogue_context(u.get("dialogue_context")).get("experiment_feedback_detail") or "")).lower()
+    conditional = {"self_criticism_to_instruction":("самокрит","ругаю","стыд","self_attack"),"restart_after_slip":("отвлек","отвлека","переключ","срыв","выпал","attention_drift","phone")}
+    unsupported = [sid for sid,signals in conditional.items() if not any(word in facts for word in signals)]
+    normalized_blocked = {_canonical_daily_skill_id(sid) for sid in [*blocked,*unsupported]}
     for raw_sid in candidates:
         sid = _canonical_daily_skill_id(raw_sid)
         if sid in SKILLS_DB and sid not in normalized_blocked and not should_block_skill_for_repetition(u, sid, repeat_requested=repeat_requested):
@@ -9488,7 +9522,7 @@ def _first_non_repeating_skill_id(u: Dict[str, Any], candidates: List[str], bloc
         sid = _canonical_daily_skill_id(raw_sid)
         if sid in SKILLS_DB and sid not in normalized_blocked and not should_block_skill_for_repetition(u, sid, repeat_requested=repeat_requested):
             return sid
-    for sid in SKILLS_DB:
+    for sid in ("open_only", "open_without_timer", "ninety_sec_start", "visible_next_step"):
         if sid not in normalized_blocked and not should_block_skill_for_repetition(u, sid, repeat_requested=repeat_requested):
             return sid
     return _first_available_skill_id(candidates, blocked)
@@ -10118,7 +10152,8 @@ async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
     await bot_record_action_event(u, "extra_step_after_day_closed", skill_id=sid, metadata={"source": "closed_day_continue", "day_stays_closed": True})
     skill = dict(SKILLS_DB.get(sid) or {})
     skill.setdefault("skill_id", sid)
-    record_skill_attempt_start(u, sid, source="optional_after_close")
+    mark_action_card_active(u)
+    u["current_action_context"] = "optional_after_close"
     await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, build_current_skill_text(skill, "Добровольный шаг. День остаётся завершённым.", u), kb_closed_day_extra_step, "closed_day_voluntary_step")
 
@@ -11777,6 +11812,11 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         u["last_day_closed_at"] = None
         u["day_status"] = "active"
         u["day_intro_sent"] = 0
+        u["daily_training_completed"] = 0
+        u["closed_day_additional_active"] = 0
+        session = _skiller_session(u)
+        session.update(state="DAY_OPEN",awaiting_target=False,awaiting_barrier=False)
+        _save_skiller_session(u,session)
         u["today_started"] = 1
         u["daily_replacement_count"] = 0
         u["replacements_today"] = 0
@@ -11863,7 +11903,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-67\n"
+            "Product release PATCH-68\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -12702,6 +12742,8 @@ async def finalize_day_review(m: Message, u: Dict[str, Any], review: Dict[str, A
         await show_day3_offer(m, u, "day3_after_summary")
         await update_user_profile(u["user_id"], {"day3_help_offer_seen":utc_iso()}, DB_PATH, source="day3_help_offer")
         return
+    if current_day == 1:
+        await maybe_show_help_offer(m,u)
     if scheduled_offer_due(u, profile) or can_show_offer(u, profile):
         await maybe_show_offer(m, u, "day_review_completed")
         return
@@ -13171,7 +13213,7 @@ async def handle_successful_payment(m: Message):
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
     if FREE_BETA_ACCESS:
-        await m.answer("🟢 Оплата сейчас не требуется: в открытом тестированиее все функции бесплатны для всех.")
+        await m.answer("🟢 Оплата сейчас не требуется: в открытом тестировании все функции бесплатны для всех.")
         return
     payment = getattr(m, "successful_payment", None)
     amount_total = getattr(payment, "total_amount", None)
@@ -13356,12 +13398,38 @@ async def main_flow(m: Message):
     if safety_mode(u) != "none" or u.get("stage") == "safety_mode":
         if await handle_safety_mode(m, u, text):
             return
-    if await handle_legacy_crisis_redirect_button(m, u, text):
-        return
     if text and (has_red_crisis_phrase(text) or has_crisis_safety_signal(text, u.get("stage") or "")):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    if u.get("stage") == "offer_request_form" and text.startswith("/") and normalize_slash_command(text) not in {"/cancel","/stop","/reset_me","/privacy","/help"}:
+        await m.answer("Сейчас открыта заявка. Напишите запрос или /cancel, чтобы вернуться без отправки.")
+        return
+    if u.get("stage") in OFFER_STAGES:
+        command = normalize_slash_command(text) if text.startswith("/") else ""
+        if command not in {"/cancel", "/reset_me", "/stop", "/privacy", "/help", "/show_offer"}:
+            if text.lower().strip(" .!?") in {"стоп", "не надо", "убери", "хватит", "хочу остановиться"}:
+                await remember_offer_decision(u,declined=True)
+                await leave_offer_menu(m,u,"text_decline")
+            else:
+                await m.answer("Сейчас открыты варианты поддержки. Можно записаться или продолжить бесплатно — задача и результат сохранены.",reply_markup=offer_inline_keyboard(uid))
+            return
+    if text == "🤝 Поддержка психолога":
+        await show_day3_offer(m,u,"support_button",mode="manual")
+        return
+    if text == "➡️ Ещё варианты":
+        ctx = dialogue_context(u.get("dialogue_context"))
+        pager = ctx.get("keyboard_pages") or {}
+        if pager.get("stage") == u.get("stage") and pager.get("buttons"):
+            pager["page"] = int(pager.get("page") or 0)+1
+            ctx["keyboard_pages"] = pager
+            u["dialogue_context"] = json.dumps(ctx,ensure_ascii=False)
+            await m.answer(pager["text"],reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton.model_validate(b)] for b in pager["buttons"]],resize_keyboard=True))
+        else:
+            await render_current_screen(m,u)
+        return
+    if await handle_legacy_crisis_redirect_button(m, u, text):
+        return
     # Recognized commands and stops precede every psychological/feedback router.
     if text.startswith("/"):
         if normalize_slash_command(text) == "/start":
@@ -15882,7 +15950,7 @@ async def main_flow(m: Message):
             u["crisis_input_mode"] = "voice"
             set_legacy_stage(u, CRISIS_WAITING_INPUT)
             await save_user(u, DB_PATH)
-            await m.answer("Пришли голосовое. Я переведу его в текст и передам в тот же кризисный анализатор, что и текст.")
+            await m.answer("Пришли голосовое о том, что сейчас мешает. Сначала уточним ситуацию, затем выберем посильный шаг.")
             return
         if text in {"✍️ Текстом", "✍️ Кризис текстом"} or "текст" in low:
             u["crisis_input_mode"] = "text"
@@ -16812,6 +16880,9 @@ async def render_current_screen(m: Message, u: Dict[str, Any]) -> None:
 
 
 async def claim_callback_once(c: CallbackQuery, u: Dict[str, Any], source: str) -> bool:
+    if u.get("stage") in OFFER_STAGES | {"offer_request_form"} and source != "offer":
+        await c.answer("Сначала закройте варианты поддержки или заявку; тренировка сохранена.")
+        return False
     """Return True only for the first processing attempt of a Telegram callback."""
     callback_id = str(getattr(c, "id", "") or "")
     message_id = str(getattr(getattr(c, "message", None), "message_id", "") or "")
@@ -16955,6 +17026,9 @@ def _is_skiller_action(data: str) -> bool:
 async def on_skiller_action_callback(c: CallbackQuery) -> None:
     """Action-first adapter: callback captions can never reach ``main_flow``."""
     u = await get_user(c.from_user.id, DB_PATH)
+    if u.get("stage") in OFFER_STAGES | {"offer_request_form"}:
+        await c.answer("Сначала закройте варианты поддержки или заявку; тренировка сохранена.")
+        return
     prepare_calendar_routing(u)
     if not SKILLER_ACTION_ROUTER_ENABLED:
         await c.message.answer("Этот тестовый экран уже не активен. Показываю актуальный маршрут — нажми /start.")
@@ -17562,6 +17636,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         set_legacy_stage(u, OFFER_MENU_STAGE)
         u["offer_mode"] = u.get("offer_mode") or "manual"
         await save_user(u, DB_PATH)
+        await c.message.answer("Бот остаётся бесплатным. Выбираем формат поддержки.",reply_markup=ReplyKeyboardRemove())
 
     if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
         await remember_offer_decision(u, declined=True)
@@ -17586,7 +17661,7 @@ async def on_offer_callbacks(c: CallbackQuery):
             "Сейчас идёт открытое тестирование, поэтому списания не будет: весь бот уже доступен тебе бесплатно. "
             "Можно продолжать без ограничений.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="Продолжить тренировку", callback_data=OFFER_CALLBACKS["continue_training"]),
+                InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["continue_training"]),
             ]]),
         )
         await c.answer()
@@ -17939,6 +18014,9 @@ async def on_unknown_callback(c: CallbackQuery):
     mark_user_activity(u, active=not day_closed_today(u))
     await save_user(u, DB_PATH)
     if await handle_safety_callback(c, u, c.data or ""):
+        return
+    if u.get("stage") in OFFER_STAGES | {"offer_request_form"}:
+        await c.answer("Сейчас открыты варианты поддержки. Используйте этот экран.")
         return
     await reject_lost_callback(c, u, "unknown")
 
@@ -18429,7 +18507,7 @@ PUBLIC_BOT_DESCRIPTION = (
     "вернуться после отвлечения и найти посильный следующий шаг. "
     "Выбери стиль общения, опиши ситуацию и попробуй короткое действие. "
     "Бот отдельно спросит, стало ли легче и продолжилось ли дело. "
-    "Во время тестирования бот бесплатный. Это не диагностика, психотерапия или экстренная помощь."
+    "Бот бесплатный. Это не диагностика, психотерапия или экстренная помощь."
 )
 PUBLIC_BOT_SHORT_DESCRIPTION = "SKILLER: начать дело, удержать внимание и вернуться после отвлечения. Тренажёр навыков."
 
@@ -18444,7 +18522,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-67)")
+        log.info("Public bot description is current (PATCH-68)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 
