@@ -89,6 +89,30 @@ class Funnel(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await bot.notify_offer_request(m,u,'group','Тренинг'))
             m.bot.send_message.assert_awaited_once();email.assert_awaited_once()
 
+    async def test_email_acceptance_is_success_when_telegram_fails_without_retry(self):
+        import aiosqlite
+        u=await self.user(stage=bot.OFFER_MENU_STAGE,dialogue_context=json.dumps({'application_request_id':'email-fallback-68'}))
+        m=Message(self.uid);m.bot=SimpleNamespace(send_message=AsyncMock(side_effect=TimeoutError))
+        with patch('core.lead_email.email_configured',return_value=True),patch('core.lead_email.send_lead_email',AsyncMock()) as email:
+            self.assertTrue(await bot.notify_offer_request(m,u,'group','СДВГ, вечер'))
+            self.assertTrue(await bot.notify_offer_request(m,u,'group','СДВГ, вечер'))
+            m.bot.send_message.assert_awaited_once()
+            email.assert_awaited_once()
+        async with aiosqlite.connect(bot.DB_PATH) as db:
+            rows=await (await db.execute('SELECT lead_id,delivery_status FROM application_receipts ORDER BY lead_id')).fetchall()
+        self.assertEqual(rows,[('email-fallback-68','unconfirmed'),('email-fallback-68:email','sent')])
+
+    async def test_both_delivery_failures_do_not_claim_success(self):
+        u=await self.user(stage=bot.OFFER_MENU_STAGE,dialogue_context=json.dumps({'application_request_id':'both-fail-68'}))
+        m=Message(self.uid);m.bot=SimpleNamespace(send_message=AsyncMock(side_effect=TimeoutError))
+        with patch('core.lead_email.email_configured',return_value=True),patch('core.lead_email.send_lead_email',AsyncMock(side_effect=TimeoutError)) as email:
+            for _ in range(2):
+                sent=await bot.notify_offer_request(m,u,'group','СДВГ, вечер')
+                self.assertFalse(sent)
+                self.assertIn('не подтверждена',bot.offer_request_submitted_text(sent))
+            m.bot.send_message.assert_awaited_once()
+            email.assert_awaited_once()
+
     async def test_optional_step_gets_live_attempt_without_reopening_day(self):
         today=bot.local_date_for_user({'timezone':'Europe/Vilnius'})
         u=await self.user(stage='day_core_stop',day_closed=1,today_closed=1,day_status='closed',last_day_closed_at=today+'T10:00:00',current_skill='visible_next_step',today_target='Маркетинг',active_attempt={'is_closed':True,'day_closed':True,'attempt_id':'old'})

@@ -8509,7 +8509,7 @@ def offer_request_notification_text(u: Dict[str, Any], source: str, form_text: s
 
 
 async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form_text: str) -> bool:
-    """Send an offer sign-up/request form to Ivan via Telegram DM when possible."""
+    """Notify Ivan through independent channels; either accepted delivery succeeds."""
     bot_obj = getattr(sender, "bot", None)
     if bot_obj is None and getattr(sender, "message", None) is not None:
         bot_obj = getattr(sender.message, "bot", None)
@@ -8533,6 +8533,7 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
         )
     sent = await deliver_lead(DB_PATH, lead_id, u["user_id"], source, form_text, send)
     from core.lead_email import email_configured, send_lead_email
+    email_sent = False
     if email_configured():
         notification = offer_request_notification_text(u,source,form_text,getattr(sender,"original",sender) if hasattr(sender,"from_user") else getattr(sender,"message",None))
         async def email_send():
@@ -8541,7 +8542,7 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
         await log_event(u["user_id"],"offer","offer_email_sent" if email_sent else "offer_email_unconfirmed",{"request_id":lead_id},DB_PATH,SHEETS_WEBHOOK_URL)
 
     await log_event(u["user_id"], "offer", "offer_request_notification_sent" if sent else "offer_request_notification_unconfirmed", {"source":source,"request_id":lead_id}, DB_PATH, SHEETS_WEBHOOK_URL)
-    return sent
+    return sent or email_sent
 
 
 async def notify_curator_map_review(sender: Any, u: Dict[str, Any], profile: Dict[str, Any], source: str, note: str = "") -> bool:
