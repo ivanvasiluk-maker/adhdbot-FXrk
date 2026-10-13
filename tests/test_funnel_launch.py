@@ -151,3 +151,30 @@ class Funnel(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(isinstance(kwargs.get('reply_markup'),ReplyKeyboardRemove) for _,kwargs in m.answers))
         self.assertEqual((await get_user(self.uid,bot.DB_PATH))['stage'],bot.OFFER_MENU_STAGE)
         self.assertLessEqual(sum(len(row) for row in m.answers[-1][1]['reply_markup'].inline_keyboard),4)
+
+    async def test_https_email_uses_exact_recipient_and_request_identity(self):
+        from unittest.mock import MagicMock,Mock
+        response=SimpleNamespace(raise_for_status=Mock(),json=AsyncMock(return_value={'id':'accepted-email'}))
+        request=MagicMock();request.__aenter__=AsyncMock(return_value=response);request.__aexit__=AsyncMock(return_value=False)
+        client=MagicMock();client.post.return_value=request
+        session=MagicMock();session.__aenter__=AsyncMock(return_value=client);session.__aexit__=AsyncMock(return_value=False)
+        values={'LEAD_EMAIL_PROVIDER':'resend','RESEND_API_KEY':'unit-test-placeholder','LEAD_EMAIL_TO':'owner@example.com','LEAD_EMAIL_FROM':'bot@example.com'}
+        with patch.dict(os.environ,values),patch('core.lead_email.aiohttp.ClientSession',return_value=session):
+            self.assertTrue(email_configured())
+            await send_lead_email('Заявка',idempotency_key='lead-68')
+        args=client.post.call_args
+        self.assertEqual(args.args[0],'https://api.resend.com/emails')
+        self.assertEqual(args.kwargs['json']['to'],['owner@example.com'])
+        self.assertEqual(args.kwargs['headers']['Idempotency-Key'],'skiller-lead-lead-68')
+        self.assertFalse(args.kwargs['allow_redirects'])
+
+    async def test_email_provider_must_confirm_acceptance(self):
+        from unittest.mock import MagicMock,Mock
+        response=SimpleNamespace(raise_for_status=Mock(),json=AsyncMock(return_value={}))
+        request=MagicMock();request.__aenter__=AsyncMock(return_value=response);request.__aexit__=AsyncMock(return_value=False)
+        client=MagicMock();client.post.return_value=request
+        session=MagicMock();session.__aenter__=AsyncMock(return_value=client);session.__aexit__=AsyncMock(return_value=False)
+        values={'LEAD_EMAIL_PROVIDER':'resend','RESEND_API_KEY':'unit-test-placeholder','LEAD_EMAIL_TO':'owner@example.com','LEAD_EMAIL_FROM':'bot@example.com'}
+        with patch.dict(os.environ,values),patch('core.lead_email.aiohttp.ClientSession',return_value=session):
+            with self.assertRaises(RuntimeError):
+                await send_lead_email('Заявка')

@@ -8536,7 +8536,7 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
     if email_configured():
         notification = offer_request_notification_text(u,source,form_text,getattr(sender,"original",sender) if hasattr(sender,"from_user") else getattr(sender,"message",None))
         async def email_send():
-            await send_lead_email(notification)
+            await send_lead_email(notification,idempotency_key=lead_id)
         email_sent = await deliver_lead(DB_PATH,lead_id+":email",u["user_id"],source,form_text,email_send)
         await log_event(u["user_id"],"offer","offer_email_sent" if email_sent else "offer_email_unconfirmed",{"request_id":lead_id},DB_PATH,SHEETS_WEBHOOK_URL)
 
@@ -8659,7 +8659,7 @@ def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = F
         f"Заявка на формат: {format_label}.\n\n"
         "Имя и Telegram-профиль будут добавлены автоматически.\n"
         "Одним сообщением напишите:\n1. Что хотите изменить (например, трудно начинать дела).\n2. Когда удобно: утром или вечером, ваш часовой пояс.\n3. Для индивидуального формата: к Ивану или на подбор специалиста.\n\n"
-        "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку для ответа на заявку. "
+        "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку в Telegram для ответа на заявку; если подключена рабочая почта, заявка дублируется через почтовый сервис. "
         "Отправляя заявку, вы соглашаетесь передать эти данные Ивану для ответа. Передача выбранному коллеге — только после отдельного согласования. Другой контакт можно добавить по желанию. Отменить — /cancel."
     )
 
@@ -8762,7 +8762,7 @@ def tariff_specialist_text() -> str:
         "Внутри:\n"
         "— полный доступ к боту;\n"
         "— специалист раз в неделю смотрит твой прогресс;\n"
-        "— 4 коротких коротких созвона по 15 минут в месяц;\n"
+        "— 4 коротких созвона по 15 минут в месяц;\n"
         "— корректировка маршрута раз в неделю.\n\n"
         "Без неограниченной переписки.\n"
         "Без кризисного сопровождения.\n"
@@ -13212,7 +13212,7 @@ async def handle_successful_payment(m: Message):
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
     if FREE_BETA_ACCESS:
-        await m.answer("🟢 Оплата сейчас не требуется: в открытом тестированиее все функции бесплатны для всех.")
+        await m.answer("🟢 Оплата сейчас не требуется: в открытом тестировании все функции бесплатны для всех.")
         return
     payment = getattr(m, "successful_payment", None)
     amount_total = getattr(payment, "total_amount", None)

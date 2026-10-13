@@ -145,7 +145,8 @@ async def run():
         has_model_value = "Что могло мешать" in offer_text and "Что проверим дальше" in offer_text
         has_selling_specifics = (
             "выбери формат и напиши Ивану" in offer_text
-            and "📖 Почему такой вывод" in kb_texts
+            and "📖 Подробнее и план" in kb_texts
+            and bot.OFFER_CALLBACKS["conclusion_full"] in [b.callback_data for row in bot.offer_details_inline_keyboard(uid).inline_keyboard for b in row]
         )
         assert int(task_start.get("value") or 0) >= 20, avatar
         assert prompt.startswith("USER PROFILE"), prompt
