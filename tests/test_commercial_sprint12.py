@@ -102,7 +102,7 @@ class DecisionsPersist(unittest.IsolatedAsyncioTestCase):
         from db import init_db, migrate_db, default_user, save_user, get_user_profile
         with tempfile.TemporaryDirectory() as tmp:
             path=tmp+'/db';await init_db(path);await migrate_db(path)
-            u=default_user(31202);u.update(stage='post_action_reflection',day=2,dialogue_context='reflection')
+            u=default_user(31202);u.update(stage='day_core_stop',day=1,day_closed=1,today_closed=1,day_status='closed',dialogue_context='reflection')
             await save_user(u,path);m=AsyncMock()
             with patch.object(bot,'DB_PATH',path), patch.object(bot,'autonomy_rows',AsyncMock(return_value=[row()])), patch.object(bot,'ENABLE_GROUP_OFFER',True):
                 self.assertTrue(await bot.maybe_show_help_offer(m,u))
