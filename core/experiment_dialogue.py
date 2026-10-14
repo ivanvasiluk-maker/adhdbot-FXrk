@@ -32,6 +32,9 @@ def reported_chain(text, *, avoidance=''):
     if not thought:
         explicit_thought = find(r'\b(?:думаю|мысль|кажется|боюсь,? что)\b')
         thought = [explicit_thought] if explicit_thought else []
+    self_assessment = next((item for item in thought if re.search(r'ленив\w*|безвольн\w*',item,re.I)),None)
+    if self_assessment:
+        thought = [item for item in thought if item != self_assessment]
     situation = find(r'открыва\w*.*(?:презентац|документ|файл|ноутбук|компьютер)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
     if situation:
         situation = re.split(r',?\s+(?:а\s+)?вместо (?:этого|задачи|работы)\b',situation,maxsplit=1,flags=re.I)[0].strip(' ,')
@@ -48,12 +51,17 @@ def reported_chain(text, *, avoidance=''):
             behavior = re.split(r',\s*(?:у меня|чувствую)|\s+и не могу',alternative.group(1),maxsplit=1,flags=re.I)[0].strip(' ,')
     immediate = find(r'(?:после|сразу|временно|становится).*(?:легче|облегчен|тревог\w*.*снижа|спокойнее)')
     delayed = find(r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем)')
+    # A reported later panic is not evidence of anxiety before avoidance.
+    later_feelings = ', '.join(feelings) if feelings == ['паника'] and delayed and re.search(r'паник',delayed,re.I) else None
+    if later_feelings:
+        feelings = []
     resources = find(r'вечер\w*.*(?:делаю|сделал\w*|успева\w*)')
     tried = find(r'пробовал\w*.*(?:ежедневник|Pomodoro|Notion|соцсет)')
+    context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
     return {'situation':situation,'thoughts':'; '.join(thought) or None,
             'feelings':', '.join(feelings) or None,'behavior':behavior,
             'immediate':immediate,'delayed':delayed,
-            'resources':resources,'tried':tried,
+            'context':context,'resources':resources,'tried':tried,'self_assessment':self_assessment,'later_feelings':later_feelings,
             'source':'user_report', 'intensity':intensity.group(0) if intensity else None, 'missing':[key for key,value in {
                 'situation':situation,'thoughts':thought,'feelings':feelings,'behavior':behavior,'immediate':immediate,'delayed':delayed}.items() if not value]}
 

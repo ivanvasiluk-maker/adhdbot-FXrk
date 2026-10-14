@@ -20,7 +20,7 @@ def wants_questions(text):
     return bool(re.search(r'задай\w*\s+(?:мне\s+)?вопрос|задайте\s+(?:мне\s+)?вопрос|спроси\s+меня|спросите\s+меня',str(text or ''),re.I))
 
 def known_facts(chain):
-    labels={**CHAIN_LABELS,'resources':'Что уже получается','tried':'Что уже пробовали'}
+    labels={'context':'Контекст',**CHAIN_LABELS,'resources':'Что уже получается','tried':'Что уже пробовали','self_assessment':'Общая оценка себя — не доказанная причина'}
     return '\n'.join(f'— {label}: {chain[key]}' for key,label in labels.items() if chain.get(key))
 
 async def start_questions(m,u,path,*,require_task=False):

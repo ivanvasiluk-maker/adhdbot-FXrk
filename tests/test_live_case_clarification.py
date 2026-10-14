@@ -18,6 +18,7 @@ CASE = '''Мне 34. Я работаю из дома, и у меня уже не
 class Facts(unittest.TestCase):
     def test_reported_behavior_and_delayed_cost_are_not_unknown(self):
         chain=reported_chain(CASE)
+        self.assertIn('недели три',chain['context'])
         self.assertIn('ноутбук',chain['situation'])
         self.assertIn('кофе',chain['behavior'])
         self.assertIn('YouTube',chain['behavior'])
@@ -26,12 +27,24 @@ class Facts(unittest.TestCase):
         self.assertIn('два часа',chain['resources'])
         self.assertIn('Pomodoro',chain['tried'])
         self.assertIsNone(chain['immediate'])
-        self.assertIn('паника',chain['feelings'])
+        self.assertIsNone(chain['feelings'])
+        self.assertEqual(chain['later_feelings'],'паника')
+        self.assertIsNone(chain['thoughts'])
+        self.assertIn('ленивый',chain['self_assessment'])
 
     def test_safe_memory_preserves_chain_without_full_transcript(self):
         memory=flows.safe_analysis_memory(CASE)
         self.assertIn('кофе',memory['behavioral_chain']['behavior'])
         self.assertNotIn(CASE,json.dumps(memory,ensure_ascii=False))
+
+    def test_reanalysis_prefers_reported_facts_to_generic_categories(self):
+        memory=flows.safe_analysis_memory(CASE)
+        memory['input_signal_summary']={'specific_pattern':'нужно вернуть контроль внимания'}
+        text=bot.stored_analysis_user_text({'analysis_json':json.dumps(memory,ensure_ascii=False)})
+        self.assertIn('кофе',text)
+        self.assertIn('паниковать',text)
+        self.assertIn('два часа',text)
+        self.assertNotIn('нужно вернуть контроль внимания',text)
 
 class Journey(unittest.IsolatedAsyncioTestCase):
     asyncSetUp=fixtures.LaunchJourneys.asyncSetUp
@@ -60,6 +73,10 @@ class Journey(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(u['analysis_json'])['case_question'],'immediate')
         self.assertIn('Что менялось сразу',m.answers[-1][0])
         m,u=await self.say('Становится спокойнее, потому что не нужно смотреть на отчёт')
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'thoughts')
+        m,u=await self.say('Кажется, надо сделать всё идеально, непонятно с чего начать')
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'feelings')
+        m,u=await self.say('Перед началом растерянность и напряжение')
         self.assertEqual(u['stage'],'analysis_clarify_done')
         self.assertEqual(u['today_target'],'Написать отчёт по продажам')
         m,u=await self.say('💪 Давай действие')

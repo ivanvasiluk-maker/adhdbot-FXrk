@@ -7017,11 +7017,16 @@ async def open_misunderstood_flow(m: Message, u: Dict[str, Any], source: str):
 
 
 def stored_analysis_user_text(u: Dict[str, Any]) -> str:
-    """Return a safe non-verbatim analysis prompt from stored categories only."""
+    """Prefer bounded reported facts; categories cannot replace a known episode."""
     try:
         data = json.loads(u.get("analysis_json") or "{}")
         if not isinstance(data, dict):
             return ""
+        chain = data.get('behavioral_chain')
+        if isinstance(chain,dict):
+            reported = '. '.join(str(chain[key]) for key in ('context','task','situation','thoughts','feelings','behavior','immediate','delayed','resources','tried','self_assessment') if chain.get(key))
+            if reported:
+                return clamp_str(reported,1500)
         summary = data.get("input_signal_summary") if isinstance(data.get("input_signal_summary"), dict) else {}
         parts = [
             data.get("specific_pattern") or summary.get("specific_pattern"),
@@ -7038,7 +7043,8 @@ def stored_analysis_user_text(u: Dict[str, Any]) -> str:
 
 
 async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text: str, reason: str, *, replace_skill: bool = False):
-    previous_text = "" if parse_case_data(u.get("analysis_json"), {}).get("hypothesis_rejected") else stored_analysis_user_text(u)
+    saved = parse_case_data(u.get("analysis_json"), {})
+    previous_text = "" if saved.get("hypothesis_rejected") and not saved.get('behavioral_chain') else stored_analysis_user_text(u)
     combined_text = clamp_str(f"{previous_text}\n\nУточнение: {extra_text}" if previous_text else extra_text, 1500)
     comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, combined_text)
