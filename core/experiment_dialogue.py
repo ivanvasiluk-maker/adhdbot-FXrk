@@ -58,10 +58,12 @@ def reported_chain(text, *, avoidance=''):
     resources = find(r'вечер\w*.*(?:делаю|сделал\w*|успева\w*)')
     tried = find(r'пробовал\w*.*(?:ежедневник|Pomodoro|Notion|соцсет)')
     context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
+    task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
+    task = re.split(r',|\s+(?:но|вместо|потому что)\b',task_match.group(1),maxsplit=1,flags=re.I)[0].strip()[:140] if task_match else None
     return {'situation':situation,'thoughts':'; '.join(thought) or None,
             'feelings':', '.join(feelings) or None,'behavior':behavior,
             'immediate':immediate,'delayed':delayed,
-            'context':context,'resources':resources,'tried':tried,'self_assessment':self_assessment,'later_feelings':later_feelings,
+            'task':task,'context':context,'resources':resources,'tried':tried,'self_assessment':self_assessment,'later_feelings':later_feelings,
             'source':'user_report', 'intensity':intensity.group(0) if intensity else None, 'missing':[key for key,value in {
                 'situation':situation,'thoughts':thought,'feelings':feelings,'behavior':behavior,'immediate':immediate,'delayed':delayed}.items() if not value]}
 

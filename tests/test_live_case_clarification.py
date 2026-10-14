@@ -96,6 +96,13 @@ class Journey(unittest.IsolatedAsyncioTestCase):
         self.assertIn('паниковать',sent)
         self.assertIn('на телефоне и на компьютере',sent)
 
+    async def test_already_named_task_is_not_asked_again(self):
+        await self.user(stage='await_problem_text',trainer_key='beck')
+        m,u=await self.say(CASE.replace('Работы объективно не очень много','Нужно написать отчёт по продажам. Работы объективно не очень много'))
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'immediate')
+        self.assertEqual(u['today_target'],'написать отчёт по продажам')
+        self.assertNotIn('Какое одно рабочее дело',m.answers[-1][0])
+
     async def test_exact_rejection_and_questions_do_not_repeat_old_hypothesis(self):
         comp=flows.safe_analysis_memory(CASE)
         comp.update(specific_pattern='тревога уводит в быстрые награды',selected_skill='one_tab_focus',analysis_result={'pattern':'anxious_quick_rewards'})

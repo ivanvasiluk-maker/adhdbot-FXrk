@@ -26,6 +26,9 @@ def known_facts(chain):
 async def start_questions(m,u,path,*,require_task=False):
     comp=json.loads(u.get('analysis_json') or '{}')
     chain=comp.get('behavioral_chain') or {}
+    if chain.get('task') and (require_task or not u.get('today_target')):
+        u['today_target']=str(chain['task'])[:140]
+        u['current_task_title']=u['today_target']
     require_task=require_task or bool(comp.get('require_case_task'))
     comp['require_case_task']=require_task
     queue=(['task'] if require_task and not chain.get('task') else [])+[key for key in ('situation','behavior','immediate','thoughts','feelings','delayed') if not chain.get(key)]

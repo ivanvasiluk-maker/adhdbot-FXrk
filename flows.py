@@ -1401,7 +1401,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     device = device_from_text(user_text)
     from core.experiment_dialogue import reported_chain
     chain = reported_chain(user_text)
-    if not on_action and len(user_text.split()) >= 60 and chain.get('behavior') and chain.get('delayed'):
+    if not on_action and len(user_text.split()) >= 60 and chain.get('behavior') and chain.get('delayed') and (chain.get('missing') or not chain.get('task')):
         from core.case_clarification import start_questions
         comp = safe_analysis_memory(user_text)
         comp.update(request_kind=kind, request_device=device, behavioral_chain=chain)
