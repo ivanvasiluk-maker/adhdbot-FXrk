@@ -407,8 +407,11 @@ async def run() -> None:
         assert "Что сейчас мешает делу" in last_text(repeat1_msg), last_text(repeat1_msg)
         assert (await get_user(uid, db_path))["stage"] == "request_task"
 
-        await set_post_action_user(uid, db_path, "success_menu", rounds=1)
-        u = await get_user(uid, db_path)
+        # A fresh user checks ordinary continuation; the preceding scenarios
+        # deliberately exhaust the other user's families and rejected skills.
+        next_uid = uid + 1
+        await set_post_action_user(next_uid, db_path, "success_menu", rounds=1)
+        u = await get_user(next_uid, db_path)
         u.update({
             "current_skill": "open_only",
             "daily_skill_id": "open_only",
@@ -422,13 +425,13 @@ async def run() -> None:
         })
         await save_user(u, db_path)
         locked_before = u.get("day_core_skill_id")
-        next_step_msg = await send(uid, "💪 Продолжить тренировку")
+        next_step_msg = await send(next_uid, "💪 Продолжить тренировку")
         next_step_text = last_text(next_step_msg)
         assert "Следующий шаг по задаче" in next_step_text, next_step_text
         assert "Сделай:" in next_step_text and "Минимум:" in next_step_text, next_step_text
         assert "Это следующий шаг, не повтор старта" not in next_step_text, next_step_text
         assert "Можно остановиться" in next_step_text, next_step_text
-        assert (await get_user(uid, db_path))["day_core_skill_id"] == locked_before
+        assert (await get_user(next_uid, db_path))["day_core_skill_id"] == locked_before
 
         await set_post_action_user(uid, db_path, "training", rounds=1)
         skip_msg = await send(uid, "Пропустить")

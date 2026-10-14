@@ -9509,9 +9509,10 @@ def _first_available_skill_id(candidates: List[str], blocked: List[str]) -> str:
 
 
 def _first_non_repeating_skill_id(u: Dict[str, Any], candidates: List[str], blocked: List[str], *, repeat_requested: bool = False) -> str:
-    facts = (stored_analysis_user_text(u)+" "+str(u.get("current_task_fear") or "")+" "+str(u.get("bucket") or "")+" "+str(dialogue_context(u.get("dialogue_context")).get("experiment_feedback_detail") or "")).lower()
-    conditional = {"self_criticism_to_instruction":("самокрит","ругаю","стыд","self_attack"),"restart_after_slip":("отвлек","отвлека","переключ","срыв","выпал","attention_drift","phone")}
-    unsupported = [sid for sid,signals in conditional.items() if not any(word in facts for word in signals)]
+    from core.reported_mechanisms import unsupported_skills
+    facts = stored_analysis_user_text(u)+" "+str(u.get("current_task_fear") or "")+" "+str(u.get("bucket") or "")
+    latest = dialogue_context(u.get("dialogue_context")).get("experiment_feedback_detail") or ""
+    unsupported = unsupported_skills(facts, latest)
     normalized_blocked = {_canonical_daily_skill_id(sid) for sid in [*blocked,*unsupported]}
     for raw_sid in candidates:
         sid = _canonical_daily_skill_id(raw_sid)
@@ -9522,10 +9523,12 @@ def _first_non_repeating_skill_id(u: Dict[str, Any], candidates: List[str], bloc
         sid = _canonical_daily_skill_id(raw_sid)
         if sid in SKILLS_DB and sid not in normalized_blocked and not should_block_skill_for_repetition(u, sid, repeat_requested=repeat_requested):
             return sid
-    for sid in ("open_only", "open_without_timer", "ninety_sec_start", "visible_next_step"):
-        if sid not in normalized_blocked and not should_block_skill_for_repetition(u, sid, repeat_requested=repeat_requested):
+    for raw_sid in ("open_only", "open_without_timer", "ninety_sec_start", "visible_next_step"):
+        sid = _canonical_daily_skill_id(raw_sid)
+        if sid in SKILLS_DB and sid not in normalized_blocked and not should_block_skill_for_repetition(u, sid, repeat_requested=repeat_requested):
             return sid
-    return _first_available_skill_id(candidates, blocked)
+    # Never discard exclusions or repeat history just to produce a card.
+    return ""
 
 
 def select_daily_skill(u: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -10081,6 +10084,9 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
     else:
         blocked = not_fit_today_skills(u, profile)
         sid = recommended if recommended in SKILLS_DB and _canonical_daily_skill_id(recommended) not in blocked and not should_block_skill_for_repetition(u, recommended) else _first_non_repeating_skill_id(u, [continuation_skill_id(u), "one_tab_focus", "external_start"], blocked)
+    if not sid:
+        await m.answer("Подходящего нового способа сейчас не осталось. Не будем повторять то, что не помогло. Можно сделать паузу или уточнить ситуацию; задача и результаты сохранены.", reply_markup=kb_training_main)
+        return
     skill = dict(SKILLS_DB[sid])
     skill.setdefault("skill_id", sid)
     set_legacy_stage(u, "training")
@@ -11903,7 +11909,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-68\n"
+            "Product release PATCH-69\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -18522,7 +18528,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-68)")
+        log.info("Public bot description is current (PATCH-69)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 
