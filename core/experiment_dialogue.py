@@ -32,25 +32,38 @@ def reported_chain(text, *, avoidance=''):
     if not thought:
         explicit_thought = find(r'\b(?:думаю|мысль|кажется|боюсь,? что)\b')
         thought = [explicit_thought] if explicit_thought else []
-    situation = find(r'открыва\w*.*(?:презентац|документ|файл)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
+    self_assessment = next((item for item in thought if re.search(r'ленив\w*|безвольн\w*',item,re.I)),None)
+    if self_assessment:
+        thought = [item for item in thought if item != self_assessment]
+    situation = find(r'открыва\w*.*(?:презентац|документ|файл|ноутбук|компьютер)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
     if situation:
         situation = re.split(r',?\s+(?:а\s+)?вместо (?:этого|задачи|работы)\b',situation,maxsplit=1,flags=re.I)[0].strip(' ,')
     deadline = find(r'до сдачи|дедлайн|срок')
     if situation and deadline and deadline != situation:
         situation = (situation + '. ' + deadline)[:320]
     intensity = re.search(r'\b(?:тревог\w*|напряж\w*|страх\w*|интенсивность)\s*[:—=-]?\s*(?:10|[0-9])\s*(?:/\s*10|из 10)', text, re.I)
-    emotion_roots = {'тревога':'тревог|тревож','напряжение':'напряж','страх':'страх','стыд':'стыд','злость':'злость|злюсь','усталость':'устал','апатия':'апати'}
+    emotion_roots = {'тревога':'тревог|тревож','напряжение':'напряж','страх':'страх','стыд':'стыд','злость':'злость|злюсь','усталость':'устал','апатия':'апати','паника':'паник'}
     feelings = [word for word,root in emotion_roots.items() if re.search(r'\b(?:'+root+r')\w*', text, re.I) and not re.search(r'\b(?:не|нет|без)\s+(?:'+root+r')\w*', text, re.I)]
-    behavior = find(r'закрыва\w*.*(?:документ|файл)|переключа\w*.*(?:YouTube|ютуб|новост|телефон)|(?:вместо|ухожу|смотрю).*(?:YouTube|ютуб|новост|лент|телефон)|вместо (?:задачи|работы|этого).+')
+    behavior = find(r'закрыва\w*.*(?:документ|файл)|переключа\w*.*(?:YouTube|ютуб|новост|телефон)|(?:вместо|ухожу|смотрю|читаю|завис\w*).*(?:YouTube|ютуб|новост|лент|телефон|Telegram)|иду делать кофе|вместо (?:задачи|работы|этого).+')
     if behavior:
         alternative = re.search(r'вместо (?:задачи|работы|этого)\s+(.+)',behavior,re.I)
         if alternative:
             behavior = re.split(r',\s*(?:у меня|чувствую)|\s+и не могу',alternative.group(1),maxsplit=1,flags=re.I)[0].strip(' ,')
     immediate = find(r'(?:после|сразу|временно|становится).*(?:легче|облегчен|тревог\w*.*снижа|спокойнее)')
     delayed = find(r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем)')
+    # A reported later panic is not evidence of anxiety before avoidance.
+    later_feelings = ', '.join(feelings) if feelings == ['паника'] and delayed and re.search(r'паник',delayed,re.I) else None
+    if later_feelings:
+        feelings = []
+    resources = find(r'вечер\w*.*(?:делаю|сделал\w*|успева\w*)')
+    tried = find(r'пробовал\w*.*(?:ежедневник|Pomodoro|Notion|соцсет)')
+    context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
+    task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
+    task = re.split(r',|\s+(?:но|вместо|потому что)\b',task_match.group(1),maxsplit=1,flags=re.I)[0].strip()[:140] if task_match else None
     return {'situation':situation,'thoughts':'; '.join(thought) or None,
             'feelings':', '.join(feelings) or None,'behavior':behavior,
             'immediate':immediate,'delayed':delayed,
+            'task':task,'context':context,'resources':resources,'tried':tried,'self_assessment':self_assessment,'later_feelings':later_feelings,
             'source':'user_report', 'intensity':intensity.group(0) if intensity else None, 'missing':[key for key,value in {
                 'situation':situation,'thoughts':thought,'feelings':feelings,'behavior':behavior,'immediate':immediate,'delayed':delayed}.items() if not value]}
 

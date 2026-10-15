@@ -1124,6 +1124,9 @@ def render_analysis_details_by_trainer(comp: Dict[str, Any], trainer_key: str = 
     facts = result.get("evidence_signals") or signals.get("facts") or []
     facts = [str(item) for item in facts if item][:4]
     if not result:
+        if comp.get('behavioral_chain'):
+            from core.case_clarification import known_facts
+            return 'Сообщённые факты:\n'+known_facts(comp['behavioral_chain'])+'\n\nПричину пока не считаем установленной. Можно уточнить эпизод или проверить маленький шаг.'
         return "Пока мало данных для вывода. Ответьте на текущий вопрос — затем уточним, что мешает и какой шаг проверить."
     hypothesis = result.get("core_hypothesis") or comp.get("specific_pattern") or "Причину ещё уточняем"
     first = result.get("first_check") or result.get("recommended_skill_name") or "Назовите одно конкретное дело."
@@ -1154,8 +1157,8 @@ def render_analysis_by_trainer(pattern: str, trainer_key: str, data: Optional[Di
 def safe_analysis_memory(user_text: str, comp: Optional[Dict[str, Any]] = None, *, needs_more: bool = False) -> Dict[str, Any]:
     """Return non-verbatim analysis memory for persistence.
 
-    Do not store the user's full text/transcript/confession. Keep only short
-    categories and inferred behavioral signals that are safe for profile rebuilds.
+    Do not store the user's full text/transcript/confession. Keep short categories, behavioral signals and bounded reported chain
+    excerpts. Do not replace those reported facts with inferred categories.
     """
     comp = comp or {}
     bucket = str(comp.get("bucket") or "mixed")
@@ -1172,6 +1175,8 @@ def safe_analysis_memory(user_text: str, comp: Optional[Dict[str, Any]] = None, 
             "skills_focus": (comp.get("skills_focus") or inferred.get("skills_focus") or [])[:4],
         },
     }
+    from core.experiment_dialogue import reported_chain
+    memory['behavioral_chain'] = reported_chain(user_text)
     if needs_more:
         memory["needs_more"] = True
     return memory
@@ -1394,6 +1399,15 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
             await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Вернуться к тренировке")]], resize_keyboard=True) if moment_help else ReplyKeyboardRemove())
         return
     device = device_from_text(user_text)
+    from core.experiment_dialogue import reported_chain
+    chain = reported_chain(user_text)
+    if not on_action and len(user_text.split()) >= 60 and chain.get('behavior') and chain.get('delayed') and (chain.get('missing') or not chain.get('task')):
+        from core.case_clarification import start_questions
+        comp = safe_analysis_memory(user_text)
+        comp.update(request_kind=kind, request_device=device, behavioral_chain=chain)
+        u['analysis_json'] = json.dumps(comp,ensure_ascii=False)
+        await start_questions(m,u,db_path,require_task=True)
+        return
     if digital_distraction(user_text) and not device:
         comp = safe_analysis_memory(user_text)
         comp.update(request_kind=kind, request_device=None, device_question_pending=True)

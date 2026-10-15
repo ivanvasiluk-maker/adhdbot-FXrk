@@ -1354,7 +1354,7 @@ async def return_to_daily_training(m, u):
     await save_user(u, DB_PATH)
     screen = saved.get("screen") or {}
     markup = screen.get("markup")
-    keyboard = (InlineKeyboardMarkup if screen.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else kb_training_main
+    keyboard = (ReplyKeyboardRemove if markup and markup.get("remove_keyboard") else InlineKeyboardMarkup if screen.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else kb_training_main
     await m.answer("Помощь в этой ситуации сохранена. Основная тренировка дня остаётся прежней.\n\n"
                    + (screen.get("text") or "Можно продолжить позже."), reply_markup=keyboard)
     return True
@@ -1538,7 +1538,7 @@ async def handle_conversation_intent(m, u, text):
             await save_user(u, DB_PATH)
             old = dialogue_context(u.get("dialogue_context"))
             markup = old.get("markup")
-            keyboard = (InlineKeyboardMarkup if old.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
+            keyboard = (ReplyKeyboardRemove if markup and markup.get('remove_keyboard') else InlineKeyboardMarkup if old.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
             await m.answer(old.get("text") or "Продолжим с прежнего места.", reply_markup=keyboard)
         else:
             ctx.pop("intent_resume", None)
@@ -1631,7 +1631,9 @@ async def handle_request_route(m, u, text):
             await m.answer("Выберите устройство: телефон, компьютер или оба.")
             return True
         summary = comp.get("input_signal_summary") or {}
-        safe_case = ". ".join(str(x) for x in (
+        chain = comp.get('behavioral_chain') or {}
+        reported = ". ".join(str(chain.get(key) or '') for key in ('situation','thoughts','feelings','behavior','immediate','delayed') if chain.get(key))
+        safe_case = reported or ". ".join(str(x) for x in (
             summary.get("specific_pattern"), summary.get("avoidance_behavior"), summary.get("useful_signal")) if x)
         sources = (comp.get("analysis_signals") or {}).get("escapes") or []
         source = " / ".join(sources) or "сайты"
@@ -7015,11 +7017,16 @@ async def open_misunderstood_flow(m: Message, u: Dict[str, Any], source: str):
 
 
 def stored_analysis_user_text(u: Dict[str, Any]) -> str:
-    """Return a safe non-verbatim analysis prompt from stored categories only."""
+    """Prefer bounded reported facts; categories cannot replace a known episode."""
     try:
         data = json.loads(u.get("analysis_json") or "{}")
         if not isinstance(data, dict):
             return ""
+        chain = data.get('behavioral_chain')
+        if isinstance(chain,dict):
+            reported = '. '.join(str(chain[key]) for key in ('context','task','situation','thoughts','feelings','behavior','immediate','delayed','resources','tried','self_assessment') if chain.get(key))
+            if reported:
+                return clamp_str(reported,1500)
         summary = data.get("input_signal_summary") if isinstance(data.get("input_signal_summary"), dict) else {}
         parts = [
             data.get("specific_pattern") or summary.get("specific_pattern"),
@@ -7036,7 +7043,8 @@ def stored_analysis_user_text(u: Dict[str, Any]) -> str:
 
 
 async def rebuild_analysis_lightweight(m: Message, u: Dict[str, Any], extra_text: str, reason: str, *, replace_skill: bool = False):
-    previous_text = "" if parse_case_data(u.get("analysis_json"), {}).get("hypothesis_rejected") else stored_analysis_user_text(u)
+    saved = parse_case_data(u.get("analysis_json"), {})
+    previous_text = "" if saved.get("hypothesis_rejected") and not saved.get('behavioral_chain') else stored_analysis_user_text(u)
     combined_text = clamp_str(f"{previous_text}\n\nУточнение: {extra_text}" if previous_text else extra_text, 1500)
     comp = await ai_analyze_comprehensive(combined_text, u.get("trainer_key", "marsha"), client, OPENAI_CHAT_MODEL, addressing=u)
     comp = normalize_analysis(comp, combined_text)
@@ -10244,7 +10252,7 @@ async def handle_closed_day_input(m: Message, u: Dict[str, Any], text: str, low:
         "misunderstood_reason", "misunderstood_problem_await", "misunderstood_explain_await",
         "analysis_clarify_questions", "analysis_clarify_done", "analysis_action_transition",
         "analysis_action_extra_clarification", "analysis_action_postponed",
-        "request_context", "request_support", "request_device", "request_task",
+        "request_context", "request_support", "request_device", "request_task", "reported_case_question",
     }:
         # The daily session stays closed, but the new situation must finish its own route.
         return False
@@ -11909,7 +11917,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-69\n"
+            "Product release PATCH-70\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -13111,7 +13119,7 @@ async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
     }
     if owned and u.get("day_date") == local_date_for_user(u) and saved.get("text"):
         markup = saved.get("markup")
-        keyboard = (InlineKeyboardMarkup if saved.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
+        keyboard = (ReplyKeyboardRemove if markup and markup.get("remove_keyboard") else InlineKeyboardMarkup if saved.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
         await m.answer(saved["text"], reply_markup=keyboard)
         return
     set_legacy_stage(u, "existing_user_start_menu")
@@ -13534,6 +13542,12 @@ async def main_flow(m: Message):
     if await handle_chain_edit(m, u, text):
         return
     if await handle_memory_confirmation(m, u, text):
+        return
+    from core.case_clarification import wants_questions, start_questions, handle_answer
+    if await handle_answer(m,u,text,DB_PATH,is_known_button=is_known_reply_button):
+        return
+    if wants_questions(text) and u.get('analysis_json') and u.get('stage') not in OFFER_STAGES | {'offer_request_form'}:
+        await start_questions(m,u,DB_PATH)
         return
     if text == "🧰 Мои рабочие навыки" and collection_screen_allowed(u):
         await show_skill_collection(m, u)
@@ -15533,11 +15547,10 @@ async def main_flow(m: Message):
             return
         if text.startswith("2") or "общ" in low:
             reason = "too_generic"
-            set_legacy_stage(u, "misunderstood_problem_await")
             u["last_misunderstood_reason"] = reason
-            await save_user(u, DB_PATH)
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(misunderstood_single_question(reason))
+            from core.case_clarification import start_questions
+            await start_questions(m,u,DB_PATH)
             return
         if text.startswith("3") or "не тот навык" in low:
             reason = "wrong_skill"
@@ -17139,7 +17152,7 @@ async def close_chain_panel(m,u,panel):
         set_legacy_stage(u,str(panel.get('origin_stage') or 'training_main'))
     await save_user(u,DB_PATH)
     screen=panel.get('screen') or {}; markup=screen.get('markup')
-    keyboard=(InlineKeyboardMarkup if screen.get('inline') else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
+    keyboard=(ReplyKeyboardRemove if markup and markup.get('remove_keyboard') else InlineKeyboardMarkup if screen.get('inline') else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
     await m.answer(screen.get('text') or 'Вернулись к прежнему шагу. План и результаты сохранены.',reply_markup=keyboard)
 
 
@@ -18528,7 +18541,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-69)")
+        log.info("Public bot description is current (PATCH-70)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 
