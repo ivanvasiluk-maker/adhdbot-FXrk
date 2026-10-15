@@ -11917,7 +11917,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-70\n"
+            "Product release PATCH-71\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -18541,7 +18541,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-70)")
+        log.info("Public bot description is current (PATCH-71)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 

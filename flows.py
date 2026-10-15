@@ -1372,6 +1372,20 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     )
 
     kind = request_kind(user_text)
+    device = device_from_text(user_text)
+    from core.experiment_dialogue import reported_chain
+    chain = reported_chain(user_text)
+    if kind in {'task_problem', 'relationship', 'other'} and not on_action and len(user_text.split()) >= 60 and (chain.get('missing') or not chain.get('task')):
+        from core.case_clarification import start_questions
+        # Keep a bounded reported fragment when the conservative extractor
+        # cannot label a situation outside the original work/home case.
+        if not chain.get('context'):
+            chain['context'] = user_text.strip()[:320]
+        comp = safe_analysis_memory(user_text)
+        comp.update(request_kind=kind, request_device=device, behavioral_chain=chain)
+        u['analysis_json'] = json.dumps(comp,ensure_ascii=False)
+        await start_questions(m,u,db_path,require_task=True)
+        return
     if kind != "task_problem":
         facts = observed_changes(user_text)
         comp = {"request_kind": kind, "analysis_id": "request_" + uuid.uuid4().hex[:12],
@@ -1399,15 +1413,6 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
             await m.answer(intro + note + "\n\n" + question, reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Вернуться к тренировке")]], resize_keyboard=True) if moment_help else ReplyKeyboardRemove())
         return
     device = device_from_text(user_text)
-    from core.experiment_dialogue import reported_chain
-    chain = reported_chain(user_text)
-    if not on_action and len(user_text.split()) >= 60 and chain.get('behavior') and chain.get('delayed') and (chain.get('missing') or not chain.get('task')):
-        from core.case_clarification import start_questions
-        comp = safe_analysis_memory(user_text)
-        comp.update(request_kind=kind, request_device=device, behavioral_chain=chain)
-        u['analysis_json'] = json.dumps(comp,ensure_ascii=False)
-        await start_questions(m,u,db_path,require_task=True)
-        return
     if digital_distraction(user_text) and not device:
         comp = safe_analysis_memory(user_text)
         comp.update(request_kind=kind, request_device=None, device_question_pending=True)
