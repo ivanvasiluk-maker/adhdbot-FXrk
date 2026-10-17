@@ -1158,6 +1158,7 @@ VOICE_FREE_TEXT_STAGES = {
     "request_support",
     "request_device",
     "request_task",
+    "reported_case_question",
     "crisis_text",
     "crisis_effect_await",
     "day_review_barrier_other", "feedback_partial_text", "recovery_context",
@@ -4338,7 +4339,8 @@ def known_reply_button_texts() -> set[str]:
         "kb_stuck_validation_meaning", "kb_stuck_validation_self_attack", "kb_stuck_validation_file_fear", "kb_stuck_validation_safety",
         "kb_working_map", "kb_analysis_confirm", "kb_social_support", "kb_notifications_consent",
     )
-    texts = set()
+    from core.case_clarification import BRIEF_BUTTONS
+    texts = set(BRIEF_BUTTONS)
     for name in keyboard_names:
         markup = globals().get(name)
         if markup is not None:
@@ -11917,7 +11919,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-71\n"
+            "Product release PATCH-72\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -13359,6 +13361,8 @@ async def handle_reported_experiment_feedback(m, u, text):
     set_legacy_stage(u, "skill_feedback_adapt")
     await save_user(u, DB_PATH)
     choices = ["Скука", "Тревога"] if kind == "boring" else ["Да, мешает", "Есть, но дело идёт"] if kind == "self_criticism" else ["Уменьшить шаг", "Другой способ"]
+    if u.get("analysis_json"):
+        choices.append("🔎 Хочу разобраться глубже")
     markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=choice)] for choice in choices]+[[KeyboardButton(text="Хочу остановиться")]],resize_keyboard=True)
     await answer_with_keyboard(m, u, "Текущая задача: «" + current_task_title(u, current_task_label(u)) + "».\n\n" + adaptation_question(kind,u.get("trainer_key")), markup, "skill_feedback_adapt")
     return True
@@ -13543,7 +13547,10 @@ async def main_flow(m: Message):
         return
     if await handle_memory_confirmation(m, u, text):
         return
-    from core.case_clarification import wants_questions, start_questions, handle_answer
+    from core.case_clarification import wants_questions, start_questions, handle_answer, DEEP
+    if text == DEEP and u.get("analysis_json") and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
+        await start_questions(m,u,DB_PATH,detailed=True,require_task=not bool(u.get("today_target")))
+        return
     if await handle_answer(m,u,text,DB_PATH,is_known_button=is_known_reply_button):
         return
     if wants_questions(text) and u.get('analysis_json') and u.get('stage') not in OFFER_STAGES | {'offer_request_form'}:
@@ -18541,7 +18548,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-71)")
+        log.info("Public bot description is current (PATCH-72)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 

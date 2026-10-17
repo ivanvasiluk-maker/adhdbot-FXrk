@@ -1,12 +1,13 @@
 """PATCH-70: reproduce the owner's live morning/work/evening dialogue."""
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import bot
 import flows
 import test_launch_fixes_20261011 as fixtures
 from test_dialogue_ux_patch import Message
-from db import get_user
+from db import get_user, update_user_profile
 from core.experiment_dialogue import reported_chain
 
 CASE = '''Мне 34. Я работаю из дома, и у меня уже недели три полный развал.
@@ -58,87 +59,111 @@ class Journey(unittest.IsolatedAsyncioTestCase):
             quick.assert_not_awaited();ai.assert_not_awaited();rebuild.assert_not_awaited()
         return m,await get_user(self.uid,bot.DB_PATH)
 
-    async def test_full_initial_report_asks_task_before_a_skill(self):
-        await self.user(stage='await_problem_text',trainer_key='beck',address_mode='ty',address_form='female',today_target='')
+    async def test_brief_buttons_to_action_in_two_answers(self):
+        await self.user(stage='await_problem_text',today_target='')
         m,u=await self.say(CASE)
-        self.assertEqual(u['stage'],'reported_case_question')
+        self.assertLess(len(m.answers[-1][0]),250)
+        self.assertNotIn('Уже известные факты',m.answers[-1][0])
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'brief_barrier')
+        m,u=await self.say('🟠 Скучно')
         comp=json.loads(u['analysis_json'])
-        self.assertEqual(comp['case_question'],'task')
-        self.assertIn('кофе',m.answers[-1][0])
-        self.assertIn('одно дело',m.answers[-1][0])
-        self.assertNotIn('стало легче',m.answers[-1][0])
-        self.assertNotIn('selected_skill',comp)
-        self.assertNotIn('Что будем делать',m.answers[-1][0])
-        m,u=await self.say('Написать отчёт по продажам')
-        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'immediate')
-        self.assertIn('Что менялось сразу',m.answers[-1][0])
-        m,u=await self.say('Становится спокойнее, потому что не нужно смотреть на отчёт')
-        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'thoughts')
-        m,u=await self.say('Кажется, надо сделать всё идеально, непонятно с чего начать')
-        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'feelings')
-        m,u=await self.say('Перед началом растерянность и напряжение')
+        self.assertEqual(comp['case_question'],'brief_task')
+        self.assertEqual(comp['reported_difficulty'],'🟠 Скучно')
+        self.assertIsNone(comp['behavioral_chain']['immediate'])
+        m,u=await self.say('Открыть отчёт по продажам')
         self.assertEqual(u['stage'],'analysis_clarify_done')
-        self.assertEqual(u['today_target'],'Написать отчёт по продажам')
+        self.assertEqual(u['today_target'],'Открыть отчёт по продажам')
+        self.assertNotIn('Автоматические мысли',m.answers[-1][0])
         m,u=await self.say('💪 Давай действие')
         self.assertNotEqual(u['stage'],'reported_case_question')
-        self.assertEqual(u['today_target'],'Написать отчёт по продажам')
-        self.assertNotIn('тревога уводит в быстрые награды','\n'.join(x[0] for x in m.answers))
+        self.assertEqual(u['today_target'],'Открыть отчёт по продажам')
 
-    async def test_device_answer_preserves_reported_original_chain(self):
-        initial=flows.safe_analysis_memory(CASE)
-        initial.update(request_kind='task_problem',device_question_pending=True)
-        u=await self.user(stage='request_device',analysis_json=json.dumps(initial,ensure_ascii=False))
-        m=Message(self.uid,'И там и там')
-        with patch.object(bot,'run_analysis',AsyncMock()) as analysis:
-            await bot.handle_request_route(m,u,m.text)
-            sent=analysis.await_args.args[2]
-        self.assertIn('кофе',sent)
-        self.assertIn('паниковать',sent)
-        self.assertIn('на телефоне и на компьютере',sent)
-
-    async def test_already_named_task_is_not_asked_again(self):
-        await self.user(stage='await_problem_text',trainer_key='beck')
-        m,u=await self.say(CASE.replace('Работы объективно не очень много','Нужно написать отчёт по продажам. Работы объективно не очень много'))
-        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'immediate')
-        self.assertEqual(u['today_target'],'написать отчёт по продажам')
-        self.assertNotIn('Какое одно дело',m.answers[-1][0])
-
-    async def test_exact_rejection_and_questions_do_not_repeat_old_hypothesis(self):
-        comp=flows.safe_analysis_memory(CASE)
-        comp.update(specific_pattern='тревога уводит в быстрые награды',selected_skill='one_tab_focus',analysis_result={'pattern':'anxious_quick_rewards'})
-        await self.user(stage='confirm_analysis',trainer_key='beck',analysis_json=json.dumps(comp,ensure_ascii=False))
-        await self.say('😑 Ты меня не понял')
-        m,u=await self.say('2. Слишком общий ответ')
-        self.assertEqual(u['stage'],'reported_case_question')
-        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'immediate')
-        m,u=await self.say('Поведение: ещё не уточнено\nКраткосрочный результат: ещё не уточнено\nОтсроченный результат: ещё не уточнено\nзадай вопросы')
-        self.assertIn('Что менялось сразу',m.answers[-1][0])
-        self.assertNotIn('быстрые награды',m.answers[-1][0])
-        self.assertNotIn('Коротко, на что опираюсь',m.answers[-1][0])
-        self.assertIn('кофе',json.loads(u['analysis_json'])['behavioral_chain']['behavior'])
-
-    async def test_stale_action_does_not_become_a_fact_and_stop_is_available(self):
-        await self.user(stage='await_problem_text',trainer_key='beck')
+    async def test_failed_attempt_offers_optional_deep_beside_adaptation(self):
+        await self.user(stage='await_problem_text',today_target='')
         await self.say(CASE)
-        _,u=await self.say('💪 Давай действие')
-        chain=json.loads(u['analysis_json'])['behavioral_chain']
-        self.assertNotEqual(chain.get('task'),'💪 Давай действие')
-        _,u=await self.say('стоп')
-        self.assertEqual(u['stage'],'intent_paused')
+        await self.say('🟠 Скучно')
+        await self.say('Открыть отчёт по продажам')
+        await self.say('💪 Давай действие')
+        m,u=await self.say('не помогло')
+        labels=[b.text for row in m.answers[-1][1]['reply_markup'].keyboard for b in row]
+        self.assertIn('🔎 Хочу разобраться глубже',labels)
+        self.assertIn('Другой способ',labels)
+        self.assertLessEqual(len(labels),4)
+        m,u=await self.say('🔎 Хочу разобраться глубже')
+        self.assertEqual(json.loads(u['analysis_json'])['case_mode'],'detailed')
+        self.assertEqual(u['today_target'],'Открыть отчёт по продажам')
+
+    async def test_known_task_needs_only_barrier_and_start(self):
+        await self.user(stage='await_problem_text')
+        m,u=await self.say(CASE.replace('Работы объективно','Нужно написать отчёт по продажам. Работы объективно'))
+        await self.say('🌀 Непонятно, с чего начать')
+        m,u=await self.say('▶️ Да, давай начнём')
+        self.assertEqual(u['stage'],'analysis_clarify_done')
+        self.assertEqual(u['today_target'],'написать отчёт по продажам')
+
+    async def test_other_and_free_text_do_not_fill_chain_consequences(self):
+        await self.user(stage='await_problem_text')
+        await self.say(CASE)
+        m,u=await self.say('✍️ Другое — расскажу')
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'brief_barrier')
+        m,u=await self.say('Отвлекался')
+        self.assertEqual(json.loads(u['analysis_json'])['reported_difficulty'],'Отвлекался')
+        self.assertIsNone(json.loads(u['analysis_json'])['behavioral_chain']['immediate'])
+
+    async def test_deep_chain_is_opt_in_and_keeps_reported_facts(self):
+        await self.user(stage='await_problem_text',today_target='')
+        await self.say(CASE)
+        m,u=await self.say('🔎 Хочу разобраться глубже')
+        comp=json.loads(u['analysis_json'])
+        self.assertEqual(comp['case_mode'],'detailed')
+        self.assertEqual(comp['case_question'],'task')
+        self.assertIn('кофе',m.answers[-1][0])
+        await self.say('Написать отчёт')
+        m,u=await self.say('Стало спокойнее')
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'thoughts')
+
+    async def test_deep_available_after_brief_completion(self):
+        await self.user(stage='await_problem_text')
+        await self.say(CASE)
+        await self.say('🟠 Скучно')
+        await self.say('Открыть таблицу продаж')
+        m,u=await self.say('🔎 Хочу разобраться глубже')
+        self.assertEqual(json.loads(u['analysis_json'])['case_mode'],'detailed')
+        self.assertEqual(u['today_target'],'Открыть таблицу продаж')
+
+    async def test_stale_buttons_pause_and_resume(self):
+        await self.user(stage='await_problem_text')
+        await self.say(CASE)
+        m,u=await self.say('💪 Давай действие')
+        self.assertNotIn('reported_difficulty',json.loads(u['analysis_json']))
+        await self.say('стоп')
         m,u=await self.say('Продолжить')
         self.assertEqual(u['stage'],'reported_case_question')
-        self.assertIn('одно дело',m.answers[-1][0])
+        self.assertEqual(json.loads(u['analysis_json'])['case_question'],'brief_barrier')
 
-    async def test_details_do_not_become_the_task(self):
-        await self.user(stage='await_problem_text',trainer_key='beck')
-        await self.say(CASE)
-        m,u=await self.say('📚 Подробнее')
-        self.assertIn('кофе',m.answers[-1][0])
-        self.assertNotEqual(json.loads(u['analysis_json'])['behavioral_chain'].get('task'),'📚 Подробнее')
-        self.assertEqual(u['stage'],'reported_case_question')
+    async def test_rejection_does_not_repeat_rejected_hypothesis(self):
+        comp=flows.safe_analysis_memory(CASE)
+        comp.update(specific_pattern='тревога уводит в быстрые награды',selected_skill='one_tab_focus')
+        await self.user(stage='confirm_analysis',analysis_json=json.dumps(comp,ensure_ascii=False))
+        await self.say('😑 Ты меня не понял')
+        m,u=await self.say('2. Слишком общий ответ')
+        self.assertEqual(json.loads(u['analysis_json'])['case_mode'],'brief')
+        self.assertNotIn('быстрые награды',m.answers[-1][0])
 
-    async def test_safety_still_precedes_the_question_route(self):
-        await self.user(stage='await_problem_text',trainer_key='beck')
+    async def test_voice_answer_and_four_button_limit(self):
+        await self.user(stage='await_problem_text')
+        m,u=await self.say(CASE)
+        markup=m.answers[-1][1]['reply_markup']
+        self.assertLessEqual(sum(len(row) for row in markup.keyboard),4)
+        await update_user_profile(self.uid,{'privacy_consent':True},self.path)
+        with patch.object(bot,'whisper_transcribe',AsyncMock(return_value='Скучно')) as service:
+            await bot.main_flow(Message(self.uid,voice=SimpleNamespace()))
+            service.assert_awaited_once()
+        u=await get_user(self.uid,self.path)
+        self.assertEqual(json.loads(u['analysis_json'])['reported_difficulty'],'Скучно')
+
+    async def test_safety_precedes_brief(self):
+        await self.user(stage='await_problem_text')
         await self.say(CASE)
         with patch.object(bot,'start_safety_interceptor',AsyncMock()) as safety:
             await bot.main_flow(Message(self.uid,'Хочу умереть'))
@@ -164,7 +189,7 @@ class ComplexCases(unittest.IsolatedAsyncioTestCase):
         comp=json.loads(u['analysis_json'])
         self.assertFalse(comp.get('selected_skill'))
         self.assertFalse(comp['analysis_result'])
-        self.assertIn('факт',m.answers[-1][0])
+        self.assertIn('труднее',m.answers[-1][0])
 
     async def test_long_relationship_asks_without_work_or_avoidance_assumption(self):
         text = ('У нас с мужем конфликт из-за домашних обязанностей. '
@@ -177,7 +202,6 @@ class ComplexCases(unittest.IsolatedAsyncioTestCase):
         m,u=await self.say(text)
         self.assertEqual(u['stage'],'reported_case_question')
         self.assertNotIn('откладывани',m.answers[-1][0])
-        self.assertIn('покупки',m.answers[-1][0])
         self.assertIn('покупки',json.loads(u['analysis_json'])['behavioral_chain']['context'])
         self.assertFalse(json.loads(u['analysis_json']).get('selected_skill'))
 
