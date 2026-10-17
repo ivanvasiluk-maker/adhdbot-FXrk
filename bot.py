@@ -1461,6 +1461,9 @@ async def start_intent_action(m, u):
     sync_active_attempt(u, bump=True, attempt_status="not_tried", effect_status="unknown", is_closed=False, day_closed=False)
     await save_user(u, DB_PATH)
     text = build_current_skill_text(skill, u=u)
+    if comp.get("case_recommendation"):
+        from core.case_plan import render_case_action
+        text = render_case_action(comp["case_recommendation"], sid, skill.get("name") or sid)
     if known:
         familiar_line = {
             "skinny": "Этот способ уже помог в похожей ситуации. Можно повторить или сменить его.",
@@ -11919,7 +11922,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-72\n"
+            "Product release PATCH-73\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -13250,6 +13253,42 @@ async def handle_successful_payment(m: Message):
         await send_full_mode_welcome(m, u)
 
 
+async def complete_reported_case(m, u, path, comp):
+    from core.case_plan import case_plan, render_case_plan
+    from core.case_clarification import keyboard, DEEP
+    if not (comp.get('behavioral_chain') or {}).get('task') and u.get('today_target'):
+        comp.setdefault('behavioral_chain', {})['task'] = str(u['today_target'])[:140]
+    plan = case_plan(comp)
+    profile = await get_user_profile(u['user_id'], path)
+    learning = profile.get('learning_model') or {}
+    blocked = {_canonical_daily_skill_id(sid) for sid in _profile_list(profile.get('collection_disabled_skills')) + not_fit_today_skills(u, profile)}
+    available = [sid for sid in plan['candidates'] if sid in SKILLS_DB and _canonical_daily_skill_id(sid) not in blocked
+                 and not skill_blocked_in_model(learning, sid) and not should_block_skill_for_repetition(u, sid)]
+    comp.pop('case_question', None)
+    comp['case_recommendation'] = plan
+    comp['hypothesis_status'] = 'untested'
+    comp['analysis_result'] = {}
+    if not available:
+        comp.pop('selected_skill', None)
+        u['pending_skill_id'] = None
+        u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
+        set_legacy_stage(u, 'analysis_clarify_done')
+        await save_user(u, path)
+        await m.answer('Эти способы сейчас не повторяем: они уже использованы или отмечены как неподходящие. Можно уточнить разбор или остановиться.', reply_markup=keyboard(DEEP, 'На этом пока остановиться'))
+        return
+    sid = available[0]
+    comp['selected_skill'] = sid
+    comp['case_recommendation']['selected_skill'] = sid
+    comp['specific_pattern'] = plan['hypothesis']
+    comp['analysis_result'] = {'recommended_variant': sid, 'recommended_skill_name': SKILLS_DB[sid]['name'], 'recommended_skill_reason': plan['reason']}
+    comp['short_conclusion'] = render_case_plan(plan, SKILLS_DB[sid]['name'])
+    u['pending_skill_id'] = sid
+    set_legacy_stage(u, 'analysis_clarify_done')
+    u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
+    await save_user(u, path)
+    await m.answer(comp['short_conclusion'], reply_markup=keyboard('💪 Давай действие', DEEP, 'На этом пока остановиться'))
+
+
 async def handle_reported_experiment_feedback(m, u, text):
     stage = str(u.get("stage") or "")
     owned = set(FEEDBACK_STAGES) | {"training", "training_main", "day_core_stop", "success_menu", "skill_feedback_adapt", "request_task", "request_context", "intent_choose"}
@@ -13551,8 +13590,16 @@ async def main_flow(m: Message):
     if text == DEEP and u.get("analysis_json") and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
         await start_questions(m,u,DB_PATH,detailed=True,require_task=not bool(u.get("today_target")))
         return
-    if await handle_answer(m,u,text,DB_PATH,is_known_button=is_known_reply_button):
+    if await handle_answer(m,u,text,DB_PATH,is_known_button=is_known_reply_button,on_complete=complete_reported_case):
         return
+    if u.get('stage') == 'analysis_clarify_done' and is_action_request(text, low):
+        comp = parse_case_data(u.get('analysis_json'), {})
+        if comp.get('case_recommendation'):
+            if comp.get('selected_skill'):
+                await start_intent_action(m, u)
+            else:
+                await m.answer('Сначала уточним подходящий способ: предыдущие варианты сейчас не повторяем.')
+            return
     if wants_questions(text) and u.get('analysis_json') and u.get('stage') not in OFFER_STAGES | {'offer_request_form'}:
         await start_questions(m,u,DB_PATH)
         return
@@ -18548,7 +18595,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-72)")
+        log.info("Public bot description is current (PATCH-73)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 
