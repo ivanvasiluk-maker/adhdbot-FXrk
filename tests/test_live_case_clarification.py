@@ -78,6 +78,21 @@ class Journey(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(u['stage'],'reported_case_question')
         self.assertEqual(u['today_target'],'Открыть отчёт по продажам')
 
+    async def test_failed_attempt_offers_optional_deep_beside_adaptation(self):
+        await self.user(stage='await_problem_text',today_target='')
+        await self.say(CASE)
+        await self.say('🟠 Скучно')
+        await self.say('Открыть отчёт по продажам')
+        await self.say('💪 Давай действие')
+        m,u=await self.say('не помогло')
+        labels=[b.text for row in m.answers[-1][1]['reply_markup'].keyboard for b in row]
+        self.assertIn('🔎 Хочу разобраться глубже',labels)
+        self.assertIn('Другой способ',labels)
+        self.assertLessEqual(len(labels),4)
+        m,u=await self.say('🔎 Хочу разобраться глубже')
+        self.assertEqual(json.loads(u['analysis_json'])['case_mode'],'detailed')
+        self.assertEqual(u['today_target'],'Открыть отчёт по продажам')
+
     async def test_known_task_needs_only_barrier_and_start(self):
         await self.user(stage='await_problem_text')
         m,u=await self.say(CASE.replace('Работы объективно','Нужно написать отчёт по продажам. Работы объективно'))

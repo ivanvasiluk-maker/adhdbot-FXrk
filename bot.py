@@ -13361,6 +13361,8 @@ async def handle_reported_experiment_feedback(m, u, text):
     set_legacy_stage(u, "skill_feedback_adapt")
     await save_user(u, DB_PATH)
     choices = ["Скука", "Тревога"] if kind == "boring" else ["Да, мешает", "Есть, но дело идёт"] if kind == "self_criticism" else ["Уменьшить шаг", "Другой способ"]
+    if u.get("analysis_json"):
+        choices.append("🔎 Хочу разобраться глубже")
     markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=choice)] for choice in choices]+[[KeyboardButton(text="Хочу остановиться")]],resize_keyboard=True)
     await answer_with_keyboard(m, u, "Текущая задача: «" + current_task_title(u, current_task_label(u)) + "».\n\n" + adaptation_question(kind,u.get("trainer_key")), markup, "skill_feedback_adapt")
     return True
