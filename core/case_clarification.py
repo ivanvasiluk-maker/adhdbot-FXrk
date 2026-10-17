@@ -10,11 +10,20 @@ QUESTIONS = {
     'task': 'Какое одно дело или действие хотите разобрать? Что именно хотите изменить?',
     'situation': 'В какой конкретной ситуации это произошло? Назови один эпизод.',
     'behavior': 'Что вы делали в том эпизоде?',
-    'immediate': 'Что менялось сразу после этого действия: в состоянии, мыслях или ощущениях?',
-    'thoughts': 'Какая мысль появлялась именно перед этим действием?',
-    'feelings': 'Какие чувства и ощущения были в тот момент?',
+    'immediate': 'Сразу после того как отложили дело и переключились, что изменилось? Стало легче, тяжелее или ничего не изменилось?',
+    'thoughts': 'Какая мысль появлялась перед тем, как отложить это дело?',
+    'feelings': 'Что чувствовали, когда собирались приступить к делу, ещё до откладывания?',
     'delayed': 'Что происходило с ситуацией и состоянием позже?',
 }
+
+def question_text(comp, field):
+    if comp.get('request_kind') in {'relationship', 'other'}:
+        return {
+            'feelings': 'Какие чувства и ощущения были перед вашими действиями в этом эпизоде?',
+            'thoughts': 'Что вы подумали перед тем, как поступить так в этом эпизоде?',
+            'immediate': 'Что изменилось сразу после ваших действий в этом эпизоде: стало легче, тяжелее или ничего не изменилось?',
+        }.get(field, QUESTIONS.get(field, 'Какое звено нужно исправить?'))
+    return QUESTIONS.get(field, 'Какое звено нужно исправить?')
 
 def wants_questions(text):
     return bool(re.search(r'задай\w*\s+(?:мне\s+)?вопрос|задайте\s+(?:мне\s+)?вопрос|спроси\s+меня|спросите\s+меня',str(text or ''),re.I))
@@ -35,14 +44,14 @@ async def start_questions(m,u,path,*,require_task=False,detailed=False):
     require_task=require_task or bool(comp.get('require_case_task'))
     comp['case_mode']='detailed'
     comp['require_case_task']=require_task
-    queue=(['task'] if require_task and not chain.get('task') else [])+[key for key in ('situation','behavior','immediate','thoughts','feelings','delayed') if not chain.get(key)]
+    queue=(['task'] if require_task and not chain.get('task') else [])+[key for key in ('situation','behavior','feelings','thoughts','immediate','delayed') if not chain.get(key)]
     if not queue:
         response='Все шесть звеньев уже описаны. Какое из них нужно уточнить?'
         comp['case_question']='correction'
     else:
         comp['case_question']=queue[0]
         facts=known_facts(chain)
-        response=('Уже известные факты:\n'+facts+'\n\n' if facts else '')+'Для вывода нужно уточнить один факт:\n'+QUESTIONS[queue[0]]
+        response=('Уже известные факты:\n'+facts+'\n\n' if facts else '')+'Для вывода нужно уточнить один факт:\n'+question_text(comp,queue[0])
     comp['case_question_queue']=queue
     # A rejected or incomplete explanation cannot remain an accepted conclusion.
     comp.pop('short_conclusion',None)
@@ -61,21 +70,21 @@ async def start_questions(m,u,path,*,require_task=False,detailed=False):
     await save_user(u,path)
     await m.answer(response,reply_markup=ReplyKeyboardRemove())
 
-async def handle_answer(m,u,text,path,*,is_known_button=None):
+async def handle_answer(m,u,text,path,*,is_known_button=None,on_complete=None):
     if u.get('stage')!='reported_case_question' or str(text or '').startswith('/'):
         return False
     if str(text or '').lower().strip(' .!?') in {'стоп','не надо','хватит','убери','на этом пока остановиться'}:
         return False
     comp=json.loads(u.get('analysis_json') or '{}')
     if comp.get('case_mode')=='brief':
-        return await handle_brief(m,u,text,path,comp,is_known_button)
+        return await handle_brief(m,u,text,path,comp,is_known_button,on_complete=on_complete)
     chain=comp.get('behavioral_chain') or {}
     field=comp.get('case_question')
     if text in {'📚 Подробнее','📚 Почему так?'}:
-        await m.answer(known_facts(chain)+'\n\n'+QUESTIONS.get(field,'Какое звено нужно исправить?'),reply_markup=ReplyKeyboardRemove())
+        await m.answer(known_facts(chain)+'\n\n'+question_text(comp,field),reply_markup=ReplyKeyboardRemove())
         return True
     if wants_questions(text) or not str(text or '').strip() or (is_known_button and is_known_button(text)):
-        await m.answer(QUESTIONS.get(field,'Какое звено нужно исправить?'),reply_markup=ReplyKeyboardRemove())
+        await m.answer(question_text(comp,field),reply_markup=ReplyKeyboardRemove())
         return True
     if field=='correction':
         comp['reported_correction']=text[:320]
@@ -90,9 +99,12 @@ async def handle_answer(m,u,text,path,*,is_known_button=None):
     comp['case_question_queue']=queue
     if queue:
         comp['case_question']=queue[0]
-        response='Ответ сохранён. Следующий факт:\n'+QUESTIONS[queue[0]]
+        response='Ответ сохранён. Следующий факт:\n'+question_text(comp,queue[0])
         markup=ReplyKeyboardRemove()
     else:
+        if on_complete:
+            await on_complete(m,u,path,comp)
+            return True
         comp.pop('case_question',None)
         comp['selected_skill']='visible_next_step'
         u['pending_skill_id']='visible_next_step'
@@ -150,7 +162,10 @@ async def start_brief(m,u,path,*,require_task=False):
     await m.answer(prompt,reply_markup=markup)
 
 
-async def brief_ready(m,u,path,comp):
+async def brief_ready(m,u,path,comp,*,on_complete=None):
+    if on_complete:
+        await on_complete(m,u,path,comp)
+        return
     comp.pop('case_question',None)
     comp['selected_skill']='visible_next_step'
     u['pending_skill_id']='visible_next_step'
@@ -161,7 +176,7 @@ async def brief_ready(m,u,path,comp):
                    reply_markup=keyboard('💪 Давай действие',DEEP,'На этом пока остановиться'))
 
 
-async def handle_brief(m,u,text,path,comp,is_known_button):
+async def handle_brief(m,u,text,path,comp,is_known_button,*,on_complete=None):
     field=comp.get('case_question')
     if text==DEEP:
         await start_questions(m,u,path,detailed=True,require_task=not bool(u.get('today_target')))
@@ -194,7 +209,7 @@ async def handle_brief(m,u,text,path,comp,is_known_button):
             markup=keyboard(CHOOSE,DEEP)
     elif field=='brief_ready' and text==START:
         if u.get('today_target'):
-            await brief_ready(m,u,path,comp)
+            await brief_ready(m,u,path,comp,on_complete=on_complete)
             return True
         comp['case_question']='brief_task'
         response='Какое одно дело возьмёте? Например: открыть конкретное письмо или документ. Можно текстом или голосом.'
@@ -209,7 +224,7 @@ async def handle_brief(m,u,text,path,comp,is_known_button):
         comp.setdefault('behavioral_chain',{})['task']=target
         u['today_target']=target
         u['current_task_title']=target
-        await brief_ready(m,u,path,comp)
+        await brief_ready(m,u,path,comp,on_complete=on_complete)
         return True
     else:
         prompt,markup=barrier_prompt(comp) if field=='brief_barrier' else ('Назовите одно дело или выберите дальнейший шаг.',keyboard(START,CHOOSE,DEEP))
