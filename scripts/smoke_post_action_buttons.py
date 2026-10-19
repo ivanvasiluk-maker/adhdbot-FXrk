@@ -70,6 +70,8 @@ async def set_post_action_user(uid: int, db_path: str, stage: str, *, rounds: in
         {
             "stage": stage,
             "name": "Иван",
+            "address_mode": "ty",
+            "address_form": "male",
             "trainer_key": "marsha",
             "bucket": "mixed",
             "analysis_json": "{}",
@@ -259,16 +261,23 @@ async def run() -> None:
         # Stale buttons from another screen must not launch old branches or show an empty prompt.
         await set_post_action_user(uid, db_path, "day_core_stop", rounds=4)
         stale_repeat_msg = await send(uid, "🔁 Ещё круг")
-        assert (
-            "добровольный шаг. день остаётся завершённым" in last_text(stale_repeat_msg).lower()
-            or "день уже закрыт. это не отменяется" in last_text(stale_repeat_msg).lower()
-        ), last_text(stale_repeat_msg)
-        assert (await available_keyboard_texts(stale_repeat_msg,uid,db_path)) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Частично", "🟡 Не получилось", "🌙 Точно закрыть день"}}
-        assert "Если трудно, достаточно этого:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
-        voluntary_done_msg = await send(uid, "✅ Сделал")
-        assert "Что получилось после шага?" in last_text(voluntary_done_msg), last_text(voluntary_done_msg)
         saved = await get_user(uid, db_path)
         assert bot.day_closed_today(saved), saved
+        if "нет подходящего нового способа" in last_text(stale_repeat_msg).lower():
+            # Earlier scenarios may exhaust the allowed skills; never bypass exclusions.
+            assert saved["stage"] == "day_core_stop", saved
+            assert "открыть карту" in last_text(stale_repeat_msg).lower()
+        else:
+            assert (
+                "добровольный шаг. день остаётся завершённым" in last_text(stale_repeat_msg).lower()
+                or "день уже закрыт. это не отменяется" in last_text(stale_repeat_msg).lower()
+            ), last_text(stale_repeat_msg)
+            assert (await available_keyboard_texts(stale_repeat_msg,uid,db_path)) == {BUTTON_LABELS.get(label, label) for label in {"✅ Сделал", "🟡 Частично", "🟡 Не получилось", "🌙 Точно закрыть день"}}
+            assert "Если трудно, достаточно этого:" not in all_text(stale_repeat_msg), all_text(stale_repeat_msg)
+            voluntary_done_msg = await send(uid, "✅ Сделал")
+            assert "Что получилось после шага?" in last_text(voluntary_done_msg), last_text(voluntary_done_msg)
+            saved = await get_user(uid, db_path)
+            assert bot.day_closed_today(saved), saved
 
         u = await get_user(uid, db_path)
         u.update({"stage": "ask_name", "name": ""})
@@ -278,6 +287,7 @@ async def run() -> None:
             "минимум на сегодня уже выполнен" in last_text(stale_done_msg).lower()
             or "день уже закрыт" in last_text(stale_done_msg).lower()
             or "🧩 " in last_text(stale_done_msg)
+            or "нет подходящего нового способа" in last_text(stale_done_msg).lower()
         ), last_text(stale_done_msg)
         u = await get_user(uid, db_path)
         assert not u.get("name"), u.get("name")

@@ -292,8 +292,8 @@ async def test_show_offer_force_enables_offer_prerequisites():
         assert "Группа навыков" in joined
         assert "€240" in joined
         assert "Личная работа" in joined
-        assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}" in joined
-        assert "тест SKILLER пока остаётся бесплатным" in joined
+        assert "Индивидуальная консультация" in joined
+        assert "Бот остаётся бесплатным" in joined
 
 
 async def test_free_beta_allows_support_offers_but_blocks_bot_checkout():
@@ -322,9 +322,9 @@ async def test_free_beta_allows_support_offers_but_blocks_bot_checkout():
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
         live_text = "\n".join(live_cb.message.answers)
-        assert "Личная работа с Иваном Василюком" in live_text
-        assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц" in live_text
+        assert "Индивидуальная консультация с Иваном Василюком" in live_text
         assert "согласуем до оплаты" in live_text
+        assert "€99 в месяц" not in live_text
 
         bot_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["bot"])
         old_payment_url, old_payments_enabled = bot.PAYMENT_MONTH_URL, bot.ENABLE_PAYMENTS
@@ -381,7 +381,7 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
         assert "Группа навыков" in auto_text
         assert "€240" in auto_text
         assert "Личная работа" in auto_text
-        assert "тест SKILLER пока остаётся бесплатным" in auto_text
+        assert "Бот остаётся бесплатным" in auto_text
         assert "Оплатить" not in auto_text
 
         second_auto_msg = FakeMessage(uid, "")
@@ -394,7 +394,7 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
         bot.DB_PATH = old
         assert manual_user.get("offer_mode") == "manual_sales"
         assert "€240" in "\n".join(manual_msg.answers)
-        assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL}" in "\n".join(manual_msg.answers)
+        assert "Индивидуальная консультация" in "\n".join(manual_msg.answers)
 
 
 async def test_support_request_form_remains_available_during_free_beta():
@@ -594,7 +594,11 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     assert "👥 Групповой тренинг" in keyboard_text
     assert "€240" in bot.tariff_group_text()
     assert "👤 Индивидуальный тренинг" in keyboard_text
-    assert f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц" in bot.tariff_live_text()
+    assert "Индивидуальная консультация" in bot.tariff_live_text()
+    from core.consultation import consultation_url
+    live_buttons = [b for row in bot.tariff_live_inline_keyboard(93009).inline_keyboard for b in row]
+    assert any(b.url == consultation_url() for b in live_buttons)
+    assert any(b.callback_data == bot.OFFER_CALLBACKS["request_live"] for b in live_buttons)
     assert "Продолжить бесплатно" in keyboard_text
     callbacks = [button.callback_data for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row]
     assert callbacks.count(bot.OFFER_CALLBACKS["continue_training"]) == 1
