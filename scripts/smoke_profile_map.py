@@ -91,6 +91,7 @@ async def run():
         offer_msg = DummyMessage(uid, "")
         await bot.show_day3_offer(offer_msg, u, "smoke_test")
         offer_text = offer_msg.answers[-1]["text"] if offer_msg.answers else ""
+        detailed_text = bot.offer_detailed_conclusion_text(u, bot.build_profile_map_summary(u,p3), p3)
         kb = offer_msg.answers[-1].get("reply_markup") if offer_msg.answers else None
         kb_texts = []
         if kb:
@@ -136,15 +137,15 @@ async def run():
         has_group_offer = "👥 Групповой тренинг" in kb_texts
         has_live_offer = any("👤 Индивидуальный тренинг" in t for t in kb_texts)
         assert len(kb_texts) <= 4
-        has_primary_map = all(section in offer_text for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше"))
-        has_day3_conclusion = "Где пока труднее" in offer_text and "Что сработало" in offer_text
+        has_primary_map = all(section in detailed_text for section in ("Что сегодня заметили", "Где пока труднее", "Что сработало", "Что проверим дальше"))
+        has_day3_conclusion = "Где пока труднее" in detailed_text and "Что сработало" in detailed_text
         has_personal_offer = (
             any("Продолжить бесплатно" in label for label in kb_texts)
             and has_group_offer and has_live_offer
         )
-        has_model_value = "Что могло мешать" in offer_text and "Что проверим дальше" in offer_text
+        has_model_value = "Что могло мешать" in detailed_text and "Что проверим дальше" in detailed_text
         has_selling_specifics = (
-            "выбери формат и напиши Ивану" in offer_text
+            "Индивидуальная консультация" in offer_text
             and "📖 Подробнее и план" in kb_texts
             and bot.OFFER_CALLBACKS["conclusion_full"] in [b.callback_data for row in bot.offer_details_inline_keyboard(uid).inline_keyboard for b in row]
         )
@@ -167,6 +168,7 @@ async def run():
         assert "уйти от напряжения" not in daily_explanation, daily_explanation
         assert "точный показатель" not in daily_explanation.lower(), daily_explanation
         assert "USER PROFILE" not in offer_text, offer_text
+        assert "Где пока труднее" not in offer_text, offer_text
         assert has_group_offer, kb_texts
         assert has_live_offer, kb_texts
         assert has_primary_map, offer_text

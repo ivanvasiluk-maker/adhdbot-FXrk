@@ -163,7 +163,7 @@ class DialogRoutingTests(unittest.IsolatedAsyncioTestCase):
             bot, "save_user", new=AsyncMock()
         ):
             await bot.send_crisis_tool(message, user, "слишком много задач и перегруз")
-        self.assertEqual(message.answers.count("Сделай минимум и отметь результат."), 1)
+        self.assertEqual(message.answers.count(bot.render_address("Сделай минимум и отметь результат.", user)), 1)
 
     async def test_navigation_labels_in_text_prompt_make_zero_llm_calls(self):
         labels = ["Продолжить", "Назад", "Выбрать позже", "Посмотреть карту", "Что я сегодня понял", "Дать короткий навык"]

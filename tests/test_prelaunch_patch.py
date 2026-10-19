@@ -82,7 +82,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any("€4.99/мес" in label for label in labels))
         self.assertIn("👥 Групповой тренинг", labels)
         self.assertIn("👤 Индивидуальный тренинг", labels)
-        self.assertIn(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц", bot.tariff_live_text())
+        self.assertIn("Индивидуальная консультация", bot.tariff_live_text())
         self.assertIn("€240",bot.tariff_group_text())
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
@@ -102,7 +102,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(bot, "ENABLE_HUMAN_OFFER", False):
             text = bot.short_offer_text()
             labels = [button.text for row in bot.offer_details_inline_keyboard(1).inline_keyboard for button in row]
-        self.assertIn("Сам тест SKILLER", text)
+        self.assertIn("Бот остаётся бесплатным", text)
         self.assertNotIn("€", text)
         self.assertNotIn("Группа навыков", text)
         self.assertNotIn("С человеком", labels)
@@ -164,18 +164,16 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         profile.update({"last_successful_skill": "bad_draft", "action_done_count": 3})
         summary = bot.build_profile_map_summary(user, profile)
         text = bot.offer_screen_text(user, summary, profile)
-        self.assertIn("Что сегодня заметили", text)
-        self.assertIn("Где пока труднее", text)
-        self.assertIn("Что сегодня заметили", text)
-        self.assertIn("Что проверим дальше", text)
-        self.assertIn("Где пока труднее", text)
-        self.assertIn("Продолжение дела проверяем отдельно", text)
+        self.assertIn("закончить презентацию", text)
+        self.assertNotIn("Где пока труднее", text)
+        self.assertNotIn("Причину ещё уточняем", text)
         self.assertNotIn("→ короткое облегчение", text)
         self.assertIn("Группа навыков", text)
         self.assertIn("€240", text)
         self.assertIn("Личная работа", text)
-        self.assertIn(f"€{bot.HUMAN_SKILL_SESSION_EUR_LABEL} в месяц", text)
-        self.assertIn("тест SKILLER пока остаётся бесплатным", text)
+        self.assertIn("Индивидуальная консультация", text)
+        self.assertIn("Бот остаётся бесплатным", text)
+        self.assertLess(len(text),1300)
 
     def test_day_one_skill_names_the_problem_and_solution_route(self):
         user = bot.default_user(1)

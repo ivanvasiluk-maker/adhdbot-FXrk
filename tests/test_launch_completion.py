@@ -40,7 +40,7 @@ class ConclusionTests(unittest.TestCase):
     def test_prices_are_configured_and_no_guaranteed_month_package(self):
         self.assertEqual(bot.HUMAN_SKILL_SESSION_EUR_LABEL, '99')
         self.assertEqual(bot.GROUP_PROGRAM_PRICE_LABEL, '240')
-        self.assertIn('от €99', bot.tariff_live_text())
+        self.assertIn('Индивидуальная консультация', bot.tariff_live_text())
         self.assertIn('согласуем до оплаты', bot.tariff_live_text())
         self.assertNotIn('€200', bot.short_offer_text())
 
@@ -141,7 +141,7 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
         await bot.finalize_day_review(bot.dialogue_message(m,u),u,{'function':'stay','barrier':'отвлечения'},'test')
         texts=[x[0] for x in m.answers]
         final=next(i for i,x in enumerate(texts) if 'Итог программы' in x)
-        offer=next(i for i,x in enumerate(texts) if 'Вы отметили полезный результат' in x)
+        offer=next(i for i,x in enumerate(texts) if 'Если хотите потренировать' in x)
         self.assertLess(final,offer)
         self.assertIn('Самостоятельно:',texts[final])
 
@@ -159,7 +159,7 @@ class CompletionJourneys(unittest.IsolatedAsyncioTestCase):
             await bot.finalize_day_review(bot.dialogue_message(m,u),u,{'function':'stay','barrier':'отвлечения'},'test')
         texts = [x[0] for x in m.answers]
         self.assertIn('дело не продолжилось',texts[0])
-        self.assertTrue(any('Группа' in x and 'от €99' in x for x in texts[1:]))
+        self.assertTrue(any('Группа' in x and 'Индивидуальная консультация' in x for x in texts[1:]))
         self.assertFalse(any('устойчиво изменить' in x for x in texts))
         _,u = await self.send('📚 Подробнее')
         self.assertEqual(u['day'],3)

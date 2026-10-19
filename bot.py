@@ -92,7 +92,7 @@ from flows import (
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
     live_analysis_profile_patch, render_analysis_details_by_trainer, build_analysis_result
 )
-from core.addressing import address_instructions
+from core.addressing import address_instructions, render_address
 from core.outgoing_dialogue import OutgoingDialogueMiddleware
 from core.dialogue_ux import (BUTTON_LABELS, OTHER, VOICE_RETRY, VOICE_TEXT, VOICE_SKIP, VOICE_FAILURE,
     context as dialogue_context, valid_transcript, is_clarification, explain_previous, plain_text, review_focus, DIALOGUE_RULES)
@@ -1059,7 +1059,7 @@ def daily_conclusion(u: Dict[str, Any], profile: Dict[str, Any], review_override
                "После шага дело продолжилось. Это результат одной попытки." if feedback.get("continued_after_skill") is True else
                "Шаг выполнен, но продолжение дела пока не подтверждено." if feedback.get("completed") or feedback.get("partial") else
                "Собираем ваши ответы о том, что мешает делу.")
-    helpful = (f"«{_skill_label(best)}» помог продолжить дело в проверенной попытке." if best else
+    helpful = (f"После способа «{_skill_label(best)}» вы отметили продолжение дела в этой попытке." if best else
                "Полезный способ пока не подтверждён.")
     if not best:
         reported = _top_specific_signal((profile.get("personal_working_model") or {}).get("helpful_interventions"), "") if isinstance(profile.get("personal_working_model"), dict) else ""
@@ -1209,7 +1209,7 @@ class DialogueMessage:
         return await self._send("edit_text", text, kwargs)
 
     async def _send(self, method, text, kwargs):
-        text = plain_text(text)
+        text = render_address(plain_text(text), self.user)
         markup = kwargs.get("reply_markup")
         page_context = dialogue_context(self.user.get("dialogue_context"))
         labels = []
@@ -3509,7 +3509,10 @@ async def save_extracted_task_context(
 
 def current_task_title(u: Dict[str, Any], fallback: str = "важное дело, которое ты сейчас откладываешь") -> str:
     title = str(u.get("current_task_name") or u.get("current_task_title") or u.get("today_target") or "").strip()
-    if not title or title == "__target_not_selected__":
+    if not title or title in {"__target_not_selected__", "текущее дело", "важное дело, которое ты сейчас откладываешь"}:
+        comp = parse_case_data(u.get("analysis_json"), {})
+        title = str((comp.get("behavioral_chain") or {}).get("task") or "").strip()
+    if not title:
         return fallback
     return re.split(r",?\s+(?:а?\s*вместо этого|но я|но не могу|потому что)\b", title, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,;:—-")[:140]
 
@@ -4372,7 +4375,7 @@ def known_reply_button_texts() -> set[str]:
 
 
 def is_known_reply_button(text: str) -> bool:
-    return (text or "").strip() in known_reply_button_texts()
+    return bool(re.match(r"^🎯 [1-3]\. ", (text or "").strip())) or (text or "").strip() in known_reply_button_texts()
 
 
 def button_fits_current_state(text: str, u: Dict[str, Any]) -> bool:
@@ -5773,7 +5776,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
         return True
     if feedback.get("quick_result"):
         if completed and continued is True:
-            summary = "Дело продолжилось. Этот шаг сработал в этой попытке. Сохраню результат для похожих ситуаций."
+            summary = "После шага дело продолжилось. Сохраню это наблюдение; в следующей ситуации результат может отличаться."
             markup = kb_quick_success
         elif helpfulness == "worse":
             summary = "После шага стало хуже. Упражнение пока остановим. Не нужно продолжать через силу. Этот способ пока не повторяем."
@@ -5800,6 +5803,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
             markup = markup.model_copy(update={"keyboard": markup.keyboard +
                 [[KeyboardButton(text=ACTUAL_BUTTON)]]})
         await answer_with_keyboard(m, u, summary, markup, "post_action_reflection")
+        await maybe_show_help_offer(m, u, substantive=True)
         return True
     raw_target_function = str(active_attempt(u).get("target_function") or "START").upper()
     voice_target_function = {
@@ -5828,6 +5832,7 @@ async def persist_minimal_skill_feedback(m: Message, u: Dict[str, Any], *, show_
         next_choice_keyboard(), "post_action_reflection",
     )
     await maybe_show_day1_insight(m, u)
+    await maybe_show_help_offer(m, u, substantive=True)
     return True
 
 
@@ -7891,24 +7896,12 @@ def day3_conclusion_and_map_text(summary: Dict[str, Any], profile: Dict[str, Any
 def short_offer_text() -> str:
     if FREE_BETA_ACCESS:
         options = []
-        if ENABLE_GROUP_OFFER:
-            options.append(
-                f"👥 Группа навыков для взрослых с СДВГ и хронической прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}.\n"
-                "8 недель, онлайн-встреча раз в неделю, задания каждый день и поддержка в чате. "
-                "Работаем с вниманием, реальным планированием, тревогой, импульсивностью и возвратом после срывов."
-            )
         if ENABLE_HUMAN_OFFER:
-            options.append(
-                f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц.\n"
-                "Условия, встречи и задания согласуем до оплаты."
-            )
-        options.append(
-            "🟢 Сам тест SKILLER пока остаётся бесплатным. Группа и личная работа — отдельные платные форматы."
-        )
-        return "\n\n".join(options) + (
-            "\n\nЕсли нужна помощь психолога — выбери формат и напиши Ивану. До записи можно обсудить условия."
-            if ENABLE_GROUP_OFFER or ENABLE_HUMAN_OFFER else ""
-        )
+            options.append("👤 Индивидуальная консультация с Иваном Василюком. Личная работа и тренинг навыков: можно выбрать время в календаре или оставить вопрос. Формат и стоимость согласуем до начала работы.")
+        if ENABLE_GROUP_OFFER:
+            options.append(f"👥 Группа навыков для взрослых с СДВГ и прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}. 8 онлайн-встреч: практика внимания, планирования и возвращения к делам. Можно оставить заявку на участие; расписание согласуем лично.")
+        options.append("🟢 Бот остаётся бесплатным: тренировки, карта, история и следующие шаги доступны без записи к психологу.")
+        return "\n\n".join(options)
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
     if paid_plan_available():
         options.insert(0, f"🔵 Персональная тренировка SKILLER Full — €{BASE_OFFER_EUR_LABEL}/мес.")
@@ -7942,7 +7935,22 @@ def offer_detailed_conclusion_text(u: Dict[str, Any], summary: Dict[str, Any], p
             + "\n\nПричину трудности ещё уточняем. Это не диагноз.")
 
 
+def support_context_text(u, profile):
+    feedback = profile.get("last_skill_feedback") or {}
+    if not isinstance(feedback,dict):
+        feedback = {}
+    task = current_task_title(u, "")
+    suffix = f" по задаче «{task}»" if task else ""
+    if feedback.get("continued_after_skill") is True:
+        return f"Вы отметили, что после шага{suffix} дело продолжилось. Это наблюдение об одной попытке."
+    if feedback.get("helpfulness") in {"helped", "some"}:
+        return f"Вы отметили, что после шага{suffix} стало легче. Продолжение дела учитываем отдельно."
+    return (f"Сейчас вы разбираете задачу «{task}». " if task else "") + "В SKILLER можно тренировать навыки самостоятельно или обратиться за поддержкой к психологу."
+
+
 def offer_screen_text(u: Dict[str, Any], summary: Dict[str, Any], profile: Dict[str, Any]) -> str:
+    if FREE_BETA_ACCESS:
+        return support_context_text(u, profile) + "\n\n" + short_offer_text()
     return f"{offer_short_conclusion_text(u, summary, profile)}\n\n———\n\n{short_offer_text()}"
 
 
@@ -7975,6 +7983,7 @@ def remember_offer_return(u: Dict[str, Any]) -> None:
 
 
 async def restore_offer_return(m: Message, u: Dict[str, Any]) -> bool:
+    m = dialogue_message(m,u)
     ctx = dialogue_context(u.get("dialogue_context"))
     snapshot = ctx.get("offer_return_state")
     if not isinstance(snapshot, dict):
@@ -7988,7 +7997,7 @@ async def restore_offer_return(m: Message, u: Dict[str, Any]) -> bool:
     markup = None
     if original.get("markup"):
         markup = (InlineKeyboardMarkup(**original["markup"]) if original.get("inline") else
-                  ReplyKeyboardMarkup(**original["markup"]))
+                  ReplyKeyboardRemove(**original["markup"]) if original["markup"].get("remove_keyboard") else ReplyKeyboardMarkup(**original["markup"]))
     if original.get("text"):
         await m.answer("Продолжим с прежнего места.\n\n" + original["text"], reply_markup=markup)
     else:
@@ -8024,24 +8033,32 @@ async def maybe_show_help_offer(m: Message, u: Dict[str, Any], *, final=False, s
         return False
     profile = await get_user_profile(u["user_id"], DB_PATH)
     day = int(u.get("day") or 1)
+    if substantive:
+        feedback = profile.get("last_skill_feedback") or {}
+        if training_context(u).get("moment_training") or not isinstance(feedback,dict) or feedback.get("continued_after_skill") is not True:
+            return False
     key = "final_help_offer_seen" if final else "day1_help_offer_seen"
-    if not final and not day_closed_today(u):
+    if not final and not substantive and not day_closed_today(u):
         return False
     if profile.get(key) or not await automatic_support_allowed(u, profile, first=not final):
         return False
+    from core.consultation import consultation_url
     rows = []
-    if ENABLE_GROUP_OFFER:
-        rows.append([InlineKeyboardButton(text="👥 Группа", callback_data=OFFER_CALLBACKS["group"])])
     if ENABLE_HUMAN_OFFER:
-        rows.append([InlineKeyboardButton(text="👤 Индивидуально", callback_data=OFFER_CALLBACKS["live"])])
-    rows.append([InlineKeyboardButton(text="Не сейчас", callback_data=OFFER_CALLBACKS["choose_later"])])
+        if consultation_url():
+            rows.append([InlineKeyboardButton(text="🗓 Индивидуальная консультация", url=consultation_url())])
+        rows.append([InlineKeyboardButton(text="👤 Личная работа и вопрос Ивану", callback_data=OFFER_CALLBACKS["live"])])
+    if ENABLE_GROUP_OFFER:
+        rows.append([InlineKeyboardButton(text="👥 Узнать о группе", callback_data=OFFER_CALLBACKS["group"])])
+    rows.append([InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["choose_later"])])
     await remember_offer_decision(u)
     previous_context = u.get("dialogue_context")
-    # A soft invitation leaves the current question and action untouched.
-    await m.answer("Вы отметили полезный результат. Можно продолжать самостоятельно. Если захотите больше поддержки, доступны группа и личная работа с Иваном. Условия — по вашему выбору.", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    text = support_context_text(u, profile) + "\n\nЕсли хотите потренировать эти навыки с психологом, можно записаться на индивидуальную консультацию, задать Ивану вопрос или узнать о группе. Бот остаётся бесплатным — можно продолжать самостоятельно."
+    await dialogue_message(m,u).answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     u["dialogue_context"] = previous_context
     await save_user(u, DB_PATH)
     u["profile_json"] = await update_user_profile(u["user_id"], {key:utc_iso(), "soft_help_offer_active": True}, DB_PATH, source="help_offer_after_value")
+    await log_event(u["user_id"], "offer", "support_invitation_shown", {"source":"completed_result" if substantive else "day_summary"}, DB_PATH, SHEETS_WEBHOOK_URL)
     return True
 
 
@@ -8102,7 +8119,7 @@ async def show_day3_offer(m: Message, u: Dict[str, Any], source: str, *, mode: s
         "price_month": BASE_OFFER_EUR_LABEL,
         "funnel_goal": "group_or_personal" if FREE_BETA_ACCESS else "subscription_or_support",
         "group_price": float(GROUP_PROGRAM_TOTAL_MIN_EUR),
-        "personal_price_month": float(HUMAN_SKILL_SESSION_EUR),
+        "personal_price_month": None if FREE_BETA_ACCESS else float(HUMAN_SKILL_SESSION_EUR),
         **profile_patch,
     }
     await log_event(u["user_id"], "offer", "offer_shown" if is_auto else "offer_preview_shown", {**offer_meta, "offer_mode": mode}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -8740,11 +8757,10 @@ def tariff_bot_text() -> str:
 
 def tariff_live_text() -> str:
     return (
-        f"👤 Личная работа с Иваном Василюком — от €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц\n\n"
-        "Индивидуальный тренинг навыков — как занятия с тренером в спортзале, только для повседневных действий. Вместе разберём вашу ситуацию, потренируем посильные шаги и скорректируем подход по результатам.\n\n"
-        "Можно оставить заявку Ивану или на подбор коллеги. Специалиста и условия согласуем с вами; автоматически другим психологам ваши ответы не передаются.\n\n"
-        "Число встреч, задания, поддержку между встречами и точную цену согласуем до оплаты.\n\n"
-        "Можно оставить заявку без оплаты. Иван свяжется с вами и ответит на вопросы."
+        "👤 Индивидуальная консультация с Иваном Василюком\n\n"
+        "Можно выбрать время по кнопке календаря. На консультации обсудим, с чем нужна помощь и какой формат подойдёт. Условия и стоимость согласуем до оплаты и начала работы.\n\n"
+        "Индивидуальный тренинг навыков — практика на ваших повседневных задачах: разбор препятствий, упражнения и проверка результатов. Можно оставить вопрос Ивану или запрос на подбор коллеги. Специалиста и условия согласуем с вами; автоматически другим психологам ваши ответы не передаются.\n\n"
+        "Бесплатные тренировки в боте остаются доступны независимо от записи на консультацию."
     )
 
 
@@ -8753,7 +8769,7 @@ def tariff_group_text() -> str:
     return (
         f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
         "Групповой тренинг навыков: практика на своих задачах с психологом и другими участниками.\n"
-        "Есть утренние и вечерние варианты. Напишите удобное время — подберём подходящий набор и согласуем расписание до записи.\n\n"
+        "Напишите, когда удобно: утренние и вечерние пожелания учтём при согласовании расписания. Расписание обсудим после заявки.\n\n"
         "8 недель, 8 онлайн-встреч по одной в неделю. Небольшая группа до 12 человек.\n"
         "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
         "На встречах будем пробовать:\n"
@@ -8764,8 +8780,8 @@ def tariff_group_text() -> str:
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
         "Внутри: практика на своих задачах, задания каждый день, чат-поддержка и материалы после встреч.\n\n"
         f"Стоимость всей программы — €{GROUP_PROGRAM_PRICE_LABEL}. {installment}"
-        "Перед участием — короткая бесплатная встреча, чтобы понять, подходит ли формат.\n\n"
-        "Если хочешь место — нажми кнопку ниже. Иван напишет тебе лично."
+        "Перед участием обсудим, подходит ли вам формат.\n\n"
+        "Оставьте заявку, чтобы обсудить участие. Иван ответит лично; оплата в боте не требуется."
     )
 
 
@@ -8801,10 +8817,15 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 
 def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="Записаться на индивидуальный тренинг", callback_data=OFFER_CALLBACKS["request_live"])],
-            ]
-    rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
+    from core.consultation import consultation_url
+    rows = []
+    if consultation_url():
+        rows.append([InlineKeyboardButton(text="🗓 Записаться на консультацию", url=consultation_url())])
+    rows.extend([
+        [InlineKeyboardButton(text="✍️ Вопрос / заявка на личную работу", callback_data=OFFER_CALLBACKS["request_live"])],
+        [InlineKeyboardButton(text="← Назад к вариантам", callback_data=OFFER_CALLBACKS["back"])],
+        [InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["continue_training"])],
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -10067,11 +10088,12 @@ async def open_next_logical_step(m: Message, u: Dict[str, Any], *, source: str =
     bypass_limit = source.startswith("admin_") or bool(u.get("test_access") and u.get("force_training_limit_bypass"))
     if counts["attempts_today"] >= 2 and not bypass_limit:
         await mark_day_closed(u, "daily_experiment_limit")
+        set_legacy_stage(u, "day_core_stop")
         await save_user(u, DB_PATH)
         await answer_with_keyboard(
             m, u,
-            "На сегодня данных достаточно. Лучше проверить это завтра в реальной ситуации, чем продолжать навыки подряд.\n\n"
-            "Если хочется, доступен ещё один добровольный эксперимент; карта и новая ситуация тоже остаются доступны.",
+            "Попытки сохранены. Можно продолжать задачу самостоятельно или остановиться.\n\n"
+            "Если хотите ещё потренироваться бесплатно, выберите «Дать короткий навык». Также доступны новая ситуация, карта и исправление вывода.",
             kb_completed_day_open, "day_core_stop",
         )
         return
@@ -10158,7 +10180,15 @@ CLOSED_DAY_VOLUNTARY_TINY_TEXT = (
 async def open_closed_day_voluntary_step(m: Message, u: Dict[str, Any]) -> None:
     profile = await get_user_profile(u["user_id"], DB_PATH)
     recommended = daily_conclusion(u, profile).get("next_skill_id")
-    sid = recommended if recommended in SKILLS_DB and not should_block_skill_for_repetition(u, recommended) else "visible_next_step" if "visible_next_step" in SKILLS_DB else ("one_visible_step" if "one_visible_step" in SKILLS_DB else str(current_skill_for_action(u) or next(iter(SKILLS_DB))))
+    learning = profile.get("learning_model") or {}
+    blocked = {_canonical_daily_skill_id(sid) for sid in _profile_list(profile.get("collection_disabled_skills")) + not_fit_today_skills(u, profile)}
+    blocked.update(sid for sid in SKILLS_DB if skill_blocked_in_model(learning, sid))
+    sid = _first_non_repeating_skill_id(u, [recommended, "visible_next_step", "open_only", "ninety_sec_start"], list(blocked))
+    if not sid:
+        set_legacy_stage(u, "day_core_stop")
+        await save_user(u, DB_PATH)
+        await answer_with_keyboard(m,u,"Сейчас нет подходящего нового способа без повторения ограниченных навыков. Можно разобрать другую ситуацию или открыть карту.",kb_completed_day_open,"day_core_stop")
+        return
     set_legacy_stage(u, "closed_day_voluntary_step")
     u["closed_day_extra_step_date"] = local_date_for_user(u)
     u["closed_day_extra_step_count"] = int(u.get("closed_day_extra_step_count") or 0) + 1
@@ -11922,7 +11952,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-73\n"
+            "Product release PATCH-74\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -14111,6 +14141,8 @@ async def main_flow(m: Message):
     if u.get("stage") in {"experiment_completed_menu", "post_action_reflection"}:
         if text == "Продолжить задачу самому":
             await log_event(u["user_id"], "training", "experiment_continue_self", {"analytics_event": False}, DB_PATH, SHEETS_WEBHOOK_URL)
+            set_legacy_stage(u, "day_menu")
+            await save_user(u, DB_PATH)
             await answer_with_keyboard(m, u, "Ок. Эксперимент закрыт. Продолжай задачу сам — без нового цикла отчёта.", kb_day_menu, "day_menu")
             return
         if text == "Ещё один маленький шаг":
@@ -17806,9 +17838,9 @@ async def on_offer_callbacks(c: CallbackQuery):
         return
 
     if data in {OFFER_CALLBACKS["live"], "offer_live"}:
+        from core.consultation import consultation_url
         await log_event(uid, "offer", "tariff_details_opened", {
-            "format": "personal_therapy", "unit": "month", "amount": float(HUMAN_SKILL_SESSION_EUR),
-            "daily_assignments": True,
+            "format": "consultation_or_personal_training", "booking_available": bool(consultation_url()),
         }, DB_PATH, SHEETS_WEBHOOK_URL)
         await replace_offer_inline_screen(c.message, u, tariff_live_text(), tariff_live_inline_keyboard(uid))
         await c.answer()
@@ -18595,7 +18627,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-73)")
+        log.info("Public bot description is current (PATCH-74)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 

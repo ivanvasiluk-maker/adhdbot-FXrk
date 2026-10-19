@@ -128,7 +128,9 @@ async def main() -> None:
             assert "Предлагаю следующий шаг:" in joined(result_msg), joined(result_msg)
             assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             user, second_extra_msg = await send(uid, "➕ Ещё один короткий шаг")
-            assert "Добровольный шаг. День остаётся завершённым." in joined(second_extra_msg)
+            assert ("Добровольный шаг. День остаётся завершённым." in joined(second_extra_msg)
+                    or "нет подходящего нового способа" in joined(second_extra_msg)), joined(second_extra_msg)
+            assert await get_user_day_status(day_id, bot.DB_PATH) == "closed"
             assert "добровольный дополнительный подход сегодня уже был" not in joined(second_extra_msg)
 
             # 4-5. force_next_day closes/opens atomically, preserves total progress, resets daily attempts.

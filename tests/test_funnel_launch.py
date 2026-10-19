@@ -51,7 +51,8 @@ class Funnel(unittest.IsolatedAsyncioTestCase):
             markup=factory(self.uid)
             buttons=[b for row in markup.inline_keyboard for b in row]
             self.assertLessEqual(len(buttons),4)
-            self.assertFalse(any(b.url for b in buttons))
+            from core.consultation import consultation_url
+            self.assertTrue(all(not b.url or b.url == consultation_url() for b in buttons))
             self.assertTrue(any('бесплатно' in b.text.lower() for b in buttons))
 
     def test_task_label_excludes_barrier_but_source_is_untouched(self):
@@ -64,7 +65,7 @@ class Funnel(unittest.IsolatedAsyncioTestCase):
     def test_recorded_task_progress_is_visible_without_inventing_relief(self):
         u={'profile_json':{'last_skill_feedback':{'skill_id':'visible_next_step','completed':True,'continued_after_skill':True,'helpfulness':None}}}
         conclusion=bot.daily_conclusion(u,u['profile_json'])
-        self.assertIn('помог продолжить',conclusion['helpful'])
+        self.assertIn('вы отметили продолжение дела',conclusion['helpful'])
         self.assertNotIn('стало легче',conclusion['helpful'])
 
     def test_individual_group_and_consent_are_clear(self):
