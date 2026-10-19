@@ -22,7 +22,8 @@ class ShortFeedbackJourneys(unittest.IsolatedAsyncioTestCase):
     async def test_done_and_continued_finishes_in_one_choice(self):
         m,u=await self.send('✅ Сделал');self.assertEqual(len(m.answers),1)
         m,u=await self.send('🚀 Продолжил дело')
-        self.assertEqual(u['stage'],'post_action_reflection');self.assertEqual(len(m.answers),1)
+        self.assertEqual(u['stage'],'post_action_reflection');self.assertEqual(len(m.answers),2)
+        self.assertIn('Бот остаётся бесплатным',m.answers[1][0])
         p=await get_user_profile(self.uid,self.path);f=p['last_skill_feedback']
         self.assertTrue(f['completed']);self.assertTrue(f['continued_after_skill'])
         self.assertEqual(f['helpfulness'],'unknown')

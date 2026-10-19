@@ -216,8 +216,28 @@ async def handle_brief(m,u,text,path,comp,is_known_button,*,on_complete=None):
         markup=keyboard(DEEP,'На этом пока остановиться')
     elif field in {'brief_ready','brief_task'} and text==CHOOSE:
         comp['case_question']='brief_task'
-        response='Выберите самое небольшое нужное дело. Что конкретно открыть, сделать или сказать? Можно одной фразой или голосом.'
+        comp['case_question']='brief_task_options'
+        response='Напишите два-три дела, между которыми выбираете, каждое с новой строки или через точку с запятой. Покажу их отдельно — выберем одно для короткого старта.'
         markup=keyboard(DEEP,'На этом пока остановиться')
+    elif field=='brief_task_options' and not (is_known_button and is_known_button(text)) and text not in BRIEF_BUTTONS:
+        options=[x.strip()[:140] for x in re.split(r'\n|;',text) if x.strip()][:3]
+        if len(options)<2:
+            comp.setdefault('behavioral_chain',{})['task']=text.strip()[:140]
+            u['today_target']=text.strip()[:140]
+            u['current_task_title']=u['today_target']
+            await brief_ready(m,u,path,comp,on_complete=on_complete)
+            return True
+        comp['task_options']={f'🎯 {i+1}. {value[:80]}':value for i,value in enumerate(options)}
+        comp['case_question']='brief_task_pick'
+        response='С какого дела проще начать одним небольшим действием? Выберите его. Остальные пока оставим в стороне.'
+        markup=keyboard(*comp['task_options'],DEEP)
+    elif field=='brief_task_pick' and text in (comp.get('task_options') or {}):
+        target=comp['task_options'][text]
+        comp.setdefault('behavioral_chain',{})['task']=target
+        u['today_target']=target
+        u['current_task_title']=target
+        await brief_ready(m,u,path,comp,on_complete=on_complete)
+        return True
     elif field in {'brief_ready','brief_task'} and not (is_known_button and is_known_button(text)) and text not in BRIEF_BUTTONS:
         # A free-form answer may name the task directly, without an extra button.
         target=text.strip()[:140]

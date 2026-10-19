@@ -82,7 +82,7 @@ class OfferPathTests(unittest.TestCase):
         self.assertIn("€240", group)
         self.assertIn("двумя частями по €120", group)
         self.assertIn("Иван Василюк", group)
-        self.assertIn("от €99 в месяц", tariff_live_text())
+        self.assertIn("Индивидуальная консультация", tariff_live_text())
         self.assertIn("согласуем до оплаты", tariff_live_text())
         self.assertIn("задания каждый день", group)
 
