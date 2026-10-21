@@ -1285,6 +1285,12 @@ def request_support_keyboard():
 
 async def handle_application_input(m, u, text):
     if u.get("stage") == "offer_request_form" and (text.lower().strip(" .!?") in STOP_WORDS or text == "/cancel"):
+        ctx = dialogue_context(u.get("dialogue_context"))
+        ctx.pop("offer_request_parts", None)
+        ctx.pop("application_request_id", None)
+        u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+        u["pending_offer_request_format"] = None
+        await m.answer("Заявка отменена и не отправлена.")
         if not await restore_offer_return(m, u):
             set_legacy_stage(u, OFFER_MENU_STAGE)
             await save_user(u, DB_PATH)
@@ -7899,7 +7905,7 @@ def short_offer_text() -> str:
         if ENABLE_HUMAN_OFFER:
             options.append("👤 Индивидуальная консультация с Иваном Василюком. Личная работа и тренинг навыков: можно выбрать время в календаре или оставить вопрос. Формат и стоимость согласуем до начала работы.")
         if ENABLE_GROUP_OFFER:
-            options.append(f"👥 Группа навыков для взрослых с СДВГ и прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}. 8 онлайн-встреч: практика внимания, планирования и возвращения к делам. Можно оставить заявку на участие; расписание согласуем лично.")
+            options.append(f"👥 Группа навыков для взрослых с СДВГ и прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}. {GROUP_SESSION_COUNT} онлайн-встреч по 2 часа: практика внимания, планирования и возвращения к делам. Можно оставить заявку на участие; расписание согласуем лично.")
         options.append("🟢 Бот остаётся бесплатным: тренировки, карта, история и следующие шаги доступны без записи к психологу.")
         return "\n\n".join(options)
     options = ["🟢 Бесплатный короткий режим остаётся доступным."]
@@ -8685,13 +8691,15 @@ def offer_variant_inline_keyboard(user_id: int, request_callback: str | None = N
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = False) -> str:
+def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = False, group: bool = False) -> str:
     return (
         f"Заявка на формат: {format_label}.\n\n"
         "Имя и Telegram-профиль будут добавлены автоматически.\n"
-        "Одним сообщением напишите:\n1. Что хотите изменить (например, трудно начинать дела).\n2. Когда удобно: утром или вечером, ваш часовой пояс.\n3. Для индивидуального формата: к Ивану или на подбор специалиста.\n\n"
-        "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку в Telegram для ответа на заявку; если подключена рабочая почта, заявка дублируется через почтовый сервис. "
-        "Отправляя заявку, вы соглашаетесь передать эти данные Ивану для ответа. Передача выбранному коллеге — только после отдельного согласования. Другой контакт можно добавить по желанию. Отменить — /cancel."
+        + ("Одним сообщением напишите, что хотите изменить и когда удобно заниматься: утром или вечером, ваш часовой пояс.\n\n" if group else "Одним сообщением напишите, с чем нужна помощь. Если хотите подбор другого специалиста, укажите это.\n\n")
+        + "Этот ответ и Telegram-профиль будут отправлены Ивану Василюку в Telegram для ответа на заявку; если подключена рабочая почта, заявка дублируется через почтовый сервис. "
+        "Отправляя заявку, вы соглашаетесь передать эти данные Ивану для ответа. "
+        + ("" if group else "Передача выбранному коллеге — только после отдельного согласования. ")
+        + "Другой контакт можно добавить по желанию. Отменить — /cancel."
     )
 
 
@@ -8770,7 +8778,7 @@ def tariff_group_text() -> str:
         f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
         "Групповой тренинг навыков: практика на своих задачах с психологом и другими участниками.\n"
         "Напишите, когда удобно: утренние и вечерние пожелания учтём при согласовании расписания. Расписание обсудим после заявки.\n\n"
-        "8 недель, 8 онлайн-встреч по одной в неделю. Небольшая группа до 12 человек.\n"
+        f"{GROUP_SESSION_COUNT} недель, {GROUP_SESSION_COUNT} онлайн-встреч по 2 часа, одна встреча в неделю.\n"
         "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
         "На встречах будем пробовать:\n"
         "— как удерживать внимание и уменьшать отвлечения;\n"
@@ -8855,11 +8863,11 @@ def offer_details_full_mode_text() -> str:
         if ENABLE_GROUP_OFFER:
             options.append(
                 f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n"
-                "8 недель: еженедельная встреча, задания каждый день и поддержка в чате."
+                f"{GROUP_SESSION_COUNT} недель: еженедельная встреча по 2 часа, задания каждый день и поддержка в чате."
             )
         if ENABLE_HUMAN_OFFER:
             options.append(
-                f"👤 Личная работа с Иваном — от €{HUMAN_SKILL_SESSION_EUR_LABEL} в месяц\n"
+                "👤 Личная работа и консультация с Иваном\n"
                 "Условия личной работы согласуем до оплаты."
             )
         return "📚 Что можно выбрать дальше\n\n" + "\n\n".join(options)
@@ -11458,6 +11466,15 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
     uid = m.from_user.id
     command = normalize_slash_command(text)
 
+    if command == "/cancel":
+        if u.get("stage") == "offer_request_form":
+            await handle_application_input(m, u, "/cancel")
+        elif u.get("stage") in OFFER_STAGES:
+            await leave_offer_menu(m, u, "cancel_command")
+        else:
+            await m.answer("Открытой заявки нет. Текущий шаг сохранён.")
+        return True
+
     if command in {"/owner_funnel", "/daily_funnel"}:
         if uid != CURATOR_TELEGRAM_ID and not qa_command_allowed(uid, u):
             await m.answer("Команда доступна владельцу.")
@@ -11952,7 +11969,7 @@ async def handle_admin_command(m: Message, u: Dict[str, Any], text: str) -> bool
         await log_event(uid, u.get("stage", ""), "health_checked", {"db_ok": ok}, DB_PATH, SHEETS_WEBHOOK_URL)
         await m.answer(
             "OK\n"
-            "Product release PATCH-74\n"
+            "Product release PATCH-75\n"
             f"Release {os.getenv('RAILWAY_GIT_COMMIT_SHA') or os.getenv('RELEASE_SHA') or 'local'}\n"
             f"DB ok {str(ok).lower()}\n"
             f"OpenAI configured {str(bool(OPENAI_API_KEY)).lower()}\n"
@@ -17811,7 +17828,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         await save_user(u, DB_PATH)
         await log_event(uid, "offer", "offer_request_form_opened", {"format": format_label}, DB_PATH, SHEETS_WEBHOOK_URL)
         await c.message.answer(
-            offer_request_form_text(format_label, has_telegram_contact=bool(getattr(c.from_user, "username", None))),
+            offer_request_form_text(format_label, has_telegram_contact=bool(getattr(c.from_user, "username", None)), group=data == OFFER_CALLBACKS["request_group"]),
             reply_markup=ReplyKeyboardRemove(),
         )
         await c.answer()
@@ -18627,7 +18644,7 @@ async def sync_public_bot_description(telegram_bot) -> None:
         short = await telegram_bot.get_my_short_description()
         if short.short_description != PUBLIC_BOT_SHORT_DESCRIPTION:
             await telegram_bot.set_my_short_description(short_description=PUBLIC_BOT_SHORT_DESCRIPTION)
-        log.info("Public bot description is current (PATCH-74)")
+        log.info("Public bot description is current (PATCH-75)")
     except Exception as error:
         log.warning("Public description sync failed: %s; polling will continue", type(error).__name__)
 

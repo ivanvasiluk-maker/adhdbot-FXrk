@@ -153,3 +153,51 @@ class FunnelConsultation(unittest.IsolatedAsyncioTestCase):
         option=next(label for label,value in c['task_options'].items() if value=='Открыть проект бота')
         await bot.main_flow(Message(self.uid,option))
         self.assertEqual((await get_user(self.uid,self.path))['today_target'],'Открыть проект бота')
+
+    async def _assert_cancel_command(self, command):
+        from db import save_user
+        u=await self.seed();m=Message(self.uid)
+        await bot.maybe_show_help_offer(m,u,substantive=True)
+        await self.callback(bot.OFFER_CALLBACKS['request_group'],m)
+        cancel=Message(self.uid,command)
+        with patch.object(bot,'notify_offer_request',AsyncMock()) as notify:
+            await bot.main_flow(cancel)
+            notify.assert_not_awaited()
+        saved=await get_user(self.uid,self.path)
+        self.assertEqual(saved['stage'],'post_action_reflection')
+        self.assertEqual(saved['today_target'],'Делать бот')
+        self.assertNotIn('Неизвестная команда',str(cancel.answers))
+        async with aiosqlite.connect(self.path) as db:
+            tables=await (await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='application_receipts'")).fetchone()
+            if tables:
+                self.assertEqual((await (await db.execute('SELECT count(*) FROM application_receipts')).fetchone())[0],0)
+
+    async def test_cancel_command_reaches_application_before_generic_router(self):
+        await self._assert_cancel_command('/cancel')
+
+    async def test_cancel_with_bot_suffix_reaches_application(self):
+        await self._assert_cancel_command('/cancel@SKILLER_BOT')
+
+    async def test_group_form_omits_personal_specialist_question(self):
+        u=await self.seed();m=Message(self.uid)
+        await bot.maybe_show_help_offer(m,u,substantive=True)
+        await self.callback(bot.OFFER_CALLBACKS['request_group'],m)
+        text=m.answers[-1][0]
+        self.assertNotIn('Для индивидуального формата',text)
+        self.assertNotIn('подбор другого специалиста',text)
+        self.assertIn('часовой пояс',text)
+        self.assertIn('/cancel',text)
+
+    def test_reported_address_failures(self):
+        from core.addressing import render_address
+        self.assertEqual(render_address('Что ты делали?',{'address_mode':'ty','address_form':'female'}),'Что ты делала?')
+        self.assertEqual(render_address('ты соглашаетесь',{'address_mode':'ty','address_form':'male'}),'ты соглашаешься')
+        self.assertEqual(render_address('Что ты делали?',{'address_mode':'vy','address_form':'male'}),'Что вы делали?')
+        self.assertEqual(render_address('«Что ты делали?»',{'address_mode':'ty','address_form':'female'}),'«Что ты делали?»')
+
+    def test_group_matches_landing(self):
+        self.assertIn('€180',bot.tariff_group_text())
+        self.assertIn('10 онлайн-встреч по 2 часа',bot.tariff_group_text())
+        self.assertNotIn('8 онлайн-встреч',bot.short_offer_text())
+        self.assertNotIn('8 недель',bot.offer_details_full_mode_text())
+        self.assertNotIn('€99',bot.offer_details_full_mode_text())
