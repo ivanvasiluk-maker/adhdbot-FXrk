@@ -25,8 +25,10 @@ def _env_int(name: str, default: int) -> int:
 # HUMAN_SKILL_SESSION_EUR is retained as a Python alias for callers; the old
 # environment variable no longer overrides the agreed minimum.
 HUMAN_SKILL_SESSION_EUR = _env_decimal("PERSONAL_MONTH_FROM_EUR", "99")
-GROUP_SESSION_COUNT = _env_int("GROUP_SESSION_COUNT", 8)
-GROUP_PROGRAM_EUR = _env_decimal("GROUP_PROGRAM_EUR", "240")
+# PATCH-75: a separate course configuration prevents stale 240/8 environment
+# settings for the previous program from silently changing the landing offer.
+GROUP_SESSION_COUNT = _env_int("ADHD_GROUP_SESSION_COUNT", 10)
+GROUP_PROGRAM_EUR = _env_decimal("ADHD_GROUP_PROGRAM_EUR", "180")
 GROUP_SESSION_EUR_MIN = GROUP_PROGRAM_EUR / GROUP_SESSION_COUNT if GROUP_SESSION_COUNT else Decimal("0")
 GROUP_SESSION_EUR_MAX = GROUP_SESSION_EUR_MIN
 PROGRAM_REVIEW_DAY = _env_int("PROGRAM_REVIEW_DAY", 28)

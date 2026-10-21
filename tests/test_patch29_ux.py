@@ -192,7 +192,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(bot, "show_day3_offer", show):
             await bot.force_show_offer(AsyncMock(), user, "test")
         self.assertEqual(show.await_args.kwargs["mode"], "manual_sales")
-        self.assertIn("€240", bot.short_offer_text())
+        self.assertIn("€180", bot.short_offer_text())
         self.assertIn("Индивидуальная консультация", bot.short_offer_text())
         callbacks = inline_callbacks(bot.offer_inline_keyboard(user["user_id"]))
         self.assertIn(bot.OFFER_CALLBACKS["group"], callbacks)
@@ -235,7 +235,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
                 bot.DB_PATH = old_db_path
         rendered = "\n".join(call.args[0] for call in message.answer.await_args_list)
         self.assertIn("Группа навыков", rendered)
-        self.assertIn("€240", rendered)
+        self.assertIn("€180", rendered)
         self.assertIn("Личная работа", rendered)
         self.assertIn("Бот остаётся бесплатным", rendered)
         self.assertNotIn("Оплатить", rendered)
