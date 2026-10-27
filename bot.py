@@ -8797,7 +8797,6 @@ def tariff_group_text() -> str:
         "— как проходить тревогу, перфекционизм и прокрастинацию;\n"
         "— как регулировать эмоции и импульсивность;\n"
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
-        "Внутри: практика на своих задачах, задания каждый день, чат-поддержка и материалы после встреч.\n\n"
         f"Стоимость всей программы — €{GROUP_PROGRAM_PRICE_LABEL}. {installment}"
         "Перед участием обсудим, подходит ли вам формат.\n\n"
         "Оставьте заявку, чтобы обсудить участие. Иван ответит лично; оплата в боте не требуется."
@@ -13215,6 +13214,11 @@ async def cmd_start(m: Message):
     uid = m.from_user.id
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
+    from core.acquisition import start_source
+    campaign_source = start_source(getattr(m, "text", None))
+    if campaign_source:
+        await log_event(uid, "acquisition_source_opened", {"source": campaign_source},
+                        stage=u.get("stage"), db_path=DB_PATH)
     if uid in INTERNAL_TEST_USER_IDS:
         u["is_test_user"] = 1
     # A name alone is not a completed onboarding. Reopening the bot must
