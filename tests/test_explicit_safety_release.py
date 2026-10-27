@@ -24,7 +24,7 @@ class ExplicitSafetyRelease(unittest.IsolatedAsyncioTestCase):
         for text in ("У меня есть план закончить отчёт", "Я больше не думаю о суициде"):
             self.assertFalse(bot.has_crisis_safety_signal(text, "training"))
             self.assertFalse(bot.has_red_crisis_phrase(text))
-        for text in ("У меня есть план", "Я больше не думаю о суициде, но сегодня убью себя", "Не уверен, что не покончу с собой"):
+        for text in ("У меня есть план", "Я больше не думаю о суициде, но сегодня убью себя", "Не уверен, что не покончу с собой", "Не уверен, что я больше не думаю о суициде", "Я больше не думаю о суициде?"):
             self.assertTrue(bot.has_crisis_safety_signal(text, "training"))
 
     async def test_intent_intercepts_before_training_or_offer(self):
