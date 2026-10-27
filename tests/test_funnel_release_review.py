@@ -17,6 +17,17 @@ class FunnelReleaseReview(unittest.IsolatedAsyncioTestCase):
     seed = fixtures.FunnelConsultation.seed
     callback = fixtures.FunnelConsultation.callback
 
+    async def test_legacy_details_do_not_invent_relief_or_proven_benefit(self):
+        for text in ('Открываю телефон от скуки. Облегчения нет, тревога только растёт.',
+                     'Не могу начать, смотрю видео.'):
+            detail = bot.stuck_analysis_details_text('phone', text)
+            consequences = '\n'.join(line for line in detail.splitlines()
+                                     if line.startswith(('7.', '8.', '9.', '11.')))
+            self.assertNotIn('быстрое облегчение', consequences)
+            self.assertNotIn('облегчение сейчас', consequences)
+            self.assertNotIn('Помогает коротко', consequences)
+            self.assertIn('не установлена', consequences)
+
     async def test_restart_during_onboarding_replays_step_instead_of_registered_menu(self):
         for stage in ('await_trainer', 'ask_address', 'notification_consent',
                       'privacy_consent', 'privacy_declined', 'await_input_mode'):
