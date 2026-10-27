@@ -1,5 +1,11 @@
 # SKILLER Telegram bot — аудит перед запуском
 
+## PATCH-81 — исправление падения CI
+
+Run `40543702410`, job `122328535101`: **763 теста, 2 failures**. Полный лог показывает две точные причины: `test_offer_paths.OfferPathTests.test_group_and_consultation_terms_are_explicit` и `test_patch37_beta_feedback_and_offers.Patch37BetaFeedbackAndOffersTests.test_offer_copy_has_current_formats` продолжали требовать «задания каждый день» после удаления этого неподтверждённого обещания. `CalledProcessError` в regression_gate — следствие ненулевого кода unittest, не отдельный дефект subprocess.
+
+Исправлены только два тестовых контракта: они сохраняют проверки €240 / 10 занятий / 20 часов, согласования условий и теперь запрещают неподтверждённые включения. Возвращать неподтверждённое обещание в продукт для зелёного теста нельзя. Исполняемый код бота и workflow не меняются; проверки не отключены. Локально: **20 tests PASSED** (`test_offer_paths`, `test_patch37_beta_feedback_and_offers`, `test_funnel_acquisition`); diff --check PASSED. Повторный полный CI запускается публикацией patch. Его итог проверяется в [checks PR №155](https://github.com/ivanvasiluk-maker/adhdbot-FXrk/pull/155/checks); до завершения он не считается зелёным.
+
 ## PATCH-80 — оставшиеся замечания воронки
 
 - B18: из карточки группы убраны неподтверждённые ежедневные задания, чат-поддержка и материалы. Сохранены €240 за весь курс, 10 онлайн-занятий / 20 часов, согласование расписания и личный ответ Иваном.

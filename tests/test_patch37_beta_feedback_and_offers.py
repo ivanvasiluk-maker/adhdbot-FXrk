@@ -50,7 +50,12 @@ class Patch37BetaFeedbackAndOffersTests(unittest.TestCase):
     def test_offer_copy_has_current_formats(self):
         self.assertIn("Индивидуальная консультация", bot.tariff_live_text())
         self.assertIn("согласуем до оплаты", bot.tariff_live_text())
-        self.assertIn("задания каждый день", bot.tariff_group_text())
+        group = bot.tariff_group_text()
+        self.assertIn("€240", group)
+        self.assertIn("10 онлайн-встреч по 2 часа", group)
+        self.assertIn("20 часов", group)
+        self.assertIn("оплата в боте не требуется", group)
+        self.assertNotIn("задания каждый день", group)
 
 
 if __name__ == "__main__":

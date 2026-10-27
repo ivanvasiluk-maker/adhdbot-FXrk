@@ -85,7 +85,8 @@ class OfferPathTests(unittest.TestCase):
         self.assertIn("Иван Василюк", group)
         self.assertIn("Индивидуальная консультация", tariff_live_text())
         self.assertIn("согласуем до оплаты", tariff_live_text())
-        self.assertIn("задания каждый день", group)
+        for unapproved in ("задания каждый день", "чат-поддержка", "материалы после встреч"):
+            self.assertNotIn(unapproved, group)
 
     def test_beta_comparison_names_free_group_and_personal_paths(self):
         text = offer_details_full_mode_text()
