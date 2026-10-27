@@ -59,7 +59,9 @@ NO-GO означает наличие дефекта или недостаток
 - `test_release_stabilization.py`: **6 passed**.
 - `test_funnel_consultation.py`: **15 passed**; внешняя доставка подменена.
 - Исходный PATCH-75: GitHub Actions regression-gate run **39660898750**, conclusion **success**. Это предыдущий CI, не подтверждение нового patch; исходное дерево совпадает с main.
-- Полный локальный `scripts/regression_gate.py` запущен повторно. Итог добавляется после завершения; до этого **не считать passed**. Первый прогон на обычной временной файловой системе заменён прогоном с `TMPDIR=/dev/shm` из-за медленных SQLite-тестов; это не проверка дисковой надёжности production.
+- Полный локальный `scripts/regression_gate.py`: **PASSED**, 731 тест исходной основной коллекции, дополнительные regression/state-machine/smoke checks, 386 карточек и startup с временной БД без polling. Коллекция стартовала до добавления нового safety-файла; его 3 теста отдельно прошли после правки. Повторный прогон использовал `TMPDIR=/dev/shm` из-за медленных SQLite-тестов; это не проверка дисковой надёжности production.
+- Build sanity, `py_compile` изменённых Python-файлов и `git diff --check`: **PASSED**.
+- CI данного исправления: [run 40510614830](https://github.com/ivanvasiluk-maker/adhdbot-FXrk/actions/runs/40510614830), SHA `6ae656b273c221b92b09b0c13329e29dc9937b22`; при сохранении отчёта **in progress**, не считать зелёным до terminal success. Последующий commit обновляет только этот отчёт.
 - Отдельного typecheck в workflow нет; syntax/build sanity не выдаются за статическую проверку типов.
 - Новый draft PR не является deployed релизом. No merge/deploy, payment enabling или production migration.
 
