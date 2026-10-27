@@ -2009,6 +2009,9 @@ def safety_signal_details(text: str, explicit: bool = False) -> Dict[str, Any]:
 
 def has_crisis_safety_signal(text: str, stage: str) -> bool:
     """Detect high-risk safety phrases per spec section 8.1."""
+    from core.explicit_safety import explicit_safety_intent
+    if explicit_safety_intent(text):
+        return True
     low = (text or "").lower().strip()
     # Explicit high-risk triggers from spec §8.1
     high_risk_phrases = (
