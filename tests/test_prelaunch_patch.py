@@ -83,7 +83,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("👥 Групповой тренинг", labels)
         self.assertIn("👤 Индивидуальный тренинг", labels)
         self.assertIn("Индивидуальная консультация", bot.tariff_live_text())
-        self.assertIn("€180",bot.tariff_group_text())
+        self.assertIn("€240",bot.tariff_group_text())
 
         with patch.object(bot, "ENABLE_PAYMENTS", True), patch.object(
             bot, "ENABLE_PAID_PLAN", True,
@@ -169,7 +169,7 @@ class PrelaunchPatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Причину ещё уточняем", text)
         self.assertNotIn("→ короткое облегчение", text)
         self.assertIn("Группа навыков", text)
-        self.assertIn("€180", text)
+        self.assertIn("€240", text)
         self.assertIn("Личная работа", text)
         self.assertIn("Индивидуальная консультация", text)
         self.assertIn("Бот остаётся бесплатным", text)

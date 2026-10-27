@@ -400,6 +400,10 @@ ACTION_EVENT_EXPORT_TYPES = {
 }
 
 JOURNEY_EVENT_EXPORT_TYPES = {
+    "acquisition_source_opened",
+    "offer_request_submitted",
+    "offer_request_notification_sent",
+    "offer_email_sent",
     "onboarding_started",
     "trainer_selected",
     "notifications_consent_set",

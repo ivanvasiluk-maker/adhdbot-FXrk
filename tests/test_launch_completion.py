@@ -39,7 +39,7 @@ class ConclusionTests(unittest.TestCase):
 
     def test_prices_are_configured_and_no_guaranteed_month_package(self):
         self.assertEqual(bot.HUMAN_SKILL_SESSION_EUR_LABEL, '99')
-        self.assertEqual(bot.GROUP_PROGRAM_PRICE_LABEL, '180')
+        self.assertEqual(bot.GROUP_PROGRAM_PRICE_LABEL, '240')
         self.assertIn('Индивидуальная консультация', bot.tariff_live_text())
         self.assertIn('согласуем до оплаты', bot.tariff_live_text())
         self.assertNotIn('€200', bot.short_offer_text())

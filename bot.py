@@ -1,3 +1,5 @@
+from core.explicit_safety import safety_text
+from core.ai_boundary import chat_completion
 # ============================================================
 # ADHD SELF-REGULATION TRAINER BOT (REFACTORED)
 # Тренеры-коты: Скинни (жёсткий), Марша (мягкая), Бек (аналитик)
@@ -282,7 +284,7 @@ if AI_ANALYSIS_ENABLED:
 
         openai = oa
         try:
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=12, max_retries=0)
         except TypeError as e:
             if "proxies" not in str(e) or importlib.util.find_spec("httpx") is None:
                 log.warning("[AI] OpenAI client initialization failed: %s", e)
@@ -292,7 +294,7 @@ if AI_ANALYSIS_ENABLED:
 
                 log.warning("[AI] OpenAI default HTTP client is incompatible with installed httpx; retrying with explicit httpx.Client")
                 try:
-                    client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client())
+                    client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client(), timeout=12, max_retries=0)
                 except Exception as retry_error:
                     log.warning("[AI] OpenAI client initialization retry failed: %s", retry_error)
                     client = None
@@ -335,7 +337,7 @@ async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model:
     }, ensure_ascii=False)
 
     try:
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -1294,7 +1296,10 @@ async def handle_application_input(m, u, text):
         if not await restore_offer_return(m, u):
             set_legacy_stage(u, OFFER_MENU_STAGE)
             await save_user(u, DB_PATH)
-            await m.answer("Запись остановлена. Заявка не отправлена.")
+            await answer_with_inline_screen(
+                m, u, "Заявка не отправлена.\n\n" + offer_menu_text(),
+                offer_inline_keyboard(u["user_id"]), "offer",
+            )
         return True
     if text.startswith("/"):
         return False
@@ -1984,7 +1989,7 @@ def safety_resume_snapshot(u: Dict[str, Any], source: str) -> str:
 
 
 def safety_signal_details(text: str, explicit: bool = False) -> Dict[str, Any]:
-    low = (text or "").lower().strip()
+    low = safety_text(text).strip()
     high_markers = (
         "хочу умереть", "хочу покончить", "покончить с собой", "сделаю с собой", "наврежу себе",
         "навредить себе", "не хочу жить", "лучше бы меня не было", "не вижу выхода",
@@ -2009,7 +2014,10 @@ def safety_signal_details(text: str, explicit: bool = False) -> Dict[str, Any]:
 
 def has_crisis_safety_signal(text: str, stage: str) -> bool:
     """Detect high-risk safety phrases per spec section 8.1."""
-    low = (text or "").lower().strip()
+    from core.explicit_safety import explicit_safety_intent
+    if explicit_safety_intent(text):
+        return True
+    low = safety_text(text).strip()
     # Explicit high-risk triggers from spec §8.1
     high_risk_phrases = (
         "хочу исчезнуть",
@@ -3987,7 +3995,7 @@ def crisis_pattern_for_stack(stack: str) -> str:
 
 def crisis_safety_check(reason_text: str) -> Dict[str, Any]:
     """Fast pre-check before any CBT/productivity crisis tool selection."""
-    low = (reason_text or "").lower()
+    low = safety_text(reason_text)
     self_harm = any(x in low for x in (
         "навредить себе", "себе навред", "убить себя", "покончить", "суицид",
         "самоуб", "порез", "вскрыть", "выпить таблетки", "лучше бы меня не было",
@@ -4086,7 +4094,7 @@ async def classify_crisis_pattern(reason_text: str) -> str:
             "Return only the code. Do not quote the user.\n\n"
             f"Message: {reason_text[:500]}"
         )
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=OPENAI_CHAT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
@@ -6573,9 +6581,11 @@ def stuck_analysis_details_text(kind: str, text: str) -> str:
     emotion_line = ", ".join(emotions) if emotions else "эмоции прямо не названы — проверяем по реакции на действие"
     body_line = "тело прямо не описано — поэтому не фантазирую; если есть зажим, усталость или возбуждение, это важная следующая проверка"
     avoid_line = "уход в телефон/YouTube/новости" if kind == "phone" else "откладывание входа в задачу"
-    immediate_gain = "быстрое облегчение и меньше контакта с неприятным чувством"
-    later_cost = "задача остаётся на месте, а возвращаться к ней становится дороже"
-    cycle = f"{trigger} → {thought_line} → {emotion_line} → {avoid_line} → облегчение сейчас → дороже вернуться потом"
+    from core.experiment_dialogue import reported_chain
+    reported = reported_chain(text)
+    immediate_gain = reported.get("immediate") or "последствия нужно уточнить; облегчение не считаю фактом"
+    later_cost = reported.get("delayed") or "отсроченные последствия пока не установлены"
+    cycle = "полная цепочка пока не установлена; не добавляю неизвестные последствия"
     return (
         "📚 Подробнее про разбор\n\n"
         "Я опираюсь на твои слова, а где данных нет — прямо отмечаю, что это гипотеза.\n\n"
@@ -6589,7 +6599,7 @@ def stuck_analysis_details_text(kind: str, text: str) -> str:
         f"8. Какую цену оно создаёт потом. {later_cost}.\n"
         f"9. Повторяющийся цикл прокрастинации. {cycle}.\n"
         "10. Ресурсы человека. Ты смог(ла) остановиться и описать механизм — это уже точка управления.\n"
-        "11. Что уже помогает. Помогает коротко назвать происходящее и не спорить с собой большим планом.\n"
+        "11. Что уже помогает. Пока не проверено; оценим по результату вашей попытки.\n"
         "12. Какие гипотезы ещё надо проверить. Нужно проверить, что сильнее: смысл, страх ошибки, перегруз, тревога или быстрые стимулы.\n"
         f"13. Почему выбран текущий навык. {analysis['why_skill']}; первый тест — {config['minimum_step']}.\n"
         f"14. Какие навыки могут быть следующими. {analysis['next']}."
@@ -8563,6 +8573,7 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
         await bot_obj.send_message(
             CURATOR_TELEGRAM_ID,
             offer_request_notification_text(u, source, form_text, getattr(sender, "original", sender) if hasattr(sender, "from_user") else getattr(sender, "message", None)),
+            parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Открыть Telegram-профиль", url=f"tg://user?id={int(u['user_id'])}"),
             ]]),
@@ -8773,12 +8784,12 @@ def tariff_live_text() -> str:
 
 
 def tariff_group_text() -> str:
-    installment = f"Можно оплатить двумя частями по €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR / 2)}. " if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else "Условия оплаты можно уточнить до записи. "
+    installment = "Условия оплаты согласуем до записи. "
     return (
         f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
         "Групповой тренинг навыков: практика на своих задачах с психологом и другими участниками.\n"
         "Напишите, когда удобно: утренние и вечерние пожелания учтём при согласовании расписания. Расписание обсудим после заявки.\n\n"
-        f"{GROUP_SESSION_COUNT} недель, {GROUP_SESSION_COUNT} онлайн-встреч по 2 часа, одна встреча в неделю.\n"
+        f"{GROUP_SESSION_COUNT} онлайн-встреч по 2 часа — всего {GROUP_SESSION_COUNT * 2} часов.\n"
         "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
         "На встречах будем пробовать:\n"
         "— как удерживать внимание и уменьшать отвлечения;\n"
@@ -8786,7 +8797,6 @@ def tariff_group_text() -> str:
         "— как проходить тревогу, перфекционизм и прокрастинацию;\n"
         "— как регулировать эмоции и импульсивность;\n"
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
-        "Внутри: практика на своих задачах, задания каждый день, чат-поддержка и материалы после встреч.\n\n"
         f"Стоимость всей программы — €{GROUP_PROGRAM_PRICE_LABEL}. {installment}"
         "Перед участием обсудим, подходит ли вам формат.\n\n"
         "Оставьте заявку, чтобы обсудить участие. Иван ответит лично; оплата в боте не требуется."
@@ -8863,7 +8873,7 @@ def offer_details_full_mode_text() -> str:
         if ENABLE_GROUP_OFFER:
             options.append(
                 f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n"
-                f"{GROUP_SESSION_COUNT} недель: еженедельная встреча по 2 часа, задания каждый день и поддержка в чате."
+                f"{GROUP_SESSION_COUNT} занятий по 2 часа — всего {GROUP_SESSION_COUNT * 2} часов, задания и поддержка в чате."
             )
         if ENABLE_HUMAN_OFFER:
             options.append(
@@ -11576,7 +11586,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/reset_me":
         await reset_current_user(uid, m.chat.id)
-        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль полностью сброшен. Напиши /start.")
+        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль удалён из базы бота. Внешние копии — по запросу Ивану (/privacy). Напиши /start.")
         return True
 
     if command == "/start_over":
@@ -13204,8 +13214,29 @@ async def cmd_start(m: Message):
     uid = m.from_user.id
     u = await get_user(uid, DB_PATH)
     u["chat_id"] = m.chat.id
+    from core.acquisition import start_source
+    campaign_source = start_source(getattr(m, "text", None))
+    if campaign_source:
+        await log_event(uid, "acquisition_source_opened", {"source": campaign_source},
+                        stage=u.get("stage"), db_path=DB_PATH)
     if uid in INTERNAL_TEST_USER_IDS:
         u["is_test_user"] = 1
+    # A name alone is not a completed onboarding. Reopening the bot must
+    # restore the unanswered step, including its consent buttons.
+    if not has_completed_profile_state(u):
+        onboarding_resume = {
+            "await_trainer": (TRAINER_INTRO, kb_trainers),
+            "ask_address": ("Давайте на «ты» или на «вы»?", address_keyboard()),
+            "notification_consent": (notifications_consent_text(), kb_notifications_consent),
+            "privacy_consent": (privacy_notice_text(), kb_privacy_consent),
+            "privacy_declined": ("Анализ не запущен. Информация о данных — /privacy, удаление профиля — /reset_me.", ReplyKeyboardRemove()),
+            "await_input_mode": ("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", kb_input_mode),
+        }
+        if u.get("stage") in onboarding_resume:
+            await save_user(u, DB_PATH)
+            prompt, keyboard = onboarding_resume[u["stage"]]
+            await m.answer(prompt, reply_markup=keyboard)
+            return
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
         return
@@ -13711,7 +13742,7 @@ async def main_flow(m: Message):
                 "source": "existing_user_start_menu", "analytics_event": False,
             }, db_path=DB_PATH)
             await m.answer(
-                "Ок, предыдущий прогресс полностью удалён. Начинаем заново. Как к тебе обращаться? (1 слово)",
+                "Профиль и прогресс удалены из базы бота. Внешние копии — по запросу Ивану (/privacy). Как к тебе обращаться? (1 слово)",
                 reply_markup=ReplyKeyboardMarkup(
                     keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True,
                 ),
@@ -15289,13 +15320,13 @@ async def main_flow(m: Message):
             updated_profile = await update_user_profile(u["user_id"], {
                 "privacy_consent": True,
                 "privacy_consent_at": consent_at,
-                "privacy_notice_version": "2026-09-02",
+                "privacy_notice_version": "2026-10-27",
             }, DB_PATH)
             u["profile_json"] = updated_profile
             set_legacy_stage(u, "await_input_mode")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
-                "notice_version": "2026-09-02",
+                "notice_version": "2026-10-27",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", reply_markup=kb_input_mode)
             return
@@ -15305,10 +15336,10 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await update_user_profile(u["user_id"], {
                 "privacy_consent": False,
-                "privacy_notice_version": "2026-09-02",
+                "privacy_notice_version": "2026-10-27",
             }, DB_PATH)
             await log_event(u["user_id"], "onboarding", "privacy_consent_declined", {
-                "notice_version": "2026-09-02",
+                "notice_version": "2026-10-27",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(
                 "Понял. Без согласия я не буду начинать анализ. "
@@ -16723,7 +16754,7 @@ def detect_user_mechanism(text: str) -> str:
 
 
 def has_red_crisis_phrase(text: str) -> bool:
-    low = (text or "").lower()
+    low = safety_text(text)
     return any(phrase in low for phrase in RED_CRISIS_PHRASES)
 
 
@@ -18232,19 +18263,27 @@ async def whisper_transcribe(m: Message) -> Optional[str]:
         return None
     if not m.voice:
         return None
+    from core.ai_boundary import MAX_VOICE_SECONDS, MAX_VOICE_BYTES, VoiceBuffer, transcribe
+    duration = getattr(m.voice, "duration", None)
+    declared_size = getattr(m.voice, "file_size", None)
+    if not isinstance(duration, (int, float)) or not 0 < duration <= MAX_VOICE_SECONDS or (declared_size is not None and declared_size > MAX_VOICE_BYTES):
+        await m.answer("Голосовое слишком длинное или большое. Отправьте запись до 2 минут и 5 МБ либо напишите текстом.")
+        return None
     try:
         file = await m.bot.get_file(m.voice.file_id)
-        fp = await m.bot.download_file(file.file_path)
+        if getattr(file, "file_size", 0) and file.file_size > MAX_VOICE_BYTES:
+            return None
+        fp = await m.bot.download_file(file.file_path, destination=VoiceBuffer())
         if hasattr(fp, "seek"):
             fp.seek(0)
         data = fp.read()
-        if not data:
-            log.warning("[AI] Whisper got empty Telegram voice payload")
+        if not data or len(data) > MAX_VOICE_BYTES:
+            log.warning("[AI] Whisper got empty or oversized Telegram voice payload")
             return None
         bio = io.BytesIO(data)
         bio.name = f"voice_{m.voice.file_unique_id}.ogg"
-        tr = await asyncio.to_thread(
-            client.audio.transcriptions.create,
+        tr = await transcribe(
+            client, duration=duration,
             model=OPENAI_WHISPER_MODEL,
             file=bio,
             language="ru",
@@ -18651,7 +18690,11 @@ async def sync_public_bot_description(telegram_bot) -> None:
 
 def build_dispatcher() -> Dispatcher:
     """Build a dispatcher that serializes updates for each user/chat."""
-    return Dispatcher(events_isolation=SimpleEventIsolation())
+    from core.ai_boundary import AIUsageMiddleware
+    dispatcher = Dispatcher(events_isolation=SimpleEventIsolation())
+    dispatcher.message.outer_middleware(AIUsageMiddleware(lambda: DB_PATH))
+    dispatcher.callback_query.outer_middleware(AIUsageMiddleware(lambda: DB_PATH))
+    return dispatcher
 
 
 async def main() -> int:
