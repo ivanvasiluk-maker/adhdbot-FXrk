@@ -26,6 +26,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def deployment_environment() -> str:
+    """Railway production must not silently become development without APP_ENV."""
+    app = os.getenv("APP_ENV", "").strip().lower()
+    railway = (os.getenv("RAILWAY_ENVIRONMENT_NAME", "").strip()
+               or os.getenv("RAILWAY_ENVIRONMENT", "").strip()).lower()
+    if app in {"production", "prod"} or railway in {"production", "prod"}:
+        return "production"
+    return app or railway or "development"
+
+
 LEARNING_ENGINE_ENABLED = _env_bool("LEARNING_ENGINE_ENABLED", False)
 RANKING_ENGINE_ENABLED = _env_bool("RANKING_ENGINE_ENABLED", False)
 ACTIVE_SKILL_QUALITY_LEVEL = os.getenv("ACTIVE_SKILL_QUALITY_LEVEL", "validated").strip() or "validated"
@@ -36,7 +46,7 @@ SKILL_LIBRARY_SOURCE_URL = os.getenv(
 ).strip()
 BASE_OFFER_EUR = _env_decimal("BASE_OFFER_EUR", "4.99")
 OFFER_EARLIEST_DAY = _env_int("OFFER_EARLIEST_DAY", 3)
-APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+APP_ENV = deployment_environment()
 NEW_ARCHITECTURE_ENABLED = _env_bool("NEW_ARCHITECTURE_ENABLED", False)
 ENABLE_DAY1_WOW = _env_bool("ENABLE_DAY1_WOW", True)
 ENABLE_HUMAN_OFFER = _env_bool("ENABLE_HUMAN_OFFER", True)
@@ -82,9 +92,10 @@ def format_eur(value: Decimal = BASE_OFFER_EUR) -> str:
     return format(value, ".2f")
 
 
-def assert_production_payment_safety(*, payment_accept_any: bool, app_env: str = APP_ENV) -> None:
+def assert_production_payment_safety(*, payment_accept_any: bool, app_env: str | None = None) -> None:
     """Test payment confirmation must never become a production verifier."""
-    if app_env.strip().lower() in {"production", "prod"} and payment_accept_any:
+    resolved = deployment_environment() if app_env is None else app_env.strip().lower()
+    if resolved in {"production", "prod"} and payment_accept_any:
         raise RuntimeError("PAYMENT_ACCEPT_ANY is forbidden in production")
 
 
