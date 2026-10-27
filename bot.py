@@ -1296,7 +1296,10 @@ async def handle_application_input(m, u, text):
         if not await restore_offer_return(m, u):
             set_legacy_stage(u, OFFER_MENU_STAGE)
             await save_user(u, DB_PATH)
-            await m.answer("Запись остановлена. Заявка не отправлена.")
+            await answer_with_inline_screen(
+                m, u, "Заявка не отправлена.\n\n" + offer_menu_text(),
+                offer_inline_keyboard(u["user_id"]), "offer",
+            )
         return True
     if text.startswith("/"):
         return False
@@ -8568,6 +8571,7 @@ async def notify_offer_request(sender: Any, u: Dict[str, Any], source: str, form
         await bot_obj.send_message(
             CURATOR_TELEGRAM_ID,
             offer_request_notification_text(u, source, form_text, getattr(sender, "original", sender) if hasattr(sender, "from_user") else getattr(sender, "message", None)),
+            parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Открыть Telegram-профиль", url=f"tg://user?id={int(u['user_id'])}"),
             ]]),
@@ -13211,6 +13215,22 @@ async def cmd_start(m: Message):
     u["chat_id"] = m.chat.id
     if uid in INTERNAL_TEST_USER_IDS:
         u["is_test_user"] = 1
+    # A name alone is not a completed onboarding. Reopening the bot must
+    # restore the unanswered step, including its consent buttons.
+    if not has_completed_profile_state(u):
+        onboarding_resume = {
+            "await_trainer": (TRAINER_INTRO, kb_trainers),
+            "ask_address": ("Давайте на «ты» или на «вы»?", address_keyboard()),
+            "notification_consent": (notifications_consent_text(), kb_notifications_consent),
+            "privacy_consent": (privacy_notice_text(), kb_privacy_consent),
+            "privacy_declined": ("Анализ не запущен. Информация о данных — /privacy, удаление профиля — /reset_me.", ReplyKeyboardRemove()),
+            "await_input_mode": ("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", kb_input_mode),
+        }
+        if u.get("stage") in onboarding_resume:
+            await save_user(u, DB_PATH)
+            prompt, keyboard = onboarding_resume[u["stage"]]
+            await m.answer(prompt, reply_markup=keyboard)
+            return
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
         return
