@@ -196,7 +196,7 @@ class FunnelConsultation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(render_address('«Что ты делали?»',{'address_mode':'ty','address_form':'female'}),'«Что ты делали?»')
 
     def test_group_matches_landing(self):
-        self.assertIn('€180',bot.tariff_group_text())
+        self.assertIn('€240',bot.tariff_group_text())
         self.assertIn('10 онлайн-встреч по 2 часа',bot.tariff_group_text())
         self.assertNotIn('8 онлайн-встреч',bot.short_offer_text())
         self.assertNotIn('8 недель',bot.offer_details_full_mode_text())

@@ -157,7 +157,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_voice_transcription_downloads_telegram_ogg_and_returns_text(self):
         message = SimpleNamespace(
-            voice=SimpleNamespace(file_id="voice-id", file_unique_id="voice-unique"),
+            voice=SimpleNamespace(file_id="voice-id", file_unique_id="voice-unique", duration=10, file_size=8),
             from_user=SimpleNamespace(id=29002),
             bot=SimpleNamespace(
                 get_file=AsyncMock(return_value=SimpleNamespace(file_path="voice/file.ogg")),
@@ -166,7 +166,8 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         )
         create = MagicMock(return_value=SimpleNamespace(text="исправь вывод: дело в тревоге"))
         fake_client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create)))
-        with patch.object(bot, "client", fake_client), patch.object(bot, "log_event", AsyncMock()):
+        from core.ai_boundary import ai_scope
+        with tempfile.TemporaryDirectory() as directory, ai_scope(29002, directory + "/usage.db"), patch.object(bot, "client", fake_client), patch.object(bot, "log_event", AsyncMock()):
             result = await bot.whisper_transcribe(message)
         self.assertEqual(result, "исправь вывод: дело в тревоге")
         self.assertEqual(create.call_args.kwargs["model"], bot.OPENAI_WHISPER_MODEL)
@@ -192,7 +193,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(bot, "show_day3_offer", show):
             await bot.force_show_offer(AsyncMock(), user, "test")
         self.assertEqual(show.await_args.kwargs["mode"], "manual_sales")
-        self.assertIn("€180", bot.short_offer_text())
+        self.assertIn("€240", bot.short_offer_text())
         self.assertIn("Индивидуальная консультация", bot.short_offer_text())
         callbacks = inline_callbacks(bot.offer_inline_keyboard(user["user_id"]))
         self.assertIn(bot.OFFER_CALLBACKS["group"], callbacks)
@@ -235,7 +236,7 @@ class Patch29UxTests(unittest.IsolatedAsyncioTestCase):
                 bot.DB_PATH = old_db_path
         rendered = "\n".join(call.args[0] for call in message.answer.await_args_list)
         self.assertIn("Группа навыков", rendered)
-        self.assertIn("€180", rendered)
+        self.assertIn("€240", rendered)
         self.assertIn("Личная работа", rendered)
         self.assertIn("Бот остаётся бесплатным", rendered)
         self.assertNotIn("Оплатить", rendered)

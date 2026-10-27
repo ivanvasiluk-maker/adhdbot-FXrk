@@ -1,5 +1,6 @@
 """Conservative request routing; categories are navigation, never diagnoses."""
 import re
+from core.explicit_safety import explicit_safety_intent, safety_text
 
 DEVICE_LABELS = {'На телефоне': 'phone', 'На том же компьютере, где работаю': 'computer', 'И там и там': 'both'}
 TASK_WORDS = ('задач', 'начать', 'начинать', 'откладыва', 'прокрастин', 'отвлека', 'отвлёк', 'отвлек', 'избега', 'работать', 'отчёт', 'отчет', 'письмо', 'черновик')
@@ -7,8 +8,8 @@ CRISIS_WORDS = ('хочу умереть', 'покончить с собой', '
 
 
 def request_kind(text):
-    low = (text or '').lower().replace('ё', 'е')
-    if any(x in low for x in CRISIS_WORDS):
+    low = safety_text(text)
+    if explicit_safety_intent(text) or any(x in low for x in CRISIS_WORDS):
         return 'crisis'
     task = any(x.replace('ё', 'е') in low for x in TASK_WORDS)
     project = bool(re.search(r'(?:написать|готовлю|подготовить|доклад|статья|презентация).{0,45}(?:про |о |по теме ).*(?:депресси|препарат)', low))

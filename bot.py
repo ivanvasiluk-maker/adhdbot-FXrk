@@ -1,3 +1,5 @@
+from core.explicit_safety import safety_text
+from core.ai_boundary import chat_completion
 # ============================================================
 # ADHD SELF-REGULATION TRAINER BOT (REFACTORED)
 # Тренеры-коты: Скинни (жёсткий), Марша (мягкая), Бек (аналитик)
@@ -282,7 +284,7 @@ if AI_ANALYSIS_ENABLED:
 
         openai = oa
         try:
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            client = openai.OpenAI(api_key=OPENAI_API_KEY, timeout=12, max_retries=0)
         except TypeError as e:
             if "proxies" not in str(e) or importlib.util.find_spec("httpx") is None:
                 log.warning("[AI] OpenAI client initialization failed: %s", e)
@@ -292,7 +294,7 @@ if AI_ANALYSIS_ENABLED:
 
                 log.warning("[AI] OpenAI default HTTP client is incompatible with installed httpx; retrying with explicit httpx.Client")
                 try:
-                    client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client())
+                    client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=httpx.Client(), timeout=12, max_retries=0)
                 except Exception as retry_error:
                     log.warning("[AI] OpenAI client initialization retry failed: %s", retry_error)
                     client = None
@@ -335,7 +337,7 @@ async def ai_micro_reflect(user_text: str, trainer_key: str, client=None, model:
     }, ensure_ascii=False)
 
     try:
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -1984,7 +1986,7 @@ def safety_resume_snapshot(u: Dict[str, Any], source: str) -> str:
 
 
 def safety_signal_details(text: str, explicit: bool = False) -> Dict[str, Any]:
-    low = (text or "").lower().strip()
+    low = safety_text(text).strip()
     high_markers = (
         "хочу умереть", "хочу покончить", "покончить с собой", "сделаю с собой", "наврежу себе",
         "навредить себе", "не хочу жить", "лучше бы меня не было", "не вижу выхода",
@@ -2012,7 +2014,7 @@ def has_crisis_safety_signal(text: str, stage: str) -> bool:
     from core.explicit_safety import explicit_safety_intent
     if explicit_safety_intent(text):
         return True
-    low = (text or "").lower().strip()
+    low = safety_text(text).strip()
     # Explicit high-risk triggers from spec §8.1
     high_risk_phrases = (
         "хочу исчезнуть",
@@ -3990,7 +3992,7 @@ def crisis_pattern_for_stack(stack: str) -> str:
 
 def crisis_safety_check(reason_text: str) -> Dict[str, Any]:
     """Fast pre-check before any CBT/productivity crisis tool selection."""
-    low = (reason_text or "").lower()
+    low = safety_text(reason_text)
     self_harm = any(x in low for x in (
         "навредить себе", "себе навред", "убить себя", "покончить", "суицид",
         "самоуб", "порез", "вскрыть", "выпить таблетки", "лучше бы меня не было",
@@ -4089,7 +4091,7 @@ async def classify_crisis_pattern(reason_text: str) -> str:
             "Return only the code. Do not quote the user.\n\n"
             f"Message: {reason_text[:500]}"
         )
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=OPENAI_CHAT_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
@@ -8776,12 +8778,12 @@ def tariff_live_text() -> str:
 
 
 def tariff_group_text() -> str:
-    installment = f"Можно оплатить двумя частями по €{format_eur_compact(GROUP_PROGRAM_TOTAL_MIN_EUR / 2)}. " if GROUP_PROGRAM_TOTAL_MIN_EUR == GROUP_PROGRAM_TOTAL_MAX_EUR else "Условия оплаты можно уточнить до записи. "
+    installment = "Условия оплаты согласуем до записи. "
     return (
         f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
         "Групповой тренинг навыков: практика на своих задачах с психологом и другими участниками.\n"
         "Напишите, когда удобно: утренние и вечерние пожелания учтём при согласовании расписания. Расписание обсудим после заявки.\n\n"
-        f"{GROUP_SESSION_COUNT} недель, {GROUP_SESSION_COUNT} онлайн-встреч по 2 часа, одна встреча в неделю.\n"
+        f"{GROUP_SESSION_COUNT} онлайн-встреч по 2 часа — всего {GROUP_SESSION_COUNT * 2} часов.\n"
         "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
         "На встречах будем пробовать:\n"
         "— как удерживать внимание и уменьшать отвлечения;\n"
@@ -8866,7 +8868,7 @@ def offer_details_full_mode_text() -> str:
         if ENABLE_GROUP_OFFER:
             options.append(
                 f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n"
-                f"{GROUP_SESSION_COUNT} недель: еженедельная встреча по 2 часа, задания каждый день и поддержка в чате."
+                f"{GROUP_SESSION_COUNT} занятий по 2 часа — всего {GROUP_SESSION_COUNT * 2} часов, задания и поддержка в чате."
             )
         if ENABLE_HUMAN_OFFER:
             options.append(
@@ -11579,7 +11581,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/reset_me":
         await reset_current_user(uid, m.chat.id)
-        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль полностью сброшен. Напиши /start.")
+        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль удалён из базы бота. Внешние копии — по запросу Ивану (/privacy). Напиши /start.")
         return True
 
     if command == "/start_over":
@@ -13714,7 +13716,7 @@ async def main_flow(m: Message):
                 "source": "existing_user_start_menu", "analytics_event": False,
             }, db_path=DB_PATH)
             await m.answer(
-                "Ок, предыдущий прогресс полностью удалён. Начинаем заново. Как к тебе обращаться? (1 слово)",
+                "Профиль и прогресс удалены из базы бота. Внешние копии — по запросу Ивану (/privacy). Как к тебе обращаться? (1 слово)",
                 reply_markup=ReplyKeyboardMarkup(
                     keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True,
                 ),
@@ -15292,13 +15294,13 @@ async def main_flow(m: Message):
             updated_profile = await update_user_profile(u["user_id"], {
                 "privacy_consent": True,
                 "privacy_consent_at": consent_at,
-                "privacy_notice_version": "2026-09-02",
+                "privacy_notice_version": "2026-10-27",
             }, DB_PATH)
             u["profile_json"] = updated_profile
             set_legacy_stage(u, "await_input_mode")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
-                "notice_version": "2026-09-02",
+                "notice_version": "2026-10-27",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", reply_markup=kb_input_mode)
             return
@@ -15308,10 +15310,10 @@ async def main_flow(m: Message):
             await save_user(u, DB_PATH)
             await update_user_profile(u["user_id"], {
                 "privacy_consent": False,
-                "privacy_notice_version": "2026-09-02",
+                "privacy_notice_version": "2026-10-27",
             }, DB_PATH)
             await log_event(u["user_id"], "onboarding", "privacy_consent_declined", {
-                "notice_version": "2026-09-02",
+                "notice_version": "2026-10-27",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
             await m.answer(
                 "Понял. Без согласия я не буду начинать анализ. "
@@ -16726,7 +16728,7 @@ def detect_user_mechanism(text: str) -> str:
 
 
 def has_red_crisis_phrase(text: str) -> bool:
-    low = (text or "").lower()
+    low = safety_text(text)
     return any(phrase in low for phrase in RED_CRISIS_PHRASES)
 
 
@@ -18235,19 +18237,27 @@ async def whisper_transcribe(m: Message) -> Optional[str]:
         return None
     if not m.voice:
         return None
+    from core.ai_boundary import MAX_VOICE_SECONDS, MAX_VOICE_BYTES, VoiceBuffer, transcribe
+    duration = getattr(m.voice, "duration", None)
+    declared_size = getattr(m.voice, "file_size", None)
+    if not isinstance(duration, (int, float)) or not 0 < duration <= MAX_VOICE_SECONDS or (declared_size is not None and declared_size > MAX_VOICE_BYTES):
+        await m.answer("Голосовое слишком длинное или большое. Отправьте запись до 2 минут и 5 МБ либо напишите текстом.")
+        return None
     try:
         file = await m.bot.get_file(m.voice.file_id)
-        fp = await m.bot.download_file(file.file_path)
+        if getattr(file, "file_size", 0) and file.file_size > MAX_VOICE_BYTES:
+            return None
+        fp = await m.bot.download_file(file.file_path, destination=VoiceBuffer())
         if hasattr(fp, "seek"):
             fp.seek(0)
         data = fp.read()
-        if not data:
-            log.warning("[AI] Whisper got empty Telegram voice payload")
+        if not data or len(data) > MAX_VOICE_BYTES:
+            log.warning("[AI] Whisper got empty or oversized Telegram voice payload")
             return None
         bio = io.BytesIO(data)
         bio.name = f"voice_{m.voice.file_unique_id}.ogg"
-        tr = await asyncio.to_thread(
-            client.audio.transcriptions.create,
+        tr = await transcribe(
+            client, duration=duration,
             model=OPENAI_WHISPER_MODEL,
             file=bio,
             language="ru",
@@ -18654,7 +18664,11 @@ async def sync_public_bot_description(telegram_bot) -> None:
 
 def build_dispatcher() -> Dispatcher:
     """Build a dispatcher that serializes updates for each user/chat."""
-    return Dispatcher(events_isolation=SimpleEventIsolation())
+    from core.ai_boundary import AIUsageMiddleware
+    dispatcher = Dispatcher(events_isolation=SimpleEventIsolation())
+    dispatcher.message.outer_middleware(AIUsageMiddleware(lambda: DB_PATH))
+    dispatcher.callback_query.outer_middleware(AIUsageMiddleware(lambda: DB_PATH))
+    return dispatcher
 
 
 async def main() -> int:

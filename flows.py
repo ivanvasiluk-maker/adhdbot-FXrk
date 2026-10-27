@@ -1,3 +1,4 @@
+from core.ai_boundary import chat_completion
 # ============================================================
 # FLOWS.PY — Основные логические потоки
 # ============================================================
@@ -412,7 +413,7 @@ async def ai_crisis_help(trainer_key: str, bucket: str, user_text: str, client=N
     }, ensure_ascii=False)
 
     try:
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=model,
             messages=[{"role":"system","content":system},{"role":"user","content":user}],
             temperature=0.25,
@@ -1217,7 +1218,7 @@ async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") ->
     from texts import build_ai_system_prompt
     system = build_ai_system_prompt()
     try:
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -1272,7 +1273,7 @@ async def ai_analyze(user_text: str, client=None, model: str = "gpt-4o-mini") ->
         try:
             import openai
             client = openai.OpenAI()
-            r = await client.chat.completions.create(
+            r = await chat_completion(client,
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.6,
@@ -1301,7 +1302,7 @@ async def ai_analyze_comprehensive(user_text: str, trainer_key: str = "marsha", 
                 "социальные опоры или успешные действия. Поля specific_pattern и useful_signal пиши "
                 "простым русским языком, без кодов, англицизмов и диагноза.")
     try:
-        resp = client.chat.completions.create(
+        resp = await chat_completion(client,
             model=model,
             messages=[
                 {"role": "system", "content": system},

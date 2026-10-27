@@ -15,3 +15,15 @@ _INTENT = re.compile(
 
 def explicit_safety_intent(text: str) -> bool:
     return bool(_INTENT.search(text or ""))
+
+
+def safety_text(text: str) -> str:
+    """Mask narrow ordinary/explicitly resolved statements, never whole messages.
+
+    Additional current intent elsewhere in the message remains visible.
+    Ambiguous 'есть план' and uncertain denials still enter triage.
+    """
+    low = (text or "").lower().replace("ё", "е")
+    low = re.sub(r"\bесть план\s+(?:закончить|написать|подготовить|сдать)\s+(?:отчет|письмо|презентацию|работу)\b", "обычная задача", low)
+    low = re.sub(r"\b(?:я\s+)?больше не думаю о суициде\b", "сообщенное улучшение", low)
+    return low
