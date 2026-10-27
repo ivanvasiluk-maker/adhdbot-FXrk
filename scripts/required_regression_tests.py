@@ -290,7 +290,7 @@ async def test_show_offer_force_enables_offer_prerequisites():
         assert msg.answers
         joined = "\n".join(msg.answers)
         assert "Группа навыков" in joined
-        assert "€180" in joined
+        assert "€240" in joined
         assert "Личная работа" in joined
         assert "Индивидуальная консультация" in joined
         assert "Бот остаётся бесплатным" in joined
@@ -379,7 +379,7 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
         assert user_after_auto.get("offer_mode") == "auto"
         auto_text = "\n".join(auto_msg.answers)
         assert "Группа навыков" in auto_text
-        assert "€180" in auto_text
+        assert "€240" in auto_text
         assert "Личная работа" in auto_text
         assert "Бот остаётся бесплатным" in auto_text
         assert "Оплатить" not in auto_text
@@ -393,7 +393,7 @@ async def test_day3_support_offer_is_automatic_but_bot_stays_free():
         manual_user = await get_user(uid, bot.DB_PATH)
         bot.DB_PATH = old
         assert manual_user.get("offer_mode") == "manual_sales"
-        assert "€180" in "\n".join(manual_msg.answers)
+        assert "€240" in "\n".join(manual_msg.answers)
         assert "Индивидуальная консультация" in "\n".join(manual_msg.answers)
 
 
@@ -592,7 +592,7 @@ def test_offer_text_and_map_are_specific_without_curator_button():
     keyboard_text = " ".join(button.text for row in bot.offer_inline_keyboard(93009).inline_keyboard for button in row)
     assert "👤 Живой разбор карты" not in keyboard_text
     assert "👥 Групповой тренинг" in keyboard_text
-    assert "€180" in bot.tariff_group_text()
+    assert "€240" in bot.tariff_group_text()
     assert "👤 Индивидуальный тренинг" in keyboard_text
     assert "Индивидуальная консультация" in bot.tariff_live_text()
     from core.consultation import consultation_url
@@ -857,7 +857,7 @@ async def test_repeat_start_confirm_performs_full_user_reset():
         assert not fresh.get("first_start_date")
         assert int(fresh.get("done_count") or 0) == 0
         assert "main_hypothesis" not in profile
-        assert "полностью удалён" in "\n".join(confirm.answers)
+        assert "удалены из базы бота" in "\n".join(confirm.answers)
 
 
 async def test_internal_user_events_are_marked_non_analytics():

@@ -152,7 +152,7 @@ class ReleaseReadyTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(fresh.get("first_start_date"))
             self.assertEqual(int(fresh.get("done_count") or 0), 0)
             self.assertNotIn("main_hypothesis", profile)
-            self.assertTrue(any("полностью удалён" in text for text, _ in message.answers))
+            self.assertTrue(any("удалены из базы бота" in text and "Внешние копии" in text for text, _ in message.answers))
 
     async def test_day_close_collects_dbt_style_card_before_conclusion(self):
         user = bot.default_user(_User.id)

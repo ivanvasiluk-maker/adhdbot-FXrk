@@ -78,9 +78,10 @@ class OfferPathTests(unittest.TestCase):
 
     def test_group_and_consultation_terms_are_explicit(self):
         group = tariff_group_text()
-        self.assertIn("10 недель", group)
+        self.assertIn("10 онлайн-встреч по 2 часа", group)
+        self.assertIn("20 часов", group)
         self.assertIn("€240", group)
-        self.assertIn("двумя частями по €90", group)
+        self.assertIn("Условия оплаты согласуем до записи", group)
         self.assertIn("Иван Василюк", group)
         self.assertIn("Индивидуальная консультация", tariff_live_text())
         self.assertIn("согласуем до оплаты", tariff_live_text())
