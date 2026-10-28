@@ -88,7 +88,7 @@ from db import (
     transition_behavioral_experiment,
 )
 from flows import (
-    start_day, start_day1, start_day_simple, advance_day, handle_crisis,
+    start_day as flow_start_day, start_day1, start_day_simple, advance_day, handle_crisis,
     send_trainer_photo_if_any, run_analysis as _run_analysis,
     send_weekly_summary, send_progress_report, ai_analyze, ai_analyze_comprehensive,
     format_comprehensive_analysis, normalize_analysis, safe_analysis_memory, _extract_json, clamp_str,
@@ -1310,7 +1310,7 @@ async def handle_application_input(m, u, text):
             return True
         incoming = (text or "").strip()
         if incoming.lower().strip(" .!?") in {"скучно", "вы меня не поняли", "ты меня не понял", "ты меня не поняла"}:
-            await m.answer("Сейчас открыта заявка Ивану. Какой вопрос хочется обсудить со специалистом? Для возврата в чат — /cancel.")
+            await m.answer("Сейчас открыта заявка психологу. Какой вопрос хочется обсудить со специалистом? Для возврата в чат — /cancel.")
             return True
         ctx = dialogue_context(u.get("dialogue_context"))
         parts = list(ctx.get("offer_request_parts") or [])
@@ -1600,7 +1600,7 @@ async def handle_conversation_intent(m, u, text):
         set_legacy_stage(u, "intent_understand_result")
         await save_user(u, DB_PATH)
         result = comp["analysis_result"]
-        await m.answer(behavioral_chain_text(text[:240], comp.get("avoidance_behavior") or "") + "\n\nРабочая гипотеза:\n" + public_enum_text(result.get("core_hypothesis") or comp["specific_pattern"])
+        await m.answer(behavioral_chain_text(text, comp.get("avoidance_behavior") or "") + "\n\nРабочая гипотеза:\n" + public_enum_text(result.get("core_hypothesis") or comp["specific_pattern"])
                        + "\n\nЧто можно изменить\n" + str(result.get("first_check") or "Уменьшить первый шаг.")
                        + "\n\nЭто предложение для проверки. Можно закончить разбор или попробовать шаг.",
                        reply_markup=ReplyKeyboardMarkup(keyboard=[
@@ -1750,7 +1750,7 @@ async def handle_dialogue_help(m, u, text):
             set_legacy_stage(u, "privacy_consent" if ctx.get("trainer_selected_before_address") else "await_trainer")
         await save_user(u, DB_PATH)
         if onboarding and ctx.get("trainer_selected_before_address"):
-            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent, parse_mode=None)
         elif onboarding:
             await m.answer("Какой стиль общения вам ближе?\n\nМарша — поддержка.\nСкинни — короткие прямые инструкции.\nБек — спокойные объяснения.", reply_markup=kb_trainers)
         else:
@@ -3606,11 +3606,8 @@ def task_needs_physical_step(title: str) -> bool:
 
 
 def returning_to_task_text(u: Dict[str, Any]) -> str:
-    title = current_task_title(u, "задаче")
-    step = str(u.get("current_next_physical_step") or "").strip()
-    if step:
-        return f"Возвращаемся к {title}.\nВ прошлый раз ты выбрал минимальный вход:\n“{step}”."
-    return f"Возвращаемся к {title}."
+    title = current_task_title(u, "")
+    return f"Возвращаемся к задаче «{title}»." if title else "Продолжим с текущего шага."
 
 def _metrics_from_profile(u: Dict[str, Any], profile: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
     raw = profile.get("_action_metrics") if isinstance(profile, dict) else None
@@ -7913,7 +7910,7 @@ def short_offer_text() -> str:
     if FREE_BETA_ACCESS:
         options = []
         if ENABLE_HUMAN_OFFER:
-            options.append("👤 Индивидуальная консультация с Иваном Василюком. Личная работа и тренинг навыков: можно выбрать время в календаре или оставить вопрос. Формат и стоимость согласуем до начала работы.")
+            options.append("👤 Индивидуальная консультация с психологом. Личная работа и тренинг навыков: можно выбрать время в календаре или оставить вопрос. Формат и стоимость согласуем до начала работы.")
         if ENABLE_GROUP_OFFER:
             options.append(f"👥 Группа навыков для взрослых с СДВГ и прокрастинацией — €{GROUP_PROGRAM_PRICE_LABEL}. {GROUP_SESSION_COUNT} онлайн-встреч по 2 часа: практика внимания, планирования и возвращения к делам. Можно оставить заявку на участие; расписание согласуем лично.")
         options.append("🟢 Бот остаётся бесплатным: тренировки, карта, история и следующие шаги доступны без записи к психологу.")
@@ -8063,13 +8060,13 @@ async def maybe_show_help_offer(m: Message, u: Dict[str, Any], *, final=False, s
     if ENABLE_HUMAN_OFFER:
         if consultation_url():
             rows.append([InlineKeyboardButton(text="🗓 Индивидуальная консультация", url=consultation_url())])
-        rows.append([InlineKeyboardButton(text="👤 Личная работа и вопрос Ивану", callback_data=OFFER_CALLBACKS["live"])])
+        rows.append([InlineKeyboardButton(text="👤 Личная работа и вопрос психологу", callback_data=OFFER_CALLBACKS["live"])])
     if ENABLE_GROUP_OFFER:
         rows.append([InlineKeyboardButton(text="👥 Узнать о группе", callback_data=OFFER_CALLBACKS["group"])])
     rows.append([InlineKeyboardButton(text="Продолжить бесплатно", callback_data=OFFER_CALLBACKS["choose_later"])])
     await remember_offer_decision(u)
     previous_context = u.get("dialogue_context")
-    text = support_context_text(u, profile) + "\n\nЕсли хотите потренировать эти навыки с психологом, можно записаться на индивидуальную консультацию, задать Ивану вопрос или узнать о группе. Бот остаётся бесплатным — можно продолжать самостоятельно."
+    text = support_context_text(u, profile) + "\n\nЕсли хотите потренировать эти навыки с психологом, можно записаться на индивидуальную консультацию, задать психологу вопрос или узнать о группе. Бот остаётся бесплатным — можно продолжать самостоятельно."
     await dialogue_message(m,u).answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     u["dialogue_context"] = previous_context
     await save_user(u, DB_PATH)
@@ -8372,7 +8369,7 @@ def payment_bot_999_url() -> str:
 def payment_not_ready_text() -> str:
     if FREE_BETA_ACCESS:
         return "Сейчас идёт открытое тестирование: все функции бота доступны бесплатно."
-    return "Оплата скоро будет подключена. Сейчас можно продолжить тест или написать Ивану напрямую."
+    return "Оплата скоро будет подключена. Сейчас можно продолжить тест или написать психологу напрямую."
 
 
 def paid_plan_available() -> bool:
@@ -8386,7 +8383,7 @@ def voluntary_support_available() -> bool:
 
 
 def schedule_not_ready_text() -> str:
-    return "Запись скоро будет подключена. Пока можно написать Ивану напрямую или продолжить тренировку."
+    return "Запись скоро будет подключена. Пока можно написать психологу напрямую или продолжить тренировку."
 
 
 def paid_access_until(days: int = 30, existing_until: Optional[str] = None) -> str:
@@ -8511,7 +8508,7 @@ def curator_path_text(u: Dict[str, Any], profile: Dict[str, Any]) -> str:
         f"• первый рабочий вход: {working_entry}.\n\n"
         "Куратор поможет выбрать главный механизм на ближайшую неделю: тревога, страх ошибки, перегруз, невозможность выбора, самокритика, быстрые награды или потеря смысла.\n\n"
         f"Следующий шаг: напиши одним сообщением, когда тебе удобно получить разбор карты: сегодня / завтра / на выходных. "
-        f"Я отправлю заявку Ивану и дам прямой контакт: {curator_contact}"
+        f"Я отправлю заявку психологу и дам прямой контакт: {curator_contact}"
     )
 
 
@@ -8716,7 +8713,7 @@ def offer_request_form_text(format_label: str, *, has_telegram_contact: bool = F
 
 def offer_request_submitted_text(sent: bool) -> str:
     contact = curator_contact_url() or "@Ivan_Vasiliuk"
-    sent_line = "Я отправил заявку Ивану." if sent else "Заявка записана, но доставка Ивану не подтверждена. Пожалуйста, напишите ему напрямую."
+    sent_line = "Я отправил заявку психологу." if sent else "Заявка записана, но доставка психологу не подтверждена. Пожалуйста, напишите ему напрямую."
     return (
         f"{sent_line}\n\n"
         f"Если хочешь ускорить контакт, можно написать напрямую: {contact}\n\n"
@@ -8776,9 +8773,9 @@ def tariff_bot_text() -> str:
 
 def tariff_live_text() -> str:
     return (
-        "👤 Индивидуальная консультация с Иваном Василюком\n\n"
+        "👤 Индивидуальная консультация с психологом\n\n"
         "Можно выбрать время по кнопке календаря. На консультации обсудим, с чем нужна помощь и какой формат подойдёт. Условия и стоимость согласуем до оплаты и начала работы.\n\n"
-        "Индивидуальный тренинг навыков — практика на ваших повседневных задачах: разбор препятствий, упражнения и проверка результатов. Можно оставить вопрос Ивану или запрос на подбор коллеги. Специалиста и условия согласуем с вами; автоматически другим психологам ваши ответы не передаются.\n\n"
+        "Индивидуальный тренинг навыков — практика на ваших повседневных задачах: разбор препятствий, упражнения и проверка результатов. Можно оставить вопрос психологу или запрос на подбор коллеги. Специалиста и условия согласуем с вами; автоматически другим психологам ваши ответы не передаются.\n\n"
         "Бесплатные тренировки в боте остаются доступны независимо от записи на консультацию."
     )
 
@@ -8790,7 +8787,7 @@ def tariff_group_text() -> str:
         "Групповой тренинг навыков: практика на своих задачах с психологом и другими участниками.\n"
         "Напишите, когда удобно: утренние и вечерние пожелания учтём при согласовании расписания. Расписание обсудим после заявки.\n\n"
         f"{GROUP_SESSION_COUNT} онлайн-встреч по 2 часа — всего {GROUP_SESSION_COUNT * 2} часов.\n"
-        "Ведущий — психолог Иван Василюк. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
+        "Ведущий — психолог. Практические упражнения для внимания, планирования и управления эмоциями.\n\n"
         "На встречах будем пробовать:\n"
         "— как удерживать внимание и уменьшать отвлечения;\n"
         "— как планировать реалистично, без перегруза;\n"
@@ -8799,7 +8796,7 @@ def tariff_group_text() -> str:
         "— как возвращаться после срывов, а не начинать жизнь заново.\n\n"
         f"Стоимость всей программы — €{GROUP_PROGRAM_PRICE_LABEL}. {installment}"
         "Перед участием обсудим, подходит ли вам формат.\n\n"
-        "Оставьте заявку, чтобы обсудить участие. Иван ответит лично; оплата в боте не требуется."
+        "Оставьте заявку, чтобы обсудить участие. Психолог ответит лично; оплата в боте не требуется."
     )
 
 
@@ -8877,7 +8874,7 @@ def offer_details_full_mode_text() -> str:
             )
         if ENABLE_HUMAN_OFFER:
             options.append(
-                "👤 Личная работа и консультация с Иваном\n"
+                "👤 Личная работа и консультация с психологом\n"
                 "Условия личной работы согласуем до оплаты."
             )
         return "📚 Что можно выбрать дальше\n\n" + "\n\n".join(options)
@@ -11559,7 +11556,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/privacy":
         await log_event(uid, u.get("stage", ""), "privacy_notice_requested", {}, DB_PATH, SHEETS_WEBHOOK_URL)
-        await m.answer(privacy_notice_text())
+        await m.answer(privacy_notice_text(), parse_mode=None)
         return True
 
     if command == "/progress":
@@ -11586,7 +11583,7 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
 
     if command == "/reset_me":
         await reset_current_user(uid, m.chat.id)
-        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль удалён из базы бота. Внешние копии — по запросу Ивану (/privacy). Напиши /start.")
+        await (m.original if isinstance(m, DialogueMessage) else m).answer("Профиль удалён из базы бота. Внешние копии — по запросу психологу (/privacy). Напиши /start.")
         return True
 
     if command == "/start_over":
@@ -13075,6 +13072,15 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
         await m.answer(gamify_status_line(u))
 
 
+async def start_day(m: Message, u: Dict[str, Any], day: int, db_path: str, sheets_webhook: str = ""):
+    # On day one the diagnosis has already supplied the task. Use the same
+    # action route as the target prompt instead of asking for it a second time.
+    await flow_start_day(
+        m, u, day, db_path, sheets_webhook,
+        on_known_task=show_skill_for_current_task if day == 1 and current_task_title(u, "") else None,
+    )
+
+
 RESUME_BLOCKED_ONBOARDING_STAGES = {
     "start",
     "ask_name",
@@ -13235,7 +13241,7 @@ async def cmd_start(m: Message):
         if u.get("stage") in onboarding_resume:
             await save_user(u, DB_PATH)
             prompt, keyboard = onboarding_resume[u["stage"]]
-            await m.answer(prompt, reply_markup=keyboard)
+            await m.answer(prompt, reply_markup=keyboard, parse_mode=None)
             return
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
@@ -13742,7 +13748,7 @@ async def main_flow(m: Message):
                 "source": "existing_user_start_menu", "analytics_event": False,
             }, db_path=DB_PATH)
             await m.answer(
-                "Профиль и прогресс удалены из базы бота. Внешние копии — по запросу Ивану (/privacy). Как к тебе обращаться? (1 слово)",
+                "Профиль и прогресс удалены из базы бота. Внешние копии — по запросу психологу (/privacy). Как к тебе обращаться? (1 слово)",
                 reply_markup=ReplyKeyboardMarkup(
                     keyboard=[[KeyboardButton(text="Пропустить")]], resize_keyboard=True,
                 ),
@@ -15283,7 +15289,7 @@ async def main_flow(m: Message):
             await m.answer(trainer_introduction(chosen))
             await m.answer("Давайте на «ты» или на «вы»?", reply_markup=address_keyboard())
         else:
-            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent, parse_mode=None)
         return
 
     if u.get("stage") == "notification_consent":
@@ -15294,7 +15300,7 @@ async def main_flow(m: Message):
             set_legacy_stage(u, "privacy_consent")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 1, "reminder_mode": "evening_only"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent, parse_mode=None)
             return
         if text == "☀️ Утром и вечером" or ("утром" in low and "вечер" in low):
             u["notifications_enabled"] = 1
@@ -15302,14 +15308,14 @@ async def main_flow(m: Message):
             set_legacy_stage(u, "privacy_consent")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 1, "reminder_mode": "normal"}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent)
+            await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent, parse_mode=None)
             return
         if text == "🔕 Без напоминаний" or "без" in low or "напомин" in low:
             u["notifications_enabled"] = 0
             set_legacy_stage(u, "privacy_consent")
             await save_user(u, DB_PATH)
             await log_event(u["user_id"], "onboarding", "notifications_consent_set", {"notifications_enabled": 0}, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Ок, без напоминаний.\n\n" + privacy_notice_text(), reply_markup=kb_privacy_consent)
+            await m.answer("Ок, без напоминаний.\n\n" + privacy_notice_text(), reply_markup=kb_privacy_consent, parse_mode=None)
             return
         await answer_with_keyboard(m, u, notifications_consent_text(), kb_notifications_consent, "notifications_consent")
         return
@@ -15346,7 +15352,7 @@ async def main_flow(m: Message):
                 "Если захочешь удалить созданный профиль, отправь /reset_me."
             )
             return
-        await m.answer("Выбери один из двух вариантов.", reply_markup=kb_privacy_consent)
+        await m.answer(privacy_notice_text(), reply_markup=kb_privacy_consent, parse_mode=None)
         return
 
     if u.get("stage") == "privacy_declined":
@@ -16446,7 +16452,7 @@ async def main_flow(m: Message):
         await save_user(u, DB_PATH)
         profile = await get_user_profile(u["user_id"], DB_PATH)
         sent = await notify_curator_map_review(m, u, profile, "availability_message", text[:240])
-        delivery_note = "Заявка отправлена Ивану." if sent else "Не удалось отправить заявку. Пожалуйста, напишите Ивану напрямую."
+        delivery_note = "Заявка отправлена психологу." if sent else "Не удалось отправить заявку. Пожалуйста, напишите психологу напрямую."
         await answer_with_keyboard(
             m,
             u,
@@ -17979,12 +17985,12 @@ async def on_offer_callbacks(c: CallbackQuery):
         )
         if sent:
             await c.message.answer(
-                "Заявка на проверку отправлена Ивану. После сверки платежа он включит полный режим вручную."
+                "Заявка на проверку отправлена психологу. После сверки платежа он включит полный режим вручную."
             )
         else:
             contact = curator_contact_url() or "@Ivan_Vasiliuk"
             await c.message.answer(
-                "Не смог отправить заявку автоматически. Напиши Ивану напрямую: "
+                "Не смог отправить заявку автоматически. Напиши психологу напрямую: "
                 f"{contact}."
             )
         await c.answer()
