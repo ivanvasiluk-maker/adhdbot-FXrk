@@ -70,6 +70,8 @@ def reported_chain(text, *, avoidance=''):
     if later_feelings:
         feelings = []
     resources = find(r'вечер\w*.*(?:делаю|сделал\w*|успева\w*)')
+    if resources and re.search(r'\bне\s+(?:сдел|дела|успева)|\bничего\b.{0,25}(?:сдел|дела)|\bедва\b', resources, re.I):
+        resources = None
     tried = find(r'пробовал\w*.*(?:ежедневник|Pomodoro|Notion|соцсет)')
     context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
     task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
