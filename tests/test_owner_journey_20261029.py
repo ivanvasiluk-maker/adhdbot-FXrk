@@ -54,3 +54,9 @@ class Journey(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(u['stage'], 'day_core_stop')
             self.assertFalse(u.get('pending_skill_id'))
             self.assertIn('Разбор сохранён', m.answers[-1][0])
+
+    async def test_old_stop_button_cannot_skip_privacy_consent(self):
+        await self.user(stage='privacy_consent', name='Иван')
+        await bot.main_flow(Message(self.uid, 'На этом пока остановиться'))
+        saved = await get_user(self.uid, self.path)
+        self.assertEqual(saved['stage'], 'privacy_consent')

@@ -13674,7 +13674,7 @@ async def main_flow(m: Message):
     if await handle_memory_confirmation(m, u, text):
         return
     from core.case_clarification import wants_questions, start_questions, handle_answer, DEEP
-    if text == "На этом пока остановиться":
+    if text == "На этом пока остановиться" and u.get("stage") in {"reported_case_question", "analysis_clarify_done"}:
         # End the optional interview before generic intent routing consumes stop.
         comp = parse_case_data(u.get("analysis_json"), {})
         for key in ("case_question", "case_question_queue", "case_mode"):
