@@ -13355,10 +13355,13 @@ async def complete_reported_case(m, u, path, comp):
     if not available:
         comp.pop('selected_skill', None)
         u['pending_skill_id'] = None
+        # No unanswered question remains after a completed interview. Leave
+        # the optional-case lock so other free practice can still be opened.
+        u['closed_day_additional_active'] = 0
         u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
-        set_legacy_stage(u, 'analysis_clarify_done')
+        set_legacy_stage(u, 'day_core_stop' if day_closed_today(u) else 'training_main')
         await save_user(u, path)
-        await m.answer('Эти способы сейчас не повторяем: они уже использованы или отмечены как неподходящие. Можно уточнить разбор или остановиться.', reply_markup=keyboard(DEEP, 'На этом пока остановиться'))
+        await m.answer('Разбор сохранён. Подходящие к нему способы сейчас не повторяем: они уже использованы или отмечены как неподходящие. Можно остановиться, уточнить разбор или выбрать другую бесплатную практику.', reply_markup=kb_completed_day_open if day_closed_today(u) else kb_training_main)
         return
     sid = available[0]
     comp['selected_skill'] = sid
@@ -13671,6 +13674,19 @@ async def main_flow(m: Message):
     if await handle_memory_confirmation(m, u, text):
         return
     from core.case_clarification import wants_questions, start_questions, handle_answer, DEEP
+    if text == "На этом пока остановиться":
+        # End the optional interview before generic intent routing consumes stop.
+        comp = parse_case_data(u.get("analysis_json"), {})
+        for key in ("case_question", "case_question_queue", "case_mode"):
+            comp.pop(key, None)
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        u["closed_day_additional_active"] = 0
+        u["pending_plan_change"] = None
+        set_legacy_stage(u, "day_core_stop" if day_closed_today(u) else "training_main")
+        await save_user(u, DB_PATH)
+        await m.answer("Хорошо. Разбор сохранён. Можно остановиться или выбрать другой вариант.",
+                       reply_markup=kb_completed_day_open if day_closed_today(u) else kb_training_main)
+        return
     if text == DEEP and u.get("analysis_json") and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
         await start_questions(m,u,DB_PATH,detailed=True,require_task=not bool(u.get("today_target")))
         return
