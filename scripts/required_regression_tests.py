@@ -322,7 +322,8 @@ async def test_free_beta_allows_support_offers_but_blocks_bot_checkout():
         live_cb = FakeCallback(uid, bot.OFFER_CALLBACKS["live"])
         await bot.on_offer_callbacks(live_cb)
         live_text = "\n".join(live_cb.message.answers)
-        assert "Индивидуальная консультация с Иваном Василюком" in live_text
+        assert "Индивидуальная консультация с психологом" in live_text
+        assert "Иваном Василюком" not in live_text
         assert "согласуем до оплаты" in live_text
         assert "€99 в месяц" not in live_text
 

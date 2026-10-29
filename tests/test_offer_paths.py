@@ -82,7 +82,7 @@ class OfferPathTests(unittest.TestCase):
         self.assertIn("20 часов", group)
         self.assertIn("€240", group)
         self.assertIn("Условия оплаты согласуем до записи", group)
-        self.assertIn("Иван Василюк", group)
+        self.assertIn("Ведущий — психолог", group)
         self.assertIn("Индивидуальная консультация", tariff_live_text())
         self.assertIn("согласуем до оплаты", tariff_live_text())
         for unapproved in ("задания каждый день", "чат-поддержка", "материалы после встреч"):

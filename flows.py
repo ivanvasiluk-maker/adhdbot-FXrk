@@ -150,7 +150,7 @@ async def send_trainer_introduction(chat_id: int, trainer_key: str, bot_token: s
 # DAY SCRIPTS
 # ============================================================
 
-async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook: str = ""):
+async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook: str = "", *, on_known_task=None):
     """Начать день тренировки"""
     plan = get_current_plan(u)
     # Согласовать план: оставить только существующие навыки
@@ -216,6 +216,10 @@ async def start_day(m: Message, u: dict, day: int, db_path: str, sheets_webhook:
             await m.answer("Последние отмеченные значения\n" + "\n".join(known))
 
     await m.answer(daily_profile_explanation(profile, sid, day))
+
+    if day == 1 and on_known_task is not None:
+        await on_known_task(m, u)
+        return
 
     # Вопрос перед выдачей навыка
     question = (
@@ -1535,7 +1539,7 @@ async def run_analysis(m: Message, u: Dict[str, Any], user_text: str, db_path: s
     from core.experiment_dialogue import reported_chain
     comp_to_store["behavioral_chain"] = reported_chain(user_text)
     from texts import behavioral_chain_text
-    preliminary_conclusion = behavioral_chain_text(user_text[:240], comp_to_store.get("avoidance_behavior") or "") + "\n\n" + preliminary_conclusion
+    preliminary_conclusion = behavioral_chain_text(user_text, comp_to_store.get("avoidance_behavior") or "") + "\n\n" + preliminary_conclusion
     comp_to_store["short_conclusion"] = preliminary_conclusion
     u["analysis_json"] = json.dumps(comp_to_store, ensure_ascii=False)
     await save_user(u, db_path)

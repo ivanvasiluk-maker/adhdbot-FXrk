@@ -25,10 +25,19 @@ def reported_chain(text, *, avoidance=''):
     """Use explicit sentences and quotes; never infer relief from avoidance."""
     text = ' '.join((text or '').split())
     sentences = [s.strip(' .') for s in re.split(r'[.!?]\s+|\n',text) if s.strip(' .')]
+    # Keep the immediate change separate from a later reversal in the same
+    # sentence ("тревога уменьшается, но потом становится сильнее").
+    consequences = [part.strip(' ,') for sentence in sentences
+                    for part in re.split(r',?\s+(?:но\s+)?(?=потом\s|позже\s)', sentence, flags=re.I)
+                    if part.strip(' ,')]
     def find(pattern):
         return next((s[:260] for s in sentences if re.search(pattern,s,re.I)),None)
     quotes = re.findall(r'[«“"]([^»”"]{3,180})[»”"]',text)
     thought = [q for q in quotes if re.search(r'плох|некомпет|решит|ошиб|долж|смогу|подума',q,re.I)]
+    for quote in re.finditer(r'[«“"]([^»”"]{3,180})[»”"]', text):
+        if re.search(r'(?:думаю|мысль|кажется|боюсь)\s*:?\s*$', text[max(0,quote.start()-60):quote.start()], re.I):
+            if quote.group(1) not in thought:
+                thought.append(quote.group(1))
     if not thought:
         explicit_thought = find(r'\b(?:думаю|мысль|кажется|боюсь,? что)\b')
         thought = [explicit_thought] if explicit_thought else []
@@ -45,12 +54,17 @@ def reported_chain(text, *, avoidance=''):
     emotion_roots = {'тревога':'тревог|тревож','напряжение':'напряж','страх':'страх','стыд':'стыд','злость':'злость|злюсь','усталость':'устал','апатия':'апати','паника':'паник'}
     feelings = [word for word,root in emotion_roots.items() if re.search(r'\b(?:'+root+r')\w*', text, re.I) and not re.search(r'\b(?:не|нет|без)\s+(?:'+root+r')\w*', text, re.I)]
     behavior = find(r'закрыва\w*.*(?:документ|файл)|переключа\w*.*(?:YouTube|ютуб|новост|телефон)|(?:вместо|ухожу|смотрю|читаю|завис\w*).*(?:YouTube|ютуб|новост|лент|телефон|Telegram)|иду делать кофе|вместо (?:задачи|работы|этого).+')
+    if not behavior:
+        action = re.search(r'\bначинаю\s+(?:смотреть|читать|листать)\s+[^.!?]+', text, re.I)
+        behavior = action.group(0).strip(' .')[:260] if action else None
     if behavior:
         alternative = re.search(r'вместо (?:задачи|работы|этого)\s+(.+)',behavior,re.I)
         if alternative:
             behavior = re.split(r',\s*(?:у меня|чувствую)|\s+и не могу',alternative.group(1),maxsplit=1,flags=re.I)[0].strip(' ,')
-    immediate = find(r'(?:после|сразу|временно|становится).*(?:легче|облегчен|тревог\w*.*снижа|спокойнее)')
-    delayed = find(r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем)')
+    immediate = next((s[:260] for s in consequences if re.search(
+        r'(?:после|сразу|временно|становится|на несколько минут).*(?:легче|облегчен|тревог\w*.*(?:снижа|уменьша)|спокойнее)',s,re.I)),None)
+    delayed = next((s[:260] for s in consequences if re.search(
+        r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем|сильнее)',s,re.I)),None)
     # A reported later panic is not evidence of anxiety before avoidance.
     later_feelings = ', '.join(feelings) if feelings == ['паника'] and delayed and re.search(r'паник',delayed,re.I) else None
     if later_feelings:
@@ -60,7 +74,7 @@ def reported_chain(text, *, avoidance=''):
     context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
     task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
     task = re.split(r',|\s+(?:но|вместо|потому что)\b',task_match.group(1),maxsplit=1,flags=re.I)[0].strip()[:140] if task_match else None
-    return {'situation':situation,'thoughts':'; '.join(thought) or None,
+    return {'situation':situation,'thoughts':'; '.join(thought[:3]) or None,
             'feelings':', '.join(feelings) or None,'behavior':behavior,
             'immediate':immediate,'delayed':delayed,
             'task':task,'context':context,'resources':resources,'tried':tried,'self_assessment':self_assessment,'later_feelings':later_feelings,
@@ -83,7 +97,9 @@ def render_chain(chain):
                'delayed':'Что происходит с делом и состоянием позже?'}
     if missing:
         lines.append('Уточним одно звено: '+questions[missing[0]])
-    lines.append('Рабочая гипотеза: '+ ('избегание может закрепляться временным облегчением; проверим это действием, не считая причиной по умолчанию.' if chain.get('behavior') and chain.get('immediate') else 'поддерживающий механизм ещё уточняем; неизвестные последствия не достраиваем.'))
+    immediate = str(chain.get('immediate') or '')
+    no_relief = re.search(r'не\s+(?:стало\s+|становится\s+)?легче|облегчени\w*\s+нет|нет\s+облегчени|не\s+(?:снижа|уменьша)', immediate, re.I)
+    lines.append('Рабочая гипотеза: '+ ('избегание может закрепляться временным облегчением; проверим это действием, не считая причиной по умолчанию.' if chain.get('behavior') and immediate and not no_relief else 'поддерживающий механизм ещё уточняем; неизвестные последствия не достраиваем.'))
     return '\n'.join(lines)
 
 
