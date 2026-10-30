@@ -1285,7 +1285,7 @@ def user_help_text() -> str:
         "— вечером закрывает день без стыда\n"
         "— показывает прогресс и маршрут\n"
         "— показывает зеркало развития по /mirror\n\n"
-        "Команды: /progress, /mirror, /settings, /stop, /start_over."
+        "Напоминания о тренировке — /reminders. Одно дело и время проверки — /day_task.\n\nКоманды: /progress, /mirror, /settings, /stop, /start_over."
     )
 
 
@@ -1296,6 +1296,7 @@ def settings_text(notifications_enabled: int, timezone: str) -> str:
         "Настройки:\n"
         f"— напоминания: {status}\n"
         f"— часовой пояс: {timezone or 'Europe/Vilnius'}\n\n"
+        "Настроить приглашения или дело дня: /reminders\n"
         "Чтобы отключить напоминания: /stop\n"
         "Чтобы начать заново: /start_over"
     )
@@ -1331,6 +1332,7 @@ kb_training_main = ReplyKeyboardMarkup(
         [KeyboardButton(text="💪 Сделать следующий шаг")],
         [KeyboardButton(text="⚡ Я застрял"), KeyboardButton(text="⚡ Сильно застрял")],
         [KeyboardButton(text="🧭 Моя карта")],
+        [KeyboardButton(text="⏰ Напоминания и дело дня")],
         [KeyboardButton(text="🌙 Закрыть день")],
     ],
     resize_keyboard=True,
