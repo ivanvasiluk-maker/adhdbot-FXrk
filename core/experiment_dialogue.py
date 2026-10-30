@@ -21,6 +21,13 @@ def feedback_kind(text):
     return next((kind for kind, pattern in patterns if re.search(pattern,low)),None)
 
 
+def wants_larger_step(text):
+    low = ' '.join(str(text or '').lower().replace('ё', 'е').split())
+    if re.search(r'не могу больше|нет сил|не хочу больше', low):
+        return False
+    return bool(re.search(r'\b(?:могу|хочу)\s+сделать\s+больше\b|\bмогу больше(?:$|[,.!?]|\s+(?:а|но|чем)\b)|(?:эти|такие)\s+мелочи|слишком\s+(?:маленьк|мелк)|надоели\s+мелочи', low))
+
+
 def reported_chain(text, *, avoidance=''):
     """Use explicit sentences and quotes; never infer relief from avoidance."""
     text = ' '.join((text or '').split())
@@ -40,6 +47,9 @@ def reported_chain(text, *, avoidance=''):
                 thought.append(quote.group(1))
     if not thought:
         explicit_thought = find(r'\b(?:думаю|мысль|кажется|боюсь,? что)\b')
+        if explicit_thought and re.search(r'\bдумаю\b', explicit_thought, re.I):
+            explicit_thought = re.split(r'\bдумаю\s*,?\s*', explicit_thought, maxsplit=1, flags=re.I)[-1]
+            explicit_thought = re.split(r',\s*(?:и\s+)?(?:начинаю|ухожу|переключаюсь|смотрю)\b', explicit_thought, maxsplit=1, flags=re.I)[0].strip(' ,')
         thought = [explicit_thought] if explicit_thought else []
     self_assessment = next((item for item in thought if re.search(r'ленив\w*|безвольн\w*',item,re.I)),None)
     if self_assessment:
@@ -47,6 +57,7 @@ def reported_chain(text, *, avoidance=''):
     situation = find(r'открыва\w*.*(?:презентац|документ|файл|ноутбук|компьютер)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
     if situation:
         situation = re.split(r',?\s+(?:а\s+)?вместо (?:этого|задачи|работы)\b',situation,maxsplit=1,flags=re.I)[0].strip(' ,')
+        situation = re.split(r',\s*думаю\b', situation, maxsplit=1, flags=re.I)[0].strip(' ,')
     deadline = find(r'до сдачи|дедлайн|срок')
     if situation and deadline and deadline != situation:
         situation = (situation + '. ' + deadline)[:320]
@@ -58,13 +69,18 @@ def reported_chain(text, *, avoidance=''):
         action = re.search(r'\bначинаю\s+(?:смотреть|читать|листать)\s+[^.!?]+', text, re.I)
         behavior = action.group(0).strip(' .')[:260] if action else None
     if behavior:
+        # Isolate an explicitly reported switch instead of copying the whole
+        # situation/thought/emotion sentence into the behavior field.
+        switch = re.search(r'\bухожу\s+в\s+телефон\b', behavior, re.I)
+        if switch:
+            behavior = switch.group(0)
         alternative = re.search(r'вместо (?:задачи|работы|этого)\s+(.+)',behavior,re.I)
         if alternative:
             behavior = re.split(r',\s*(?:у меня|чувствую)|\s+и не могу',alternative.group(1),maxsplit=1,flags=re.I)[0].strip(' ,')
     immediate = next((s[:260] for s in consequences if re.search(
         r'(?:после|сразу|временно|становится|на несколько минут).*(?:легче|облегчен|тревог\w*.*(?:снижа|уменьша)|спокойнее)',s,re.I)),None)
     delayed = next((s[:260] for s in consequences if re.search(
-        r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем|сильнее)',s,re.I)),None)
+        r'самокритик|не выполнен|не сделан|не продвин|ничего не.*(?:сдел|готов)|(?:потом|позже|из-за срок).*(?:тревог|напряж|врем|сильнее|ненавижу себя|ругаю себя|виню себя|стыд)',s,re.I)),None)
     # A reported later panic is not evidence of anxiety before avoidance.
     later_feelings = ', '.join(feelings) if feelings == ['паника'] and delayed and re.search(r'паник',delayed,re.I) else None
     if later_feelings:

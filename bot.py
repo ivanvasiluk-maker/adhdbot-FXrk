@@ -1396,6 +1396,11 @@ async def handle_training_formats(m, u, text):
         if text not in choices:
             await m.answer("Можно сменить формат или на этом остановиться.", reply_markup=kb_training_formats);return True
         chosen = next_format(u, choices[text])
+        if chosen == "real":
+            task = current_task_title(u, "")
+            minimum = (f"Выбери законченный фрагмент задачи «{task}», который имеет смысл для тебя. "
+                       if task else "Выбери законченный фрагмент своего дела, который имеет смысл для тебя. ")
+            minimum += "Поработай над этим фрагментом в удобном объёме. Не нужно ограничиваться одним словом или только открытием файла. Остановиться можно в любой момент."
         set_legacy_stage(u, "training")
         u["current_skill"] = sid;u["pending_skill_id"] = sid
         mark_action_card_active(u)
@@ -1411,6 +1416,32 @@ async def handle_training_formats(m, u, text):
             await m.answer("Похоже, этот формат надоел. Давай попробуем иначе — навык дня остаётся тем же.", reply_markup=kb_training_formats)
             return True
     return False
+
+
+async def handle_practice_scope_request(m, u, text):
+    from core.experiment_dialogue import wants_larger_step
+    eligible = {"training", "training_main", "downscale_action", "success_menu", "confirm_analysis",
+                "misunderstood_problem_await", "misunderstood_explain_await", "recovery_context",
+                "post_action_reflection", "minimal_feedback_done", "day_core_stop"}
+    if u.get("stage") not in eligible or not wants_larger_step(text):
+        return False
+    if day_closed_today(u):
+        await m.answer("Понял запрос на больший объём. День уже закрыт; можно продолжать само дело самостоятельно в удобном объёме. Новую обязательную тренировку не открываю.", reply_markup=kb_completed_day_open)
+        return True
+    sid = current_skill_for_action(u) or u.get("daily_skill_id") or u.get("day_core_skill_id")
+    if sid not in SKILLS_DB:
+        return False
+    profile = await get_user_profile(u["user_id"], DB_PATH)
+    blocked = {_canonical_daily_skill_id(key) for key in _profile_list(profile.get("collection_disabled_skills")) + not_fit_today_skills(u, profile)}
+    if _canonical_daily_skill_id(sid) in blocked or skill_blocked_in_model(profile.get("learning_model") or {}, sid):
+        return False
+    ctx = training_context(u)
+    ctx["training_format_date"] = local_date_for_user(u)
+    u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
+    set_legacy_stage(u, "training_format")
+    await save_user(u, DB_PATH)
+    await m.answer("Понял: тебе нужен заметный результат, а предложенный объём слишком мал. Не будем снова уменьшать шаг. Выбери «Кусочек настоящего дела» — объём определишь самостоятельно. Можно также остановиться.", reply_markup=kb_training_formats)
+    return True
 
 
 async def start_intent_action(m, u):
@@ -3450,6 +3481,13 @@ def extract_task_context_from_text(text: str) -> Dict[str, str]:
         flags=re.IGNORECASE,
     )
     task_name = task_match.group(1).strip(" ,;:—-") if task_match else ""
+    # A concrete postponed object takes precedence over a later deadline
+    # fragment such as «завтра нужно сдавать, а первый слайд не готов».
+    postponed = re.search(r"\bоткладываю\s+([^.!?,;\n]+)", raw, re.IGNORECASE)
+    if postponed and re.search(r"презентац|отч[её]т|письм|пост|документ|таблиц", postponed.group(1), re.IGNORECASE):
+        task_name = postponed.group(1).strip()
+        if re.search(r"\bпрезентацию\b", task_name, re.IGNORECASE):
+            task_name = "подготовить " + task_name
     if not task_name:
         blocked_match = re.search(
             r"(?:не\s+могу|никак\s+не\s+могу)\s+(?:сесть\s+за|начать|приступить\s+к|взяться\s+за)\s+([^.!?\n]+)",
@@ -3899,7 +3937,7 @@ def combined_crisis_tool_text(patterns: List[str]) -> str:
             "1. Тело:\n"
             f"{body_action}\n\n"
             "2. Фраза против критика:\n"
-            "“Я застрял, но я не обязан себя добивать.”\n\n"
+            "“Сейчас трудно. Можно поддержать себя вместо самокритики.”\n\n"
             "3. Один микрошаг:\n"
             "Открыть задачу / назвать первый шаг / написать одно слово — только после телесного сброса.\n\n"
             "Минимум:\n"
@@ -13595,6 +13633,8 @@ async def main_flow(m: Message):
         return
     if text.lower().replace("ё", "е").strip(" .!?") in {"стоп", "stop", "остановиться", "хватит", "не надо", "убери", "хочу остановиться"}:
         await handle_conversation_intent(m, u, text)
+        return
+    if await handle_practice_scope_request(m, u, text):
         return
     if u.get("stage") == "recovery_context" and text != "Проверить":
         if await handle_recovery_context(m, u, text):
