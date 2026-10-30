@@ -60,7 +60,9 @@ async def menu(b, m, u, profile, state):
 
 
 async def handle_text(b, m, u, text):
-    profile = await b.get_user_profile(u['user_id'], b.DB_PATH)
+    # The message router already loaded this snapshot; ordinary input must not
+    # trigger another DB read before onboarding or navigation owns it.
+    profile = b._json_dict(u.get('profile_json'))
     state = profile.get(KEY) or {}
     command = text.split('@')[0].lower() if text.startswith('/') else text.lower()
     if text == '⏰ Напоминания и дело дня':
