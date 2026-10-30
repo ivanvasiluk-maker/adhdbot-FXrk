@@ -142,6 +142,7 @@ from core.conclusion_engine import (
 )
 from core.content_registry import CONTENT_REGISTRY, render_content_suggestion
 from core.proactive import protected as proactive_protected, intention as parse_intention, due as intention_due, contextual_text
+from core import reminder_flow
 from core.commercial import commercial_blocked, offer_evidence, support_ceiling
 from core.autonomy import return_recap, ability_progress, small_challenge
 from core.session_continuity import render_pause, render_return_continuity, render_session_closure
@@ -11613,6 +11614,13 @@ async def handle_user_command(m: Message, u: Dict[str, Any], text: str) -> bool:
         return True
 
     if command == "/stop":
+        profile = await get_user_profile(uid, DB_PATH)
+        state = profile.get("reminder_flow") or {}
+        state.update(invites=False, snooze=None, task=None, draft=None, token=uuid.uuid4().hex[:10])
+        profile["reminder_flow"] = state
+        if profile.get("planned_intention"):
+            profile["planned_intention"]["status"] = "cancelled"
+        u["profile_json"] = profile
         u["notifications_enabled"] = 0
         await save_user(u, DB_PATH)
         await log_event(uid, u.get("stage", ""), "notifications_disabled", {"source": "stop_command"}, DB_PATH, SHEETS_WEBHOOK_URL)
@@ -13611,6 +13619,8 @@ async def main_flow(m: Message):
             await render_current_screen(m,u)
         return
     if await handle_legacy_crisis_redirect_button(m, u, text):
+        return
+    if await reminder_flow.handle_text(sys.modules[__name__], m, u, text):
         return
     # Recognized commands and stops precede every psychological/feedback router.
     if text.startswith("/"):
@@ -18422,7 +18432,11 @@ async def ask_reminder_overload(bot: Bot, u: Dict[str, Any]) -> None:
 
 
 async def send_background_keyboard(bot: Bot, u: Dict[str, Any], text: str, reply_markup, keyboard_name: str):
-    preference = (_json_dict(u.get("profile_json"))).get("reminder_entry")
+    profile = _json_dict(u.get("profile_json"))
+    if (profile.get("reminder_flow") or {}).get("invites"):
+        await reminder_flow.send_invitation(sys.modules[__name__], bot, u)
+        return
+    preference = profile.get("reminder_entry")
     if preference == "format":
         text = "Можно сменить формат: выбрать одно понятное действие вместо длинного разбора. Если сейчас не хочется, можно пропустить."
     elif preference == "tiny":
@@ -18493,6 +18507,11 @@ def _user_last_activity_ts(u: Dict[str, Any]) -> float:
     """Return the user's last activity timestamp (unix)."""
     return float(u.get("last_active") or 0)
 
+
+
+@router.callback_query(lambda c: (c.data or "").startswith("remind:"))
+async def on_reminder_callback(c):
+    await reminder_flow.callback(sys.modules[__name__], c)
 
 
 @router.callback_query(lambda c: (c.data or "").startswith("proactive:"))
@@ -18568,6 +18587,8 @@ async def background_checkins(bot: Bot):
                 if not u.get("chat_id"):
                     continue
                 u["profile_json"] = await get_user_profile(u["user_id"], DB_PATH)
+                if reminder_flow.draft_active(sys.modules[__name__], u, u["profile_json"].get("reminder_flow") or {}):
+                    continue
                 if proactive_protected(u) or u.get("reminder_mode") == "paused":
                     continue
                 now_local = local_now_for_user(u)
@@ -18576,6 +18597,9 @@ async def background_checkins(bot: Bot):
                     continue
                 if _proactive_limit_reached(u, today):
                     continue
+                if 8 <= now_local.hour < 21 and not closed_day_status(u):
+                    if await reminder_flow.dispatch_due(sys.modules[__name__], bot, u, dt.datetime.now(dt.timezone.utc)):
+                        continue
                 recent_activity_hours = hours_since_last_activity(u)
                 if recent_activity_hours is not None and recent_activity_hours < PROACTIVE_ACTIVITY_COOLDOWN_HOURS:
                     # Do not interrupt someone who has just used the bot, even if a clock window opened.
