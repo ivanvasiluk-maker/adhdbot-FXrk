@@ -1,5 +1,6 @@
 """Reported feedback and six-link chains; missing facts stay missing."""
 import re
+from core.product_config import COMMERCIAL_PRACTICE_ENABLED
 
 CHAIN_LABELS = {
     'situation': 'Ситуация', 'thoughts': 'Автоматические мысли',
@@ -92,7 +93,7 @@ def reported_chain(text, *, avoidance=''):
     context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
     task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
     task = re.split(r',|\s+(?:но|вместо|потому что)\b',task_match.group(1),maxsplit=1,flags=re.I)[0].strip()[:140] if task_match else None
-    if not task:
+    if not task and COMMERCIAL_PRACTICE_ENABLED:
         postponed = re.search(r'\bоткладыва\w*\s+([^.!?,]+)', text, re.I)
         if postponed:
             task = postponed.group(1).strip()[:140] or None
