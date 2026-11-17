@@ -13636,6 +13636,7 @@ async def complete_reported_case(m, u, path, comp):
     u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, path)
     if COMMERCIAL_PRACTICE_ENABLED:
+        await m.answer(f"Короткий разбор\n\nДело: {plan['task']}. {plan['hypothesis']}", parse_mode=None)
         await start_intent_action(m, u)
         return
     await m.answer(comp['short_conclusion'], reply_markup=keyboard('💪 Давай действие', DEEP, 'На этом пока остановиться'))
@@ -13813,6 +13814,23 @@ async def main_flow(m: Message):
 
     if await handle_commercial_followup(m, u, text) or await handle_commercial_case_result(m, u, text):
         return
+
+    # A new task report can arrive while a previous practice keyboard is open.
+    if (COMMERCIAL_PRACTICE_ENABLED and not text.startswith("/") and len(text.split()) >= 5
+            and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}
+            and request_kind(text) == "task_problem"
+            and not is_known_reply_button(text)):
+        from core.experiment_dialogue import reported_chain
+        chain = reported_chain(text)
+        if chain.get("task") and any(chain.get(key) for key in ("thoughts", "feelings", "behavior", "situation")):
+            profile = await get_user_profile(uid, DB_PATH)
+            if profile.get("privacy_consent"):
+                u["today_target"] = chain["task"]
+                set_legacy_day(u, calendar_program_day(u))
+                await complete_reported_case(m, u, DB_PATH, {
+                    "behavioral_chain": chain, "request_kind": "task_problem",
+                })
+                return
 
     if u.get("stage") == "offer_request_form" and text.startswith("/") and normalize_slash_command(text) not in {"/cancel","/stop","/reset_me","/privacy","/help"}:
         await m.answer("Сейчас открыта заявка. Напишите запрос или /cancel, чтобы вернуться без отправки.")
