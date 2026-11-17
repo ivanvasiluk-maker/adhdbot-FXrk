@@ -106,3 +106,6 @@ def use_new_architecture(user_id: int, *, is_test_user: bool = False) -> bool:
     if not NEW_ARCHITECTURE_TEST_COHORT_ENABLED:
         return False
     return is_test_user or user_id in ADMIN_IDS or user_id in NEW_ARCHITECTURE_COHORT_IDS
+
+COMMERCIAL_PRACTICE_ENABLED = _env_bool("COMMERCIAL_PRACTICE_ENABLED", False)
+COMMERCIAL_TRIAL_DAYS = _env_int("COMMERCIAL_TRIAL_DAYS", 3)

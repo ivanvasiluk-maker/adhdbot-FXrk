@@ -4433,9 +4433,9 @@ def gamify_apply(u: dict, delta_points: int, reason: str):
     u["last_active"] = time.time()
     u["gamify_reason"] = reason
 
-def is_paid(u: dict) -> bool:
+def is_paid(u: dict, *, include_free_beta: bool = True) -> bool:
     """Проверить, есть ли полный доступ: paid, testmode или активная дата paid_until."""
-    if TEST_MODE or FREE_BETA_ACCESS:
+    if TEST_MODE or (include_free_beta and FREE_BETA_ACCESS):
         return True
     if int(u.get("is_test_user") or 0) == 1 or str(u.get("payment_status") or "").lower() in {"paid", "test", "full"}:
         return True

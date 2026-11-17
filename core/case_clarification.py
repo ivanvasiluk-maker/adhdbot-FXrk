@@ -5,6 +5,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 from core.experiment_dialogue import CHAIN_LABELS
 from core.legacy_flow_adapter import set_legacy_stage
 from db import save_user
+from core.product_config import COMMERCIAL_PRACTICE_ENABLED
 
 QUESTIONS = {
     'task': 'Какое одно дело или действие хотите разобрать? Что именно хотите изменить?',
@@ -32,9 +33,9 @@ def known_facts(chain):
     labels={'context':'Контекст',**CHAIN_LABELS,'resources':'Что уже получается','tried':'Что уже пробовали','self_assessment':'Общая оценка себя — не доказанная причина'}
     return '\n'.join(f'— {label}: {chain[key]}' for key,label in labels.items() if chain.get(key))
 
-async def start_questions(m,u,path,*,require_task=False,detailed=False):
+async def start_questions(m,u,path,*,require_task=False,detailed=False,on_complete=None):
     if not detailed:
-        await start_brief(m,u,path,require_task=require_task)
+        await start_brief(m,u,path,require_task=require_task,on_complete=on_complete)
         return
     comp=json.loads(u.get('analysis_json') or '{}')
     chain=comp.get('behavioral_chain') or {}
@@ -135,7 +136,7 @@ def barrier_prompt(comp):
     return 'Что труднее всего в начале дела? Можно выбрать ответ или рассказать своими словами.', keyboard(*BARRIERS)
 
 
-async def start_brief(m,u,path,*,require_task=False):
+async def start_brief(m,u,path,*,require_task=False,on_complete=None):
     comp=json.loads(u.get('analysis_json') or '{}')
     chain=comp.get('behavioral_chain') or {}
     if chain.get('task'):
@@ -145,6 +146,11 @@ async def start_brief(m,u,path,*,require_task=False):
         # A new report must not inherit the previous episode's work target.
         u['today_target']=''
         u['current_task_title']=''
+    if COMMERCIAL_PRACTICE_ENABLED and on_complete and u.get('today_target') and (
+        comp.get('reported_difficulty') or chain.get('thoughts') or chain.get('feelings') or chain.get('behavior')
+    ):
+        await on_complete(m,u,path,comp)
+        return
     comp['case_mode']='brief'
     comp['case_question']='brief_barrier'
     comp['case_question_queue']=[]
@@ -158,6 +164,10 @@ async def start_brief(m,u,path,*,require_task=False):
     u['pending_plan_change']=None
     set_legacy_stage(u,'reported_case_question')
     await save_user(u,path)
+    if COMMERCIAL_PRACTICE_ENABLED and not u.get('today_target'):
+        await m.answer('Какое дело сейчас хочется сдвинуть с места? Можно текстом или голосом.',
+                       reply_markup=ReplyKeyboardRemove())
+        return
     prompt,markup=barrier_prompt(comp)
     await m.answer(prompt,reply_markup=markup)
 
@@ -178,6 +188,13 @@ async def brief_ready(m,u,path,comp,*,on_complete=None):
 
 async def handle_brief(m,u,text,path,comp,is_known_button,*,on_complete=None):
     field=comp.get('case_question')
+    if COMMERCIAL_PRACTICE_ENABLED and text in {DEEP, '📚 Подробнее', '📚 Почему так?', OTHER}:
+        if not u.get('today_target'):
+            await m.answer('Какое дело сейчас хочется сдвинуть с места? Можно текстом или голосом.')
+        else:
+            prompt, markup = barrier_prompt(comp)
+            await m.answer(prompt, reply_markup=markup)
+        return True
     if text==DEEP:
         await start_questions(m,u,path,detailed=True,require_task=not bool(u.get('today_target')))
         return True
@@ -191,6 +208,16 @@ async def handle_brief(m,u,text,path,comp,is_known_button,*,on_complete=None):
     if wants_questions(text) or not str(text or '').strip():
         prompt,markup=barrier_prompt(comp)
         await m.answer(prompt,reply_markup=markup)
+        return True
+    if COMMERCIAL_PRACTICE_ENABLED and on_complete and field == 'brief_barrier' and (
+        text in BARRIERS + RELATION_BARRIERS or not (is_known_button and is_known_button(text))
+    ):
+        if not u.get('today_target'):
+            u['today_target'] = text.strip()[:140]
+            u['current_task_title'] = u['today_target']
+        else:
+            comp['reported_difficulty'] = text.strip()[:320]
+        await on_complete(m,u,path,comp)
         return True
     if field=='brief_barrier' and (text in BARRIERS+RELATION_BARRIERS or not (is_known_button and is_known_button(text))):
         # This is a reported difficulty, never a proven cause or a chain result.

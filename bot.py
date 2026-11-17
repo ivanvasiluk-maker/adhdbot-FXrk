@@ -161,7 +161,7 @@ SHEETS_SYNC_INTERVAL_SECONDS = getattr(sheets_sync_module, "SHEETS_SYNC_INTERVAL
 SHEETS_SYNC_BATCH_SIZE = getattr(sheets_sync_module, "SHEETS_SYNC_BATCH_SIZE", 50)
 
 from core.product_config import (
-    BASE_OFFER_EUR, OFFER_EARLIEST_DAY, SKILL_LIBRARY_FAIL_CLOSED,
+    COMMERCIAL_PRACTICE_ENABLED, COMMERCIAL_TRIAL_DAYS, BASE_OFFER_EUR, OFFER_EARLIEST_DAY, SKILL_LIBRARY_FAIL_CLOSED,
     ENABLE_DAY1_WOW, ENABLE_HUMAN_OFFER, ENABLE_GROUP_OFFER, ENABLE_PAID_PLAN,
     FREE_BETA_ACCESS, SKILL_LIBRARY_PATH, SKILL_REGISTRY_ENABLED,
     assert_production_payment_safety, format_eur,
@@ -1445,8 +1445,62 @@ async def handle_practice_scope_request(m, u, text):
     return True
 
 
+COMMERCIAL_CASE_RESULTS = {
+    "✅ Шаг выполнен": (True, False, "Шаг сохранён. Можно сделать ещё один небольшой шаг по этому делу."),
+    "🟡 Шаг выполнен частично": (False, True, "Часть шага сохранена. Можно продолжить с того места, где остановились."),
+    "↘️ Шаг пока не получился": (False, False, "Результат сохранён. Попробуйте уменьшить шаг до действия на несколько секунд."),
+}
+
+
+def commercial_case_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=label)] for label in COMMERCIAL_CASE_RESULTS],
+        resize_keyboard=True,
+    )
+
+
+async def handle_commercial_case_result(m, u, text):
+    if not COMMERCIAL_PRACTICE_ENABLED or text not in COMMERCIAL_CASE_RESULTS:
+        return False
+    comp = parse_case_data(u.get("analysis_json"), {})
+    if u.get("stage") != "training" or not comp.get("case_recommendation") or active_attempt(u).get("is_closed"):
+        await m.answer("Эта карточка уже закрыта. Текущую тренировку можно открыть через /start.")
+        return True
+    completed, partial, message = COMMERCIAL_CASE_RESULTS[text]
+    feedback = minimal_feedback_base(u, source="commercial_case")
+    feedback.update(completed=completed, partial=partial)
+    set_minimal_feedback(u, feedback)
+    await persist_minimal_skill_feedback(m, u, show_summary=False)
+    await answer_with_keyboard(m, u, message, next_choice_keyboard(), "post_action_reflection")
+    return True
+
+
+def commercial_trial_expired(u):
+    return (
+        COMMERCIAL_PRACTICE_ENABLED
+        and bool(_parse_iso_date(u.get("first_start_date")))
+        and not is_paid(u, include_free_beta=False)
+        and calendar_program_day(u) > COMMERCIAL_TRIAL_DAYS
+    )
+
+
+async def show_commercial_trial_end(m, u):
+    recap = return_recap(await autonomy_rows(u), local_date_for_user(u), _skill_label)
+    await m.answer(
+        "Бесплатная практика завершилась. Ваши результаты сохранены.\n\n" + recap,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Моя карта", callback_data="show_map")],
+            [InlineKeyboardButton(text="Посмотреть курс", callback_data=OFFER_CALLBACKS["group"])],
+            [InlineKeyboardButton(text="Индивидуальная консультация", callback_data=OFFER_CALLBACKS["live"])],
+        ]),
+    )
+
+
 async def start_intent_action(m, u):
     """Start the selected case without replacing an existing day plan."""
+    if commercial_trial_expired(u):
+        await show_commercial_trial_end(m, u)
+        return
     comp = parse_case_data(u.get("analysis_json"), {})
     comp["requested_mode"] = "act_now"
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
@@ -1506,7 +1560,10 @@ async def start_intent_action(m, u):
     text = build_current_skill_text(skill, u=u)
     if comp.get("case_recommendation"):
         from core.case_plan import render_case_action
-        text = render_case_action(comp["case_recommendation"], sid, skill.get("name") or sid)
+        plan = comp["case_recommendation"]
+        text = render_case_action(plan, sid, skill.get("name") or sid)
+        if COMMERCIAL_PRACTICE_ENABLED:
+            text = plan["reason"] + "\n\n" + text.rsplit("\n\n", 1)[0]
     if known:
         familiar_line = {
             "skinny": "Этот способ уже помог в похожей ситуации. Можно повторить или сменить его.",
@@ -1514,6 +1571,9 @@ async def start_intent_action(m, u):
             "beck": "В похожей ситуации вы отметили пользу этого способа. Проверим, поможет ли он сейчас; прошлый результат этого не гарантирует.",
         }.get(u.get("trainer_key") or "marsha", "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.")
         text = familiar_line + "\n\n" + text
+    if COMMERCIAL_PRACTICE_ENABLED and comp.get("case_recommendation"):
+        await answer_with_keyboard(m, u, text, commercial_case_keyboard(), "training")
+        return
     await answer_with_keyboard(m, u, text, action_keyboard(), "training")
 
 
@@ -8663,6 +8723,8 @@ OFFER_CALLBACKS = {
     "request_live": "offer:request_live",
     "request_guided": "offer:request_guided",
     "request_group": "offer:request_group",
+    "request_intro": "offer:request_intro",
+    "group_program": "offer:group_program",
     "conclusion_full": "offer:conclusion_full",
     "next_plan": "offer:next_plan",
     "beta_purchase_intent": "offer:beta_purchase_intent",
@@ -8811,6 +8873,11 @@ def tariff_bot_text() -> str:
 
 
 def tariff_live_text() -> str:
+    if COMMERCIAL_PRACTICE_ENABLED:
+        return (
+            "Индивидуальная консультация с психологом Иваном Василюком\n\n"
+            "Обсудим вашу ситуацию и подберём подходящие шаги. 50 € за 60 минут."
+        )
     return (
         "👤 Индивидуальная консультация с психологом\n\n"
         "Можно выбрать время по кнопке календаря. На консультации обсудим, с чем нужна помощь и какой формат подойдёт. Условия и стоимость согласуем до оплаты и начала работы.\n\n"
@@ -8820,6 +8887,13 @@ def tariff_live_text() -> str:
 
 
 def tariff_group_text() -> str:
+    if COMMERCIAL_PRACTICE_ENABLED:
+        return (
+            "СДВГ и прокрастинация: от планов к действиям\n\n"
+            "12 недель онлайн с психологом Иваном Василюком. "
+            "Практика на своих задачах, навыки самоорганизации и обратная связь.\n\n"
+            "240 € за весь курс."
+        )
     installment = "Условия оплаты согласуем до записи. "
     return (
         f"👥 Группа навыков для взрослых с СДВГ — €{GROUP_PROGRAM_PRICE_LABEL}\n\n"
@@ -8866,6 +8940,11 @@ def tariff_bot_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="✅ Уже оплатил(а) — проверить", callback_data=OFFER_CALLBACKS["payment_claim"])])
     else:
         rows.append([InlineKeyboardButton(text=f"💳 Оформить за €{BASE_OFFER_EUR_LABEL}", callback_data="pay:bot_999")])
+    if COMMERCIAL_PRACTICE_ENABLED:
+        rows.extend([
+            [InlineKeyboardButton(text="Бесплатная ознакомительная встреча", callback_data=OFFER_CALLBACKS["request_intro"])],
+            [InlineKeyboardButton(text="Подробнее о программе", callback_data=OFFER_CALLBACKS["group_program"])],
+        ])
     rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -8885,7 +8964,7 @@ def tariff_live_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def tariff_group_inline_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="Записаться в группу", callback_data=OFFER_CALLBACKS["request_group"])],
+        [InlineKeyboardButton(text="Записаться на курс" if COMMERCIAL_PRACTICE_ENABLED else "Записаться в группу", callback_data=OFFER_CALLBACKS["request_group"])],
             ]
     rows.extend(offer_variant_inline_keyboard(user_id).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -9864,6 +9943,9 @@ def action_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def open_new_day_skill(m: Message, u: Dict[str, Any], day: int, source: str):
+    if commercial_trial_expired(u):
+        await show_commercial_trial_end(m, u)
+        return
     if closed_day_status(u):
         u["current_day_id"] = None
     plan = get_current_plan(u) or build_28_day_plan(u.get("bucket") or "mixed")
@@ -10930,6 +11012,9 @@ async def send_current_skill(user_id: int, message: Message, user: Optional[Dict
 
 async def handle_action_request(user_id: int, message: Message, user: Optional[Dict[str, Any]] = None, *, repeat: bool = False):
     user = user or await get_user(user_id, DB_PATH)
+    if commercial_trial_expired(user):
+        await show_commercial_trial_end(message, user)
+        return
     if int(user.get("closed_day_additional_active") or 0) and day_closed_today(user):
         if not parse_case_data(user.get("analysis_json"), {}).get("analysis_result"):
             await message.answer("Сначала ответьте на текущий вопрос — затем выберем действие по этой ситуации.")
@@ -13119,6 +13204,9 @@ async def show_skill_for_current_task(m: Message, u: Dict[str, Any]):
 
 
 async def start_day(m: Message, u: Dict[str, Any], day: int, db_path: str, sheets_webhook: str = ""):
+    if commercial_trial_expired(u):
+        await show_commercial_trial_end(m, u)
+        return
     # On day one the diagnosis has already supplied the task. Use the same
     # action route as the target prompt instead of asking for it a second time.
     await flow_start_day(
@@ -13225,6 +13313,32 @@ def is_registered_user(u: Dict[str, Any]) -> bool:
         or u.get("day_core_skill_date")
     )
 
+COMMERCIAL_DAY_SKILLS = (
+    ("Первый видимый шаг", "Выберите действие с видимым результатом: например, напишите один пункт в черновике."),
+    ("Убрать одну помеху", "Заметьте, что прерывает работу, и на пять минут измените одно условие: например, закройте чат."),
+    ("Возврат после отвлечения", "Перед паузой оставьте одну подсказку о том, с чего продолжить. Вернитесь к делу по этой подсказке."),
+)
+
+
+async def show_commercial_day_skill(m, u):
+    if not u.get("first_start_date") or int(u.get("crisis_mode") or 0) or "safety" in str(u.get("stage") or ""):
+        return
+    day = calendar_program_day(u)
+    if day > COMMERCIAL_TRIAL_DAYS:
+        return
+    title, instruction = COMMERCIAL_DAY_SKILLS[(day - 1) % len(COMMERCIAL_DAY_SKILLS)]
+    await m.answer(render_address(f"Навык дня от психолога Ивана Василюка\n\n{title}\n{instruction}", u))
+    if day == COMMERCIAL_TRIAL_DAYS:
+        recap = return_recap(await autonomy_rows(u), local_date_for_user(u), _skill_label)
+        await m.answer(
+            "Итоги практики\n\n" + recap,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Посмотреть курс", callback_data=OFFER_CALLBACKS["group"])],
+                [InlineKeyboardButton(text="Индивидуальная консультация", callback_data=OFFER_CALLBACKS["live"])],
+            ]),
+        )
+
+
 async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
     saved = dialogue_context(u.get("dialogue_context"))
     owned = str(u.get("stage") or "") in FEEDBACK_STAGES | {
@@ -13236,6 +13350,8 @@ async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
         keyboard = (ReplyKeyboardRemove if markup and markup.get("remove_keyboard") else InlineKeyboardMarkup if saved.get("inline") else ReplyKeyboardMarkup).model_validate(markup) if markup else ReplyKeyboardRemove()
         await m.answer(saved["text"], reply_markup=keyboard)
         return
+    if COMMERCIAL_PRACTICE_ENABLED:
+        await show_commercial_day_skill(m, u)
     set_legacy_stage(u, "existing_user_start_menu")
     await save_user(u, DB_PATH)
     await log_event(u["user_id"], "start_repeat", {"stage": u.get("stage"), "analytics_event": False}, db_path=DB_PATH)
@@ -13278,7 +13394,9 @@ async def cmd_start(m: Message):
     if not has_completed_profile_state(u):
         onboarding_resume = {
             "await_trainer": (TRAINER_INTRO, kb_trainers),
-            "ask_address": ("Давайте на «ты» или на «вы»?", address_keyboard()),
+            "ask_address": ("Какой род использовать?", gender_keyboard())
+            if dialogue_context(u.get("dialogue_context")).get("choosing_address") == "gender"
+            else ("Давайте на «ты» или на «вы»?", address_keyboard()),
             "notification_consent": (notifications_consent_text(), kb_notifications_consent),
             "privacy_consent": (privacy_notice_text(), kb_privacy_consent),
             "privacy_declined": ("Анализ не запущен. Информация о данных — /privacy, удаление профиля — /reset_me.", ReplyKeyboardRemove()),
@@ -13289,6 +13407,9 @@ async def cmd_start(m: Message):
             prompt, keyboard = onboarding_resume[u["stage"]]
             await m.answer(prompt, reply_markup=keyboard, parse_mode=None)
             return
+    if commercial_trial_expired(u) and safety_mode(u) == "none" and u.get("stage") != "offer_request_form":
+        await show_commercial_trial_end(m, u)
+        return
     if is_registered_user(u):
         await show_existing_user_start_menu(m, u)
         return
@@ -13343,7 +13464,15 @@ async def cmd_start(m: Message):
     set_current_state(u, STATE_ONBOARDING, close_action=True)
     await save_user(u, DB_PATH)
     await log_event(uid, "onboarding_started", {"stage": u.get("stage")}, db_path=DB_PATH)
-    onboarding_screens = list(ONBOARDING_SCREENS)
+    if COMMERCIAL_PRACTICE_ENABLED:
+        await m.answer(
+            "Какое дело вы всё откладываете? SKILLER поможет найти шаг, который можно сделать сегодня. "
+            f"Бесплатная практика — {COMMERCIAL_TRIAL_DAYS} дн.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎓 Курсы и консультации", callback_data=OFFER_CALLBACKS["group"])],
+            ]),
+        )
+    onboarding_screens = [] if COMMERCIAL_PRACTICE_ENABLED else list(ONBOARDING_SCREENS)
     if onboarding_screens:
         onboarding_screens[0] = f"{time_of_day_greeting(u)}.\n\n{onboarding_screens[0]}"
     for screen in onboarding_screens:
@@ -13388,6 +13517,9 @@ async def complete_reported_case(m, u, path, comp):
     from core.case_clarification import keyboard, DEEP
     if not (comp.get('behavioral_chain') or {}).get('task') and u.get('today_target'):
         comp.setdefault('behavioral_chain', {})['task'] = str(u['today_target'])[:140]
+    if commercial_trial_expired(u):
+        await show_commercial_trial_end(m, u)
+        return
     plan = case_plan(comp)
     profile = await get_user_profile(u['user_id'], path)
     learning = profile.get('learning_model') or {}
@@ -13419,6 +13551,9 @@ async def complete_reported_case(m, u, path, comp):
     set_legacy_stage(u, 'analysis_clarify_done')
     u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, path)
+    if COMMERCIAL_PRACTICE_ENABLED:
+        await start_intent_action(m, u)
+        return
     await m.answer(comp['short_conclusion'], reply_markup=keyboard('💪 Давай действие', DEEP, 'На этом пока остановиться'))
 
 
@@ -13592,6 +13727,9 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
+    if await handle_commercial_case_result(m, u, text):
+        return
+
     if u.get("stage") == "offer_request_form" and text.startswith("/") and normalize_slash_command(text) not in {"/cancel","/stop","/reset_me","/privacy","/help"}:
         await m.answer("Сейчас открыта заявка. Напишите запрос или /cancel, чтобы вернуться без отправки.")
         return
@@ -13737,6 +13875,15 @@ async def main_flow(m: Message):
         await m.answer("Хорошо. Разбор сохранён. Можно остановиться или выбрать другой вариант.",
                        reply_markup=kb_completed_day_open if day_closed_today(u) else kb_training_main)
         return
+    if COMMERCIAL_PRACTICE_ENABLED and text in {DEEP, "📚 Подробнее", "📚 Почему так?"} and u.get("stage") in {
+        "reported_case_question", "analysis_contract", "analysis_next_step", "analysis_details",
+    }:
+        if u.get("stage") == "reported_case_question":
+            await handle_answer(m, u, "📚 Подробнее", DB_PATH, is_known_button=is_known_reply_button,
+                                on_complete=complete_reported_case)
+        else:
+            await complete_reported_case(m, u, DB_PATH, _analysis_details_comp_from_user(u))
+        return
     if text == DEEP and u.get("analysis_json") and u.get("stage") not in OFFER_STAGES | {"offer_request_form"}:
         await start_questions(m,u,DB_PATH,detailed=True,require_task=not bool(u.get("today_target")))
         return
@@ -13751,7 +13898,7 @@ async def main_flow(m: Message):
                 await m.answer('Сначала уточним подходящий способ: предыдущие варианты сейчас не повторяем.')
             return
     if wants_questions(text) and u.get('analysis_json') and u.get('stage') not in OFFER_STAGES | {'offer_request_form'}:
-        await start_questions(m,u,DB_PATH)
+        await start_questions(m,u,DB_PATH,on_complete=complete_reported_case)
         return
     if text == "🧰 Мои рабочие навыки" and collection_screen_allowed(u):
         await show_skill_collection(m, u)
@@ -15756,7 +15903,7 @@ async def main_flow(m: Message):
             u["last_misunderstood_reason"] = reason
             await log_event(u["user_id"], "analysis", "misunderstood_reason_selected", {"reason": reason}, DB_PATH, SHEETS_WEBHOOK_URL)
             from core.case_clarification import start_questions
-            await start_questions(m,u,DB_PATH)
+            await start_questions(m,u,DB_PATH,on_complete=complete_reported_case)
             return
         if text.startswith("3") or "не тот навык" in low:
             reason = "wrong_skill"
@@ -17833,6 +17980,7 @@ async def on_offer_callbacks(c: CallbackQuery):
         OFFER_CALLBACKS["beta_purchase_intent"], OFFER_CALLBACKS["voluntary_support"],
         OFFER_CALLBACKS["group"], OFFER_CALLBACKS["live"],
         OFFER_CALLBACKS["request_group"], OFFER_CALLBACKS["request_live"],
+        OFFER_CALLBACKS["request_intro"], OFFER_CALLBACKS["group_program"],
         OFFER_CALLBACKS["compare"], OFFER_CALLBACKS["back"], OFFER_CALLBACKS["stay_free"],
         "show_map", "continue_free",
     }:
@@ -17861,7 +18009,8 @@ async def on_offer_callbacks(c: CallbackQuery):
         set_legacy_stage(u, OFFER_MENU_STAGE)
         u["offer_mode"] = u.get("offer_mode") or "manual"
         await save_user(u, DB_PATH)
-        await c.message.answer("Бот остаётся бесплатным. Выбираем формат поддержки.",reply_markup=ReplyKeyboardRemove())
+        if not COMMERCIAL_PRACTICE_ENABLED:
+            await c.message.answer("Бот остаётся бесплатным. Выбираем формат поддержки.",reply_markup=ReplyKeyboardRemove())
 
     if data in {OFFER_CALLBACKS["continue_training"], OFFER_CALLBACKS["choose_later"]}:
         await remember_offer_decision(u, declined=True)
@@ -17915,11 +18064,24 @@ async def on_offer_callbacks(c: CallbackQuery):
         await c.answer()
         return
 
-    if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"], OFFER_CALLBACKS["request_group"]}:
+    if not COMMERCIAL_PRACTICE_ENABLED and data in {OFFER_CALLBACKS["request_intro"], OFFER_CALLBACKS["group_program"]}:
+        await c.answer("Эта кнопка сейчас недоступна.")
+        return
+    if data == OFFER_CALLBACKS["group_program"]:
+        await replace_offer_inline_screen(
+            c.message, u, tariff_group_text() + "\n\nНа занятиях разберём, как начать сложное дело, "
+            "планировать посильные шаги, уменьшать отвлечения и возвращаться к работе после паузы.",
+            tariff_group_inline_keyboard(uid),
+        )
+        await c.answer()
+        return
+
+    if data in {OFFER_CALLBACKS["request_live"], OFFER_CALLBACKS["request_guided"], OFFER_CALLBACKS["request_group"], OFFER_CALLBACKS["request_intro"]}:
         format_label = {
             OFFER_CALLBACKS["request_live"]: "Личная работа — условия обсудим заранее",
             OFFER_CALLBACKS["request_guided"]: "Бот + специалист",
-            OFFER_CALLBACKS["request_group"]: "Группа навыков для взрослых с СДВГ — собеседование",
+            OFFER_CALLBACKS["request_group"]: "Курс «СДВГ и прокрастинация»" if COMMERCIAL_PRACTICE_ENABLED else "Группа навыков для взрослых с СДВГ — собеседование",
+            OFFER_CALLBACKS["request_intro"]: "Бесплатная ознакомительная встреча",
         }[data]
         set_legacy_stage(u, "offer_request_form")
         ctx = dialogue_context(u.get("dialogue_context"))
