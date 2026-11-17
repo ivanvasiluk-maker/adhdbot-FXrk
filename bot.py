@@ -13876,7 +13876,7 @@ async def main_flow(m: Message):
                        reply_markup=kb_completed_day_open if day_closed_today(u) else kb_training_main)
         return
     if COMMERCIAL_PRACTICE_ENABLED and text in {DEEP, "📚 Подробнее", "📚 Почему так?"} and u.get("stage") in {
-        "reported_case_question", "analysis_contract", "analysis_next_step", "analysis_details",
+        "reported_case_question", "analysis_next_step", "analysis_details",
     }:
         if u.get("stage") == "reported_case_question":
             await handle_answer(m, u, "📚 Подробнее", DB_PATH, is_known_button=is_known_reply_button,
