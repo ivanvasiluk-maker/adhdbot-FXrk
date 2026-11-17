@@ -13596,6 +13596,47 @@ async def handle_successful_payment(m: Message):
         await send_full_mode_welcome(m, u)
 
 
+COMMERCIAL_REVIEW_BUTTONS = ("Попробовать шаг", "Подробнее о разборе", "Уточнить разбор")
+
+
+def commercial_review_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=label)] for label in COMMERCIAL_REVIEW_BUTTONS],
+        resize_keyboard=True,
+    )
+
+
+async def handle_commercial_review(m, u, text):
+    if not COMMERCIAL_PRACTICE_ENABLED or u.get("stage") != "analysis_clarify_done":
+        return False
+    comp = parse_case_data(u.get("analysis_json"), {})
+    plan = comp.get("case_recommendation")
+    if not plan or text.startswith("/"):
+        return False
+    if text == COMMERCIAL_REVIEW_BUTTONS[0]:
+        comp.pop("commercial_awaiting_correction", None)
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        await start_intent_action(m, u)
+    elif text == COMMERCIAL_REVIEW_BUTTONS[1]:
+        evidence = "\n".join(plan["evidence"])
+        await m.answer("\n\n".join(filter(None, (evidence, plan["reason"]))),
+                       reply_markup=commercial_review_keyboard(), parse_mode=None)
+    elif text == COMMERCIAL_REVIEW_BUTTONS[2]:
+        comp["commercial_awaiting_correction"] = True
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        await save_user(u, DB_PATH)
+        await m.answer("Что я упустил или понял не так? Можно ответить одной фразой или голосом.",
+                       reply_markup=commercial_review_keyboard())
+    elif comp.get("commercial_awaiting_correction") and text and not is_known_reply_button(text):
+        comp.pop("commercial_awaiting_correction", None)
+        comp["reported_difficulty"] = text
+        comp["commercial_correction"] = True
+        await complete_reported_case(m, u, DB_PATH, comp)
+    else:
+        return False
+    return True
+
+
 async def complete_reported_case(m, u, path, comp):
     from core.case_plan import case_plan, render_case_plan
     from core.case_clarification import keyboard, DEEP
@@ -13636,8 +13677,10 @@ async def complete_reported_case(m, u, path, comp):
     u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, path)
     if COMMERCIAL_PRACTICE_ENABLED:
-        await m.answer(f"Короткий разбор\n\nДело: {plan['task']}. {plan['hypothesis']}", parse_mode=None)
-        await start_intent_action(m, u)
+        summary = f"Короткий разбор\n\nДело: {plan['task']}. {plan['hypothesis']}"
+        if comp.get("commercial_correction"):
+            summary = f"Обновлённый разбор\n\nДело: {plan['task']}. Уточнение: {comp['reported_difficulty']}\n\n{plan['reason']}"
+        await answer_with_keyboard(m, u, summary, commercial_review_keyboard(), "analysis_clarify_done")
         return
     await m.answer(comp['short_conclusion'], reply_markup=keyboard('💪 Давай действие', DEEP, 'На этом пока остановиться'))
 
@@ -13813,6 +13856,9 @@ async def main_flow(m: Message):
         return
 
     if await handle_commercial_followup(m, u, text) or await handle_commercial_case_result(m, u, text):
+        return
+
+    if await handle_commercial_review(m, u, text):
         return
 
     # A new task report can arrive while a previous practice keyboard is open.
