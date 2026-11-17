@@ -1459,6 +1459,55 @@ def commercial_case_keyboard():
     )
 
 
+def commercial_input_keyboard():
+    if not COMMERCIAL_PRACTICE_ENABLED:
+        return kb_input_mode
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="⌨️ Написать текстом")],
+        [KeyboardButton(text="🎙 Рассказать голосом")],
+        [KeyboardButton(text="❓ Быстрый тест (5 вопросов)")],
+    ], resize_keyboard=True)
+
+
+COMMERCIAL_REFLECTION = "Почему я откладываю?"
+COMMERCIAL_RESUME = "Продолжить своё дело"
+COMMERCIAL_PAUSE = "Пауза в практике"
+
+
+async def handle_commercial_followup(m, u, text):
+    if not COMMERCIAL_PRACTICE_ENABLED or u.get("stage") != "post_action_reflection":
+        return False
+    context = dialogue_context(u.get("dialogue_context"))
+    followup = context.get("commercial_followup")
+    if not isinstance(followup, dict):
+        return False
+    if text == COMMERCIAL_PAUSE:
+        await answer_with_keyboard(
+            m, u, "Место сохранено. Можно вернуться к этому делу позже.",
+            ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=COMMERCIAL_RESUME)]], resize_keyboard=True),
+            "post_action_reflection",
+        )
+    elif text == COMMERCIAL_REFLECTION:
+        await m.answer(followup["reflection"] + "\n\nМожно вернуться к шагу по кнопке «Продолжить своё дело».")
+    elif text in {COMMERCIAL_RESUME, "Проверить", "Продолжить"}:
+        if commercial_trial_expired(u):
+            await show_commercial_trial_end(m, u)
+        else:
+            await show_commercial_followup(m, u, followup["step"])
+    else:
+        return False
+    return True
+
+
+async def show_commercial_followup(m, u, text):
+    markup = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=COMMERCIAL_RESUME)],
+        [KeyboardButton(text=COMMERCIAL_REFLECTION)],
+        [KeyboardButton(text=COMMERCIAL_PAUSE)],
+    ], resize_keyboard=True)
+    await answer_with_keyboard(m, u, text, markup, "post_action_reflection")
+
+
 async def handle_commercial_case_result(m, u, text):
     if not COMMERCIAL_PRACTICE_ENABLED or text not in COMMERCIAL_CASE_RESULTS:
         return False
@@ -1471,7 +1520,28 @@ async def handle_commercial_case_result(m, u, text):
     feedback.update(completed=completed, partial=partial)
     set_minimal_feedback(u, feedback)
     await persist_minimal_skill_feedback(m, u, show_summary=False)
-    await answer_with_keyboard(m, u, message, next_choice_keyboard(), "post_action_reflection")
+    plan = comp["case_recommendation"]
+    task = str(plan.get("task") or current_task_title(u, "своё дело"))
+    if completed and re.search(r"презентац|слайд", task, re.I):
+        step = "Добавь под главным выводом один факт из собранных материалов." if u.get("address_mode") == "ty" else "Добавьте под главным выводом один факт из собранных материалов."
+    elif completed:
+        step = f"Следующий шаг по делу «{task}» — добавить к начатому одну деталь."
+    elif partial:
+        step = f"По делу «{task}» можно вернуться к начатому и закончить одну часть."
+    else:
+        step = f"По делу «{task}» достаточно открыть нужный материал и найти место начала."
+    context = dialogue_context(u.get("dialogue_context"))
+    context["commercial_followup"] = {"step": step, "reflection": plan["hypothesis"]}
+    u["dialogue_context"] = json.dumps(context, ensure_ascii=False)
+    await save_user(u, DB_PATH)
+    await show_commercial_followup(m, u, message + "\n\n" + step)
+    if completed and calendar_program_day(u) == 1 and not offer_shown_today(u):
+        u["last_offer_shown_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        await save_user(u, DB_PATH)
+        await m.answer("На курсе можно потренировать этот подход на своих задачах и получить обратную связь.",
+                       reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                           [InlineKeyboardButton(text="Посмотреть программу курса", callback_data=OFFER_CALLBACKS["group"])],
+                       ]))
     return True
 
 
@@ -1564,6 +1634,15 @@ async def start_intent_action(m, u):
         text = render_case_action(plan, sid, skill.get("name") or sid)
         if COMMERCIAL_PRACTICE_ENABLED:
             text = plan["reason"] + "\n\n" + text.rsplit("\n\n", 1)[0]
+            if sid == "bad_first_step" and re.search(r"презентац|слайд", plan["task"], re.I):
+                text = (
+                    "Похоже, ожидание оценки мешает начать. Сначала сделаем черновик одного слайда.\n\n"
+                    "Открой презентацию. Создай слайд «Главный вывод» и за три минуты "
+                    "запиши на нём одну мысль, которую руководитель должен унести со встречи."
+                )
+                if u.get("address_mode") != "ty":
+                    text = text.replace("Открой ", "Откройте ").replace("Создай ", "Создайте ").replace("запиши ", "запишите ")
+
     if known:
         familiar_line = {
             "skinny": "Этот способ уже помог в похожей ситуации. Можно повторить или сменить его.",
@@ -13400,7 +13479,7 @@ async def cmd_start(m: Message):
             "notification_consent": (notifications_consent_text(), kb_notifications_consent),
             "privacy_consent": (privacy_notice_text(), kb_privacy_consent),
             "privacy_declined": ("Анализ не запущен. Информация о данных — /privacy, удаление профиля — /reset_me.", ReplyKeyboardRemove()),
-            "await_input_mode": ("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", kb_input_mode),
+            "await_input_mode": ("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", commercial_input_keyboard()),
         }
         if u.get("stage") in onboarding_resume:
             await save_user(u, DB_PATH)
@@ -13727,7 +13806,7 @@ async def main_flow(m: Message):
         await start_safety_interceptor(m, u, text, "global_text", explicit=has_red_crisis_phrase(text))
         return
 
-    if await handle_commercial_case_result(m, u, text):
+    if await handle_commercial_followup(m, u, text) or await handle_commercial_case_result(m, u, text):
         return
 
     if u.get("stage") == "offer_request_form" and text.startswith("/") and normalize_slash_command(text) not in {"/cancel","/stop","/reset_me","/privacy","/help"}:
@@ -15547,7 +15626,7 @@ async def main_flow(m: Message):
             await log_event(u["user_id"], "onboarding", "privacy_consent_granted", {
                 "notice_version": "2026-10-27",
             }, DB_PATH, SHEETS_WEBHOOK_URL)
-            await m.answer("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", reply_markup=kb_input_mode)
+            await m.answer("Начнём с одного дела, которое сейчас трудно сделать. Как удобнее рассказать?", reply_markup=commercial_input_keyboard())
             return
         if text == "❌ Не согласен(на)":
             u["notifications_enabled"] = 0
@@ -15687,7 +15766,7 @@ async def main_flow(m: Message):
         if text and text.lower() == "назад":
             set_legacy_stage(u, "choose_input_mode")
             await save_user(u, DB_PATH)
-            await m.answer("Ок. Выбери режим:", reply_markup=kb_input_mode)
+            await m.answer("Ок. Выбери режим:", reply_markup=commercial_input_keyboard())
             return
         t = text
         if not t:

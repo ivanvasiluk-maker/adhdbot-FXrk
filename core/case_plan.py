@@ -11,8 +11,8 @@ def case_plan(comp):
     task=str(chain.get('task') or '')
     # Timing comes from the explicit before/after questions, not an emotion's name.
     relief=bool(re.search(r'облегчен|стало (?:легче|спокойнее)|становится (?:легче|спокойнее)|^легче[.! ]*$',after,re.I)) and not re.search(r'не (?:стало|становится|почувствовал)|нет облегчения|без облегчения|никакого облегчения|облегчен\w*.{0,12}не (?:было|почувств)',after,re.I)
-    low=' '.join((difficulty,before,thought)).lower()
-    perfection=bool(re.search(r'сдела\w* плохо|ошиб\w*|идеаль\w*|оцен\w*',low)) and not re.search(r'не боюсь|страха нет',low)
+    low=' '.join((difficulty,before,thought,str(chain.get('situation') or ''))).lower()
+    perfection=bool(re.search(r'сдела\w* плохо|будет недоволен|получится какая-то ерунда|ошиб\w*|идеаль\w*|оцен\w*',low)) and not re.search(r'не боюсь|страха нет',low)
     boredom=bool(re.search(r'скуч\w*|неинтерес\w*',low)) and not re.search(r'не скучно|скуки нет',low)
     if comp.get('request_kind')=='relationship':
         kind='specific_action'

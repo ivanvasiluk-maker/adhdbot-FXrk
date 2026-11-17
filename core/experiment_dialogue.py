@@ -54,7 +54,7 @@ def reported_chain(text, *, avoidance=''):
     self_assessment = next((item for item in thought if re.search(r'ленив\w*|безвольн\w*',item,re.I)),None)
     if self_assessment:
         thought = [item for item in thought if item != self_assessment]
-    situation = find(r'открыва\w*.*(?:презентац|документ|файл|ноутбук|компьютер)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
+    situation = find(r'открыва\w*.*(?:презентац|powerpoint|документ|файл|ноутбук|компьютер)|(?:до сдачи|дедлайн|срок)|(?:нужно|надо|хочу|собираюсь|пытаюсь)\s+(?:(?:сегодня|завтра)\s+)?(?:сделать|написать|подготовить|заниматься)')
     if situation:
         situation = re.split(r',?\s+(?:а\s+)?вместо (?:этого|задачи|работы)\b',situation,maxsplit=1,flags=re.I)[0].strip(' ,')
         situation = re.split(r',\s*думаю\b', situation, maxsplit=1, flags=re.I)[0].strip(' ,')
@@ -92,6 +92,10 @@ def reported_chain(text, *, avoidance=''):
     context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
     task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
     task = re.split(r',|\s+(?:но|вместо|потому что)\b',task_match.group(1),maxsplit=1,flags=re.I)[0].strip()[:140] if task_match else None
+    if not task:
+        postponed = re.search(r'\bоткладыва\w*\s+([^.!?,]+)', text, re.I)
+        if postponed:
+            task = postponed.group(1).strip()[:140] or None
     return {'situation':situation,'thoughts':'; '.join(thought[:3]) or None,
             'feelings':', '.join(feelings) or None,'behavior':behavior,
             'immediate':immediate,'delayed':delayed,
