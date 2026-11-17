@@ -1538,7 +1538,7 @@ async def handle_commercial_case_result(m, u, text):
     if completed and calendar_program_day(u) == 1 and not offer_shown_today(u):
         u["last_offer_shown_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         await save_user(u, DB_PATH)
-        await m.answer("На курсе можно потренировать этот подход на своих задачах и получить обратную связь.",
+        await m.answer("Первый шаг уже сделан. На тренинге «СДВГ и прокрастинация» можно 12 недель практиковаться на своих делах и получать обратную связь психолога. Стоимость курса — 240 €.",
                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                            [InlineKeyboardButton(text="Посмотреть программу курса", callback_data=OFFER_CALLBACKS["group"])],
                        ]))
@@ -1557,7 +1557,9 @@ def commercial_trial_expired(u):
 async def show_commercial_trial_end(m, u):
     recap = return_recap(await autonomy_rows(u), local_date_for_user(u), _skill_label)
     await m.answer(
-        "Бесплатная практика завершилась. Ваши результаты сохранены.\n\n" + recap,
+        "Пробный период завершился. Карту навыков и сохранённые результаты "
+        "можно по-прежнему открывать бесплатно. Если хочется продолжить с психологом, "
+        "доступны платный тренинг и индивидуальная консультация.\n\n" + recap,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Моя карта", callback_data="show_map")],
             [InlineKeyboardButton(text="Посмотреть курс", callback_data=OFFER_CALLBACKS["group"])],
@@ -13410,7 +13412,10 @@ async def show_commercial_day_skill(m, u):
     if day == COMMERCIAL_TRIAL_DAYS:
         recap = return_recap(await autonomy_rows(u), local_date_for_user(u), _skill_label)
         await m.answer(
-            "Итоги практики\n\n" + recap,
+            "Итоги практики\n\n" + recap
+            + "\n\nЕсли хочется закрепить этот подход, на 12-недельном тренинге можно "
+              "практиковаться на своих делах с обратной связью. Курс — 240 €. "
+              "Индивидуальная консультация — 50 € за 60 минут.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Посмотреть курс", callback_data=OFFER_CALLBACKS["group"])],
                 [InlineKeyboardButton(text="Индивидуальная консультация", callback_data=OFFER_CALLBACKS["live"])],
