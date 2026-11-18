@@ -89,9 +89,25 @@ def render_commercial_analysis(comp, *, detailed=False):
         interpretation = f'{plan["hypothesis"]} {plan["reason"]}'
 
     task = plan['task'] or 'выбранное дело'
+    skill_id = plan.get('selected_skill') or plan['candidates'][0]
+    presentation = bool(re.search(r'презентац|слайд', task, re.I))
+    if skill_id == 'bad_first_step' and presentation:
+        exercise = (
+            'Откройте презентацию, создайте слайд «Главный вывод» и за три минуты '
+            'запишите одну мысль, которую руководитель должен унести со встречи. '
+            'Если трудно выбрать лучшую, запишите первую подходящую.'
+        )
+    else:
+        exercise = render_case_action(plan, skill_id, '').split('\n\n')[1]
+
     if not detailed:
         title = 'Обновлённый разбор' if comp.get('commercial_correction') else 'Короткий разбор'
-        return f'{title}\n\nЗадача — «{task}».\n\n{interpretation}'
+        cycle = [value.rstrip('.!?') for value in (situation, behavior, immediate, delayed) if value]
+        episode = '\n\nКак это происходит\n' + ' → '.join(cycle) + '.' if len(cycle) >= 2 else ''
+        return (
+            f'{title}\n\nЗадача — «{task}».\n\n{interpretation}{episode}'
+            f'\n\nЧто попробуем\n{exercise}'
+        )
 
     observations = [
         f'{label}\n«{value[:260]}»' for label, value in (
@@ -101,8 +117,16 @@ def render_commercial_analysis(comp, *, detailed=False):
             ('Что происходит позже', delayed),
         ) if value
     ]
+    hypotheses = [interpretation]
+    if not comp.get('commercial_correction'):
+        if plan['kind'] == 'evaluation_avoidance' and plan['relief_reported']:
+            if re.search(r'пример|почитать', situation + ' ' + behavior, re.I):
+                hypotheses.append('Поиск примеров может давать ощущение подготовки и заодно откладывать момент, когда появится черновик, который можно оценить — если такой поиск повторяется перед началом.')
+        if 'устал' in str(chain.get('feelings') or '').lower():
+            hypotheses.append('Усталость может повышать усилие, нужное для старта. Короткая попытка поможет проверить, посилен ли шаг при нынешнем запасе сил.')
     sections = [f'Подробный разбор\n\nЗадача — «{task}».', *observations,
-                f'Как это может быть связано\n{interpretation}',
+                'Что может мешать\n' + '\n'.join(f'• {item}' for item in hypotheses),
+                f'Что попробуем\n{exercise}',
                 'Что проверяем упражнением\nПосле попытки можно отметить, удалось ли начать. '
                 'Если шаг оказался слишком сложным, уменьшим его или выберем другой вход.']
     return '\n\n'.join(sections)
