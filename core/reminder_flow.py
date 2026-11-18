@@ -15,8 +15,8 @@ def keyboard(token, choices):
 
 
 def invite_keyboard(token):
-    return keyboard(token, [('Хочу тренироваться', 'train'), ('Напомнить через час', '60'),
-                            ('Через 1,5 часа', '90'), ('Дело дня', 'task'), ('Отключить напоминания', 'off')])
+    return keyboard(token, [('Хочу тренироваться', 'train'), ('Через 15 минут', '15'),
+                            ('Через час', '60'), ('Завтра', 'tomorrow'), ('Не напоминать', 'off')])
 
 
 def draft_active(b, u, state):
@@ -194,11 +194,12 @@ async def callback(b, c):
         await persist(b, u, profile, state)
         await b.show_day3_offer(c.message, u, 'task_check_support', mode='manual')
         await c.answer(); return
-    if value in {'60', '90'}:
+    if value in {'15', '60', '90', 'tomorrow'}:
         if not u.get('notifications_enabled') or u.get('reminder_mode') == 'paused':
             await c.answer('Напоминания отключены. Настройки — /reminders.'); return
         now = b.local_now_for_user(u)
-        target = now + dt.timedelta(minutes=int(value))
+        target = ((now + dt.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+                  if value == 'tomorrow' else now + dt.timedelta(minutes=int(value)))
         if not (8 <= target.hour < 21) or b.day_closed_today(u) or b._user_no_reminders_today(u, now.date().isoformat()) or b._proactive_limit_reached(u, now.date().isoformat()):
             await c.answer('Сегодня напоминать больше не буду. Вернуться можно в любое время.'); return
         # A task check snoozes that check; an invitation snoozes only the invitation.
@@ -210,7 +211,7 @@ async def callback(b, c):
         state.update(token=uuid.uuid4().hex[:10], draft=None)
         u['unanswered_proactive_count'] = 0
         await persist(b, u, profile, state)
-        await c.message.answer(f'Напомню около {target:%H:%M}. Если закрыть день или отключить напоминания, сообщение не придёт. '
+        await c.message.answer(f'Напомню {"завтра " if value == "tomorrow" else ""}около {target:%H:%M}. Если закрыть день или отключить напоминания, сообщение не придёт. '
                                'Планировщик проверяет расписание каждые 15 минут.', parse_mode=None,
                                reply_markup=keyboard(state['token'], [('Отключить напоминания', 'off')]))
         await c.answer(); return
@@ -236,6 +237,41 @@ async def send_invitation(b, telegram, u, text=None):
     await persist(b, u, profile, state)
     await telegram.send_message(u['chat_id'], text or 'Есть желание потренироваться? Можно вернуться к своему делу, '
                                 'перенести напоминание или отключить его.', parse_mode=None, reply_markup=invite_keyboard(state['token']))
+    return True
+
+
+async def send_commercial_daily(b, telegram, u, now):
+    profile = await b.get_user_profile(u['user_id'], b.DB_PATH)
+    state = profile.get(KEY) or {}
+    if not profile.get('privacy_consent') or not u.get('notifications_enabled') or u.get('reminder_mode') in {'paused', 'intent_only'}:
+        return False
+    if (state.get('snooze') or {}).get('status') == 'confirmed':
+        return False
+    day = now.date().isoformat()
+    context = b.dialogue_context(u.get('dialogue_context'))
+    if day in context.get('commercial_practice_dates', []):
+        return False
+    hour = int(profile.get('reminder_hour') or 9)
+    morning = hour if 8 <= hour < 12 else 9
+    if now.hour == morning:
+        slot = 'morning'
+    elif now.hour == 14:
+        slot = 'afternoon'
+    else:
+        return False
+    if (state.get('commercial_daily') or {}).get(slot) == day:
+        return False
+    index = (b.calendar_program_day(u) - 1) if u.get('first_start_date') else 0
+    title, instruction = b.COMMERCIAL_DAY_SKILLS[index % len(b.COMMERCIAL_DAY_SKILLS)]
+    text = f'Навык дня — {title}\n\n{instruction}' if slot == 'morning' else 'Можно вернуться к сегодняшней практике. Открыть сохранённый шаг?'
+    if not await send_invitation(b, telegram, u, b.render_address(text, u)):
+        return False
+    profile = await b.get_user_profile(u['user_id'], b.DB_PATH)
+    state = profile.get(KEY) or {}
+    state.setdefault('commercial_daily', {})[slot] = day
+    b._increment_proactive_count(u, day)
+    b.mark_bot_auto_message(u)
+    await persist(b, u, profile, state)
     return True
 
 

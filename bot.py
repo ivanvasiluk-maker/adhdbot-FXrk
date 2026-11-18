@@ -1497,32 +1497,76 @@ async def handle_commercial_followup(m, u, text):
         plan = comp.get("case_recommendation") or {}
         skill = followup["skill"]
         context.setdefault("commercial_skill_cards", {})[skill] = {
-            "skill": skill, "task": plan.get("task"), "usefulness": ratings[text],
+            "skill": skill, "task": "другое дело" if followup.pop("transfer_pending", False) else plan.get("task"), "usefulness": ratings[text],
         }
         u["dialogue_context"] = json.dumps(context, ensure_ascii=False)
         await save_user(u, DB_PATH)
-        buttons = [["Повторить навык"], ["Открыть мои навыки"], ["Описать новую ситуацию"], ["Помоги начать дело"]]
-        if comp.get("selected_skill") == "visible_next_step" and "bad_first_step" in plan.get("candidates", []):
+        buttons = [["Повторить навык", "Применить на другом деле"], ["Выбрать другой навык", "🎭 Сменить тренера"],
+                   ["Вернуться к разбору", "Открыть мои навыки"], ["Описать новую ситуацию", "Помоги начать дело"]]
+        if text == "Пока не помогло":
+            buttons.insert(0, ["Упростить упражнение"])
+        elif comp.get("selected_skill") == "visible_next_step" and "bad_first_step" in plan.get("candidates", []):
             buttons.insert(0, ["Главное выбрано, но страшно записать"])
         await answer_with_keyboard(m, u, f"Карточка сохранена. {skill} · помогло: {ratings[text]}." + ("\n\nУже 5 дней практики. Можно повторить навык на другом деле." if fifth_day else ""),
             ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=label) for label in row] for row in buttons], resize_keyboard=True),
             "commercial_followup")
         if text == "Да, помогло" and calendar_program_day(u) == 1 and not offer_shown_today(u):
             await m.answer("На тренинге «СДВГ и прокрастинация» разберём похожие ситуации из вашей жизни и подберём навыки с обратной связью психолога. 12 недель онлайн, 240 €.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Посмотреть программу", callback_data=OFFER_CALLBACKS["group"])] ]))
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Посмотреть программу", callback_data=OFFER_CALLBACKS["group"])],
+                    [InlineKeyboardButton(text="Продолжить бесплатно", callback_data="commercial:continue_free")],
+                ]))
             u["last_offer_shown_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
             await save_user(u, DB_PATH)
         return True
-    if text == "Повторить навык":
+    if text in {"Выбрать другой навык", "Вернуться к разбору"} or text.startswith("Навык: "):
+        comp = parse_case_data(u.get("analysis_json"), {})
+        plan = comp.get("case_recommendation")
+        if not plan:
+            return False
+        if text == "Вернуться к разбору" and "evidence" in plan:
+            from core.case_plan import render_commercial_analysis
+            set_legacy_stage(u, "analysis_clarify_done")
+            await save_user(u, DB_PATH)
+            await answer_with_keyboard(m, u, render_commercial_analysis(comp), commercial_review_keyboard(), "analysis_clarify_done")
+            return True
+        if text == "Вернуться к разбору":
+            await m.answer("Для этой быстрой тренировки можно открыть новый разбор кнопкой «Описать новую ситуацию».")
+            return True
+        choices = {
+            f"Навык: {_skill_label(sid)}": sid
+            for sid in dict.fromkeys([*plan.get("candidates", []), "open_only", "ninety_sec_start", "visible_next_step"])
+            if sid in SKILLS_DB and sid != comp.get("selected_skill")
+        }
+        if text == "Выбрать другой навык":
+            await answer_with_keyboard(m, u, "Какой навык попробуем на том же деле?",
+                commercial_buttons(*choices, "Повторить навык", "Описать новую ситуацию"), "commercial_followup")
+            return True
+        if text in choices:
+            comp.pop("commercial_skill_label", None)
+            comp["selected_skill"] = plan["selected_skill"] = choices[text]
+            u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+            await start_intent_action(m, u)
+            return True
+    if text in {"Повторить навык", "Применить на другом деле", "Упростить упражнение"}:
         comp = parse_case_data(u.get("analysis_json"), {})
         if comp.get("case_recommendation"):
-            await start_intent_action(m, u)
+            instruction = followup.get("instruction")
+            if text == "Применить на другом деле":
+                instruction = "Выберите про себя другое дело.\n\n" + (instruction or "Примените к нему тот же способ и отметьте результат.")
+                followup["transfer_pending"] = True
+                u["dialogue_context"] = json.dumps(context, ensure_ascii=False)
+            elif text == "Упростить упражнение":
+                instruction = "Попробуйте самый короткий вариант: откройте нужный материал и отметьте одно место, с которого можно начать."
+            await start_intent_action(m, u, instruction=instruction)
             return True
     if text == "Открыть мои навыки":
         cards = context.get("commercial_skill_cards") or {}
         await m.answer("\n".join(f"{card['skill']} · {card['task']} · помогло: {card['usefulness']}" for card in cards.values()) or "Карточек пока нет.")
         return True
     if text == "Описать новую ситуацию":
+        set_legacy_stage(u, "intent_act_context")
+        await save_user(u, DB_PATH)
         await m.answer("Опишите новое дело текстом или голосом: что нужно сделать и в какой момент становится трудно?")
         return True
     if text == "Главное выбрано, но страшно записать":
@@ -1575,7 +1619,12 @@ async def handle_commercial_case_result(m, u, text):
     skill = comp.get("commercial_skill_label") or {"visible_next_step": "Расстановка приоритетов" if comp.get("reported_difficulty") == "Нужно выбрать главное" else "Видимый следующий шаг",
              "bad_first_step": "Поведенческий эксперимент — черновик без оценки"}.get(sid, _skill_label(sid))
     context = dialogue_context(u.get("dialogue_context"))
-    context["commercial_followup"] = {"awaiting_usefulness": True, "skill": skill, "reflection": plan["hypothesis"]}
+    prior = context.get("commercial_followup") or {}
+    context["commercial_followup"] = {
+        "awaiting_usefulness": True, "skill": skill, "reflection": plan["hypothesis"],
+        "instruction": comp.get("commercial_last_instruction"),
+        "transfer_pending": prior.get("transfer_pending", False),
+    }
     u["dialogue_context"] = json.dumps(context, ensure_ascii=False)
     await save_user(u, DB_PATH)
     await answer_with_keyboard(m, u, "Удалось ли с этим способом сдвинуть дело?",
@@ -1670,6 +1719,9 @@ async def start_intent_action(m, u, *, instruction=None):
         }.get(u.get("trainer_key") or "marsha", "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.")
         text = familiar_line + "\n\n" + text
     if COMMERCIAL_PRACTICE_ENABLED and comp.get("case_recommendation"):
+        comp["commercial_last_instruction"] = instruction or text
+        u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
+        await save_user(u, DB_PATH)
         await answer_with_keyboard(m, u, instruction or text, commercial_case_keyboard(), "training")
         return
     await answer_with_keyboard(m, u, text, action_keyboard(), "training")
@@ -18174,6 +18226,19 @@ async def on_barrier_callback(c: CallbackQuery):
     await continue_analysis_from_barrier(c.message, u, barrier)
     await c.answer()
 
+@router.callback_query(F.data == "commercial:continue_free")
+async def on_commercial_continue_free(c: CallbackQuery):
+    u = await get_user(c.from_user.id, DB_PATH)
+    if await handle_safety_callback(c, u, c.data or ""):
+        return
+    await c.answer()
+    saved = dialogue_context(u.get("dialogue_context"))
+    if saved.get("stage") == u.get("stage") and saved.get("text") and saved.get("markup") and not saved.get("inline"):
+        await c.message.answer(saved["text"], reply_markup=ReplyKeyboardMarkup.model_validate(saved["markup"]))
+    else:
+        await render_current_screen(c.message, u)
+
+
 @router.callback_query(lambda c: (split_screen_callback(c.data or "")[0].startswith(("offer:", "pay:", "schedule:")) or split_screen_callback(c.data or "")[0] in {"show_map", "continue_free", "test_payment", "confirm_test_payment", "curator_path", "specialist_path", "offer_details", "offer_back", "offer_bot", "offer_live", "offer_specialist", "stay_free"}) )
 async def on_offer_callbacks(c: CallbackQuery):
     uid = c.from_user.id
@@ -18988,6 +19053,9 @@ async def background_checkins(bot: Bot):
                     continue
                 if 8 <= now_local.hour < 21 and not closed_day_status(u):
                     if await reminder_flow.dispatch_due(sys.modules[__name__], bot, u, dt.datetime.now(dt.timezone.utc)):
+                        continue
+                if COMMERCIAL_PRACTICE_ENABLED and not closed_day_status(u):
+                    if await reminder_flow.send_commercial_daily(sys.modules[__name__], bot, u, now_local):
                         continue
                 recent_activity_hours = hours_since_last_activity(u)
                 if recent_activity_hours is not None and recent_activity_hours < PROACTIVE_ACTIVITY_COOLDOWN_HOURS:
