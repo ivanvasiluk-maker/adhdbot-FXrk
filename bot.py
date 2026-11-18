@@ -1470,7 +1470,7 @@ def commercial_input_keyboard():
 
 
 COMMERCIAL_REFLECTION = "Почему я откладываю?"
-COMMERCIAL_RESUME = "Продолжить своё дело"
+COMMERCIAL_RESUME = "Попробовать следующий шаг"
 COMMERCIAL_PAUSE = "Пауза в практике"
 
 
@@ -1488,12 +1488,12 @@ async def handle_commercial_followup(m, u, text):
             "post_action_reflection",
         )
     elif text == COMMERCIAL_REFLECTION:
-        await m.answer(followup["reflection"] + "\n\nМожно вернуться к шагу по кнопке «Продолжить своё дело».")
-    elif text in {COMMERCIAL_RESUME, "Проверить", "Продолжить"}:
+        await m.answer(followup["reflection"] + "\n\nМожно вернуться к шагу по кнопке «Попробовать следующий шаг».")
+    elif text in {COMMERCIAL_RESUME, "Продолжить своё дело", "Проверить", "Продолжить"}:
         if commercial_trial_expired(u):
             await show_commercial_trial_end(m, u)
         else:
-            await show_commercial_followup(m, u, followup["step"])
+            await start_intent_action(m, u, instruction=followup["step"])
     else:
         return False
     return True
@@ -1502,10 +1502,8 @@ async def handle_commercial_followup(m, u, text):
 async def show_commercial_followup(m, u, text):
     markup = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text=COMMERCIAL_RESUME)],
-        [KeyboardButton(text=COMMERCIAL_REFLECTION)],
-        [KeyboardButton(text=COMMERCIAL_PAUSE)],
     ], resize_keyboard=True)
-    await answer_with_keyboard(m, u, text, markup, "post_action_reflection")
+    await answer_with_keyboard(m, u, text, markup, "commercial_followup")
 
 
 async def handle_commercial_case_result(m, u, text):
@@ -1522,7 +1520,9 @@ async def handle_commercial_case_result(m, u, text):
     await persist_minimal_skill_feedback(m, u, show_summary=False)
     plan = comp["case_recommendation"]
     task = str(plan.get("task") or current_task_title(u, "своё дело"))
-    if completed and re.search(r"презентац|слайд", task, re.I):
+    if completed and comp.get("commercial_followup_started"):
+        step = f"Выберите ещё одну небольшую часть дела «{task}» и дайте себе две минуты на черновик."
+    elif completed and re.search(r"презентац|слайд", task, re.I):
         step = "Добавь под главным выводом один факт из собранных материалов." if u.get("address_mode") == "ty" else "Добавьте под главным выводом один факт из собранных материалов."
     elif completed:
         step = f"Следующий шаг по делу «{task}» — добавить к начатому одну деталь."
@@ -1568,15 +1568,17 @@ async def show_commercial_trial_end(m, u):
     )
 
 
-async def start_intent_action(m, u):
+async def start_intent_action(m, u, *, instruction=None):
     """Start the selected case without replacing an existing day plan."""
     if commercial_trial_expired(u):
         await show_commercial_trial_end(m, u)
         return
     comp = parse_case_data(u.get("analysis_json"), {})
     comp["requested_mode"] = "act_now"
+    if instruction is not None:
+        comp["commercial_followup_started"] = True
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
-    if day_closed_today(u):
+    if day_closed_today(u) and instruction is None:
         await open_closed_day_analysis_step(m, u)
         return
     result = comp.get("analysis_result") or {}
@@ -1596,7 +1598,7 @@ async def start_intent_action(m, u):
     if mechanism in (profile.get("rejected_hypotheses") or {}):
         mechanism = ""
     memory = None
-    if mechanism and not comp.get("request_device") and not accepted:
+    if instruction is None and mechanism and not comp.get("request_device") and not accepted:
         async with aiosqlite.connect(DB_PATH) as db:
             memory = await load_similar(db, u["user_id"], mechanism=mechanism, target=skill_target_function(sid),
                 domain=u.get("current_task_context") or "other", available=available, aliases=DAILY_SKILL_ALIASES)
@@ -1653,7 +1655,7 @@ async def start_intent_action(m, u):
         }.get(u.get("trainer_key") or "marsha", "В похожей ситуации этот способ уже помог. Можно повторить его или выбрать другой вариант.")
         text = familiar_line + "\n\n" + text
     if COMMERCIAL_PRACTICE_ENABLED and comp.get("case_recommendation"):
-        await answer_with_keyboard(m, u, text, commercial_case_keyboard(), "training")
+        await answer_with_keyboard(m, u, instruction or text, commercial_case_keyboard(), "training")
         return
     await answer_with_keyboard(m, u, text, action_keyboard(), "training")
 
