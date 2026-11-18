@@ -14197,6 +14197,7 @@ async def main_flow(m: Message):
             if commercial_trial_expired(u):
                 await show_commercial_trial_end(m, u)
                 return
+            await show_commercial_day_skill(m, u)
             saved = dialogue_context(u.get("dialogue_context"))
             stage = saved.pop("return_stage", None)
             u["dialogue_context"] = json.dumps(saved, ensure_ascii=False)
