@@ -66,3 +66,43 @@ def render_case_action(plan, skill_id, skill_name):
     else:
         steps='Назовите одно физически выполнимое действие для этой задачи. Сделайте только его; остальное пока не требуется.'
     return skill_name+'\nЗадача: «'+task+'».\n\n'+steps+'\n\nПосле попытки отдельно отметим: получилось ли выполнить шаг, продолжилось ли дело и изменилось ли самочувствие.'
+
+
+def render_commercial_analysis(comp, *, detailed=False):
+    plan = comp['case_recommendation']
+    chain = comp.get('behavioral_chain') or {}
+    correction = str(comp.get('reported_difficulty') or '').strip()[:400]
+    situation = str(chain.get('situation') or '').strip()
+    behavior = str(chain.get('behavior') or '').strip()
+    immediate = str(chain.get('immediate') or '').strip()
+    delayed = str(chain.get('delayed') or '').strip()
+
+    if comp.get('commercial_correction'):
+        interpretation = f'Что сейчас мешает, по уточнению: «{correction}». {plan["reason"]}'
+    elif plan['kind'] == 'evaluation_avoidance' and plan['relief_reported']:
+        interpretation = (
+            'Похоже, ожидание оценки затрудняет начало работы. Переключение на время '
+            'приносит облегчение, поэтому в следующий раз снова хочется отложить дело. '
+            'Черновой шаг позволит проверить, легче ли начать, если оценку качества оставить на потом.'
+        )
+    else:
+        interpretation = f'{plan["hypothesis"]} {plan["reason"]}'
+
+    task = plan['task'] or 'выбранное дело'
+    if not detailed:
+        title = 'Обновлённый разбор' if comp.get('commercial_correction') else 'Короткий разбор'
+        return f'{title}\n\nЗадача — «{task}».\n\n{interpretation}'
+
+    observations = [
+        f'{label}\n«{value[:260]}»' for label, value in (
+            ('С чего начинается эпизод', situation),
+            ('Что происходит дальше', behavior),
+            ('Что меняется сразу', immediate),
+            ('Что происходит позже', delayed),
+        ) if value
+    ]
+    sections = [f'Подробный разбор\n\nЗадача — «{task}».', *observations,
+                f'Как это может быть связано\n{interpretation}',
+                'Что проверяем упражнением\nПосле попытки можно отметить, удалось ли начать. '
+                'Если шаг оказался слишком сложным, уменьшим его или выберем другой вход.']
+    return '\n\n'.join(sections)

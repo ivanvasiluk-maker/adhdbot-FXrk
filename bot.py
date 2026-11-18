@@ -13633,8 +13633,8 @@ async def handle_commercial_review(m, u, text):
         u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
         await start_intent_action(m, u)
     elif text == COMMERCIAL_REVIEW_BUTTONS[1]:
-        evidence = "\n".join(plan["evidence"])
-        await m.answer("\n\n".join(filter(None, (evidence, plan["reason"]))),
+        from core.case_plan import render_commercial_analysis
+        await m.answer(render_commercial_analysis(comp, detailed=True),
                        reply_markup=commercial_review_keyboard(), parse_mode=None)
     elif text == COMMERCIAL_REVIEW_BUTTONS[2]:
         comp["commercial_awaiting_correction"] = True
@@ -13692,10 +13692,8 @@ async def complete_reported_case(m, u, path, comp):
     u['analysis_json'] = json.dumps(comp, ensure_ascii=False)
     await save_user(u, path)
     if COMMERCIAL_PRACTICE_ENABLED:
-        summary = f"Короткий разбор\n\nДело: {plan['task']}. {plan['hypothesis']}"
-        if comp.get("commercial_correction"):
-            summary = f"Обновлённый разбор\n\nДело: {plan['task']}. Уточнение: {comp['reported_difficulty']}\n\n{plan['reason']}"
-        await answer_with_keyboard(m, u, summary, commercial_review_keyboard(), "analysis_clarify_done")
+        from core.case_plan import render_commercial_analysis
+        await answer_with_keyboard(m, u, render_commercial_analysis(comp), commercial_review_keyboard(), "analysis_clarify_done")
         return
     await m.answer(comp['short_conclusion'], reply_markup=keyboard('💪 Давай действие', DEEP, 'На этом пока остановиться'))
 
