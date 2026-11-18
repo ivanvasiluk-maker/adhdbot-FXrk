@@ -13375,6 +13375,13 @@ kb_existing_user_start = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
+RETURN_CONTINUE = "Продолжить с места остановки"
+RETURN_RESTART = "Начать сначала"
+kb_commercial_return = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text=RETURN_CONTINUE)], [KeyboardButton(text=RETURN_RESTART)]],
+    resize_keyboard=True,
+)
+
 kb_restart_confirm = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Да, начать всё заново")],
@@ -13425,6 +13432,14 @@ async def show_commercial_day_skill(m, u):
 
 async def show_existing_user_start_menu(m: Message, u: Dict[str, Any]) -> None:
     saved = dialogue_context(u.get("dialogue_context"))
+    if COMMERCIAL_PRACTICE_ENABLED and safety_mode(u) == "none":
+        if u.get("stage") not in {"existing_user_start_menu", "restart_onboarding_confirm"}:
+            saved["return_stage"] = u.get("stage")
+        u["dialogue_context"] = json.dumps(saved, ensure_ascii=False)
+        set_legacy_stage(u, "existing_user_start_menu")
+        await save_user(u, DB_PATH)
+        await m.answer("Как продолжим?", reply_markup=kb_commercial_return)
+        return
     owned = str(u.get("stage") or "") in FEEDBACK_STAGES | {
         "day_review_function", "day_review_barrier", "day_review_barrier_other", "day_review_state",
         "intent_paused", "offer_request_form",
@@ -13491,7 +13506,7 @@ async def cmd_start(m: Message):
             prompt, keyboard = onboarding_resume[u["stage"]]
             await m.answer(prompt, reply_markup=keyboard, parse_mode=None)
             return
-    if commercial_trial_expired(u) and safety_mode(u) == "none" and u.get("stage") != "offer_request_form":
+    if commercial_trial_expired(u) and not is_registered_user(u) and safety_mode(u) == "none" and u.get("stage") != "offer_request_form":
         await show_commercial_trial_end(m, u)
         return
     if is_registered_user(u):
@@ -14178,6 +14193,22 @@ async def main_flow(m: Message):
         await save_user(u, DB_PATH)
 
     if u.get("stage") == "existing_user_start_menu":
+        if COMMERCIAL_PRACTICE_ENABLED and text == RETURN_CONTINUE:
+            if commercial_trial_expired(u):
+                await show_commercial_trial_end(m, u)
+                return
+            saved = dialogue_context(u.get("dialogue_context"))
+            stage = saved.pop("return_stage", None)
+            u["dialogue_context"] = json.dumps(saved, ensure_ascii=False)
+            if stage and saved.get("stage") == stage and saved.get("text"):
+                set_legacy_stage(u, stage)
+                await save_user(u, DB_PATH)
+                markup = saved.get("markup")
+                model = InlineKeyboardMarkup if saved.get("inline") else ReplyKeyboardRemove if (markup or {}).get("remove_keyboard") else ReplyKeyboardMarkup
+                await m.answer(saved["text"], reply_markup=model.model_validate(markup) if markup else ReplyKeyboardRemove())
+            else:
+                await resume_daily_flow(m, u, announce=True)
+            return
         if text in {"Продолжить сегодняшний день", "Проверим снова"}:
             await log_event(uid, "start_menu_continue_today", {"analytics_event": False}, db_path=DB_PATH)
             await resume_daily_flow(m, u, announce=True)
@@ -14190,11 +14221,11 @@ async def main_flow(m: Message):
             await log_event(uid, "start_menu_open_map", {"analytics_event": False}, db_path=DB_PATH)
             await send_user_map(m, u, "repeat_start_menu")
             return
-        if text == "Начать всё заново":
+        if text in {"Начать всё заново", RETURN_RESTART}:
             set_legacy_stage(u, "restart_onboarding_confirm")
             await save_user(u, DB_PATH)
             await log_event(uid, "start_menu_restart_requested", {"analytics_event": False}, db_path=DB_PATH)
-            await m.answer("Начать всё заново? Текущий прогресс будет сброшен. Подтверди отдельно.", reply_markup=kb_restart_confirm)
+            await m.answer("Удалить профиль и сохранённый прогресс из базы SKILLER и начать заново?", reply_markup=kb_restart_confirm)
             return
         await show_existing_user_start_menu(m, u)
         return
