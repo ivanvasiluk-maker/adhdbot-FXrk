@@ -37,6 +37,11 @@ def case_plan(comp):
         candidates=['visible_next_step','open_only']
         hypothesis='Причину пока не установили. Проверим более узкую гипотезу: поможет ли конкретный первый шаг начать выбранное дело.'
         reason='Один видимый шаг делает начало понятнее и позволяет проверить результат без большого плана.'
+    priority = bool(re.search(r'выбрать главн|всё кажется важн|все кажется важн', low))
+    if comp.get('commercial_skill_series') and priority and comp.get('request_kind') == 'task_problem':
+        candidates = ['visible_next_step', *[candidate for candidate in candidates if candidate != 'visible_next_step']]
+        hypothesis = 'Материал уже есть. Сначала проверим, станет ли проще работать, если выбрать главное по цели задачи.'
+        reason = 'Расстановка приоритетов помогает решить, что оставить, прежде чем переходить к черновику.'
     evidence=[]
     if difficulty:evidence.append('Названная трудность: «'+difficulty[:100]+'».')
     if before:evidence.append('Перед началом: «'+before[:120]+'».')
@@ -91,7 +96,11 @@ def render_commercial_analysis(comp, *, detailed=False):
     task = plan['task'] or 'выбранное дело'
     skill_id = plan.get('selected_skill') or plan['candidates'][0]
     presentation = bool(re.search(r'презентац|слайд', task, re.I))
-    if skill_id == 'bad_first_step' and presentation:
+    if skill_id == 'visible_next_step' and presentation:
+        exercise = ('КПТ-тренинг при СДВГ · Расстановка приоритетов. '
+                    'Закончите фразу «После презентации руководитель должен понять или решить…». '
+                    'Из материалов выберите один факт, без которого этот вывод будет непонятен.')
+    elif skill_id == 'bad_first_step' and presentation:
         exercise = (
             'Откройте презентацию, создайте слайд «Главный вывод» и за три минуты '
             'запишите одну мысль, которую руководитель должен унести со встречи. '
@@ -107,6 +116,8 @@ def render_commercial_analysis(comp, *, detailed=False):
         return (
             f'{title}\n\nЗадача — «{task}».\n\n{interpretation}{episode}'
             f'\n\nЧто попробуем\n{exercise}'
+            + ('\n\nЕсли главное уже выбрано, а записать его всё ещё тревожно, можно проверить второй способ — черновик без оценки.'
+               if presentation and skill_id == 'visible_next_step' else '')
         )
 
     observations = [
