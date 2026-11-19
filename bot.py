@@ -13787,6 +13787,10 @@ async def complete_reported_case(m, u, path, comp):
     blocked = {_canonical_daily_skill_id(sid) for sid in _profile_list(profile.get('collection_disabled_skills')) + not_fit_today_skills(u, profile)}
     available = [sid for sid in plan['candidates'] if sid in SKILLS_DB and _canonical_daily_skill_id(sid) not in blocked
                  and not skill_blocked_in_model(learning, sid) and not should_block_skill_for_repetition(u, sid)]
+    if COMMERCIAL_PRACTICE_ENABLED and not available:
+        # Repetition on a new case is allowed unless the user explicitly rejected the skill.
+        available = [sid for sid in plan['candidates'] if sid in SKILLS_DB
+                     and _canonical_daily_skill_id(sid) not in blocked and not skill_blocked_in_model(learning, sid)]
     comp.pop('case_question', None)
     comp['case_recommendation'] = plan
     comp['hypothesis_status'] = 'untested'

@@ -93,6 +93,12 @@ def reported_chain(text, *, avoidance=''):
     context = find(r'работаю из дома|недел\w*.*(?:развал|откладыва)')
     task_match = re.search(r'\b(?:нужно|надо|хочу|собираюсь)\s+(?:(?:сегодня|завтра)\s+)?((?:написать|подготовить|ответить|заполнить|оплатить)\s+[^.!?\n]+)',text,re.I)
     task = re.split(r',|\s+(?:но|вместо|потому что)\b',task_match.group(1),maxsplit=1,flags=re.I)[0].strip()[:140] if task_match else None
+    if COMMERCIAL_PRACTICE_ENABLED and re.search(
+        r'не знаю.{0,15}выбрать|выбрать одну задачу|вс[её] одинаково срочно|25 вкладок', text, re.I
+    ):
+        task = 'Выбрать одно дело из нескольких'
+        situation = situation or find(r'выбрать одну задачу|одинаково срочно|вкладок')
+        thought = thought or ['Все дела кажутся одинаково срочными']
     if not task and COMMERCIAL_PRACTICE_ENABLED:
         postponed = re.search(r'\bоткладыва\w*\s+([^.!?,]+)', text, re.I)
         if postponed:
