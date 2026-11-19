@@ -1613,7 +1613,7 @@ async def handle_commercial_case_result(m, u, text):
         await m.answer("Эта карточка уже закрыта. Текущую тренировку можно открыть через /start.")
         return True
     completed, partial, message = COMMERCIAL_CASE_RESULTS[text]
-    feedback = minimal_feedback_base(u, source="commercial_case")
+    feedback = minimal_feedback_base(u, source="additional_case" if day_closed_today(u) else "commercial_case")
     feedback.update(completed=completed, partial=partial)
     set_minimal_feedback(u, feedback)
     await persist_minimal_skill_feedback(m, u, show_summary=False)
@@ -1643,7 +1643,8 @@ async def start_intent_action(m, u, *, instruction=None):
     if instruction is not None:
         comp["commercial_followup_started"] = True
     u["analysis_json"] = json.dumps(comp, ensure_ascii=False)
-    if day_closed_today(u) and instruction is None:
+    commercial_case = COMMERCIAL_PRACTICE_ENABLED and bool(comp.get("case_recommendation"))
+    if day_closed_today(u) and instruction is None and not commercial_case:
         await open_closed_day_analysis_step(m, u)
         return
     result = comp.get("analysis_result") or {}
@@ -1663,7 +1664,7 @@ async def start_intent_action(m, u, *, instruction=None):
     if mechanism in (profile.get("rejected_hypotheses") or {}):
         mechanism = ""
     memory = None
-    if instruction is None and mechanism and not comp.get("request_device") and not accepted:
+    if not commercial_case and instruction is None and mechanism and not comp.get("request_device") and not accepted:
         async with aiosqlite.connect(DB_PATH) as db:
             memory = await load_similar(db, u["user_id"], mechanism=mechanism, target=skill_target_function(sid),
                 domain=u.get("current_task_context") or "other", available=available, aliases=DAILY_SKILL_ALIASES)
@@ -1676,7 +1677,9 @@ async def start_intent_action(m, u, *, instruction=None):
         return
     u["dialogue_context"] = json.dumps(ctx, ensure_ascii=False)
     known = accepted.get("skill_id") if isinstance(accepted, dict) and accepted.get("skill_id") in available else None
-    if not known:
+    if commercial_case:
+        known = None
+    if not known and not commercial_case:
         known = familiar_skill(profile.get("personal_skill_collection") or [], mechanism, skill_target_function(sid), available) if mechanism and not comp.get("request_device") else None
     if known:
         sid = known
@@ -1688,7 +1691,8 @@ async def start_intent_action(m, u, *, instruction=None):
              has_started_training=1, today_started=1)
     if not u.get("day_core_skill_id") and not training_context(u).get("moment_training"):
         replace_day_core_skill(u, sid)
-    await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=sid, skill_name=skill.get("name") or sid)
+    if not (commercial_case and day_closed_today(u)):
+        await ensure_user_day(u, DB_PATH, calendar_date=local_date_for_user(u), skill_id=sid, skill_name=skill.get("name") or sid)
     set_legacy_stage(u, "training")
     mark_action_card_active(u)
     entry = find_attempt(u, active_attempt(u).get("attempt_id"))
@@ -1703,7 +1707,7 @@ async def start_intent_action(m, u, *, instruction=None):
         text = render_case_action(plan, sid, skill.get("name") or sid)
         if COMMERCIAL_PRACTICE_ENABLED:
             text = text.rsplit("\n\n", 1)[0]
-            if sid == "visible_next_step" and comp.get("reported_difficulty") == "Нужно выбрать главное":
+            if sid == "visible_next_step" and comp.get("reported_difficulty") == "Нужно выбрать главное" and "Выбрать одно дело" not in plan["task"]:
                 text = "КПТ-тренинг при СДВГ · Расстановка приоритетов. Сформулируйте, что должно быть понятно после вашей работы. Затем выберите один факт, который помогает это объяснить. Остальное пока можно оставить в запасе."
             if sid == "bad_first_step" and re.search(r"презентац|слайд", plan["task"], re.I):
                 text = (
