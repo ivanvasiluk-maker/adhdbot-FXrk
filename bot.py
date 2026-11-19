@@ -1553,7 +1553,10 @@ async def handle_commercial_followup(m, u, text):
         if comp.get("case_recommendation"):
             instruction = followup.get("instruction")
             if text == "Применить на другом деле":
-                instruction = "Выберите про себя другое дело.\n\n" + (instruction or "Примените к нему тот же способ и отметьте результат.")
+                from core.case_plan import render_case_action
+                plan = dict(comp["case_recommendation"], task="другое выбранное дело")
+                sid = comp["selected_skill"]
+                instruction = "Выберите про себя другое дело.\n\n" + render_case_action(plan, sid, _skill_label(sid)).rsplit("\n\n", 1)[0]
                 followup["transfer_pending"] = True
                 u["dialogue_context"] = json.dumps(context, ensure_ascii=False)
             elif text == "Упростить упражнение":
@@ -1699,7 +1702,7 @@ async def start_intent_action(m, u, *, instruction=None):
         plan = comp["case_recommendation"]
         text = render_case_action(plan, sid, skill.get("name") or sid)
         if COMMERCIAL_PRACTICE_ENABLED:
-            text = plan["reason"] + "\n\n" + text.rsplit("\n\n", 1)[0]
+            text = text.rsplit("\n\n", 1)[0]
             if sid == "visible_next_step" and comp.get("reported_difficulty") == "Нужно выбрать главное":
                 text = "КПТ-тренинг при СДВГ · Расстановка приоритетов. Сформулируйте, что должно быть понятно после вашей работы. Затем выберите один факт, который помогает это объяснить. Остальное пока можно оставить в запасе."
             if sid == "bad_first_step" and re.search(r"презентац|слайд", plan["task"], re.I):
@@ -3402,6 +3405,21 @@ async def return_after_trainer_switch(m: Message, u: Dict[str, Any], return_stag
     set_legacy_stage(u, return_stage)
     u["pending_plan_change"] = None
     await save_user(u, DB_PATH)
+    if COMMERCIAL_PRACTICE_ENABLED:
+        comp = parse_case_data(u.get("analysis_json"), {})
+        if comp.get("case_recommendation") and return_stage == "training":
+            await answer_with_keyboard(m, u, comp.get("commercial_last_instruction") or "Продолжим выбранный навык.",
+                                       commercial_case_keyboard(), "training")
+            return
+        if return_stage == "post_action_reflection" and dialogue_context(u.get("dialogue_context")).get("commercial_followup"):
+            saved = dialogue_context(u.get("dialogue_context"))
+            followup = saved["commercial_followup"]
+            labels = ("Да, помогло", "Немного помогло", "Пока не помогло") if followup.get("awaiting_usefulness") else (
+                "Повторить навык", "Применить на другом деле", "Выбрать другой навык", "🎭 Сменить тренера",
+                "Вернуться к разбору", "Открыть мои навыки", "Описать новую ситуацию")
+            await answer_with_keyboard(m, u, "Тренер выбран. Продолжим с сохранённого места.",
+                                       commercial_buttons(*labels), "commercial_followup")
+            return
     trainer_key = u.get("trainer_key") or "marsha"
     if return_stage in {"confirm_analysis", "analysis_rebuilt"}:
         try:

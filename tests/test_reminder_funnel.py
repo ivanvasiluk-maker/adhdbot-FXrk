@@ -178,7 +178,7 @@ class Reminders(unittest.IsolatedAsyncioTestCase):
         fake=SimpleNamespace(send_message=AsyncMock())
         await bot.send_background_keyboard(fake,u,'old',None,'custom_checkin')
         text=str(fake.send_message.await_args)
-        for label in ('Хочу тренироваться','Напомнить через час','Через 1,5 часа','Отключить напоминания'):
+        for label in ('Хочу тренироваться','Через 15 минут','Через час','Завтра','Не напоминать'):
             self.assertIn(label,text)
         self.assertNotIn('240',text)
 
